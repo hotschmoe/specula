@@ -23,7 +23,9 @@ $rows = @(
     @{ label = 'B2-nocoop12';   vars = @{ GGML_VK_DISABLE_COOPMAT = '1'; GGML_VK_DISABLE_COOPMAT2 = '1' }; ngl = 99 },
     @{ label = 'B3-nof16';      vars = @{ GGML_VK_DISABLE_F16 = '1' }; ngl = 99 },
     @{ label = 'B4-allsafe';    vars = @{ GGML_VK_DISABLE_COOPMAT = '1'; GGML_VK_DISABLE_COOPMAT2 = '1'; GGML_VK_DISABLE_F16 = '1' }; ngl = 99 },
-    @{ label = 'B5-ngl0';       vars = @{}; ngl = 0 }
+    @{ label = 'B5-ngl0';       vars = @{}; ngl = 0 },
+    @{ label = 'B6-noidp';      vars = @{ GGML_VK_DISABLE_INTEGER_DOT_PRODUCT = '1' }; ngl = 99 },
+    @{ label = 'B7-scorched';   vars = @{ GGML_VK_DISABLE_INTEGER_DOT_PRODUCT = '1'; GGML_VK_DISABLE_F16 = '1'; GGML_VK_DISABLE_COOPMAT = '1'; GGML_VK_DISABLE_COOPMAT2 = '1' }; ngl = 99 }
 )
 
 foreach ($row in $rows) {

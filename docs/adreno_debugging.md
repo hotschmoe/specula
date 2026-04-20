@@ -23,14 +23,16 @@ performance investigation.
   breakdown. Classic size_t underflow — suggests the Vulkan backend
   mis-accounts buffer state on this driver, not just a shader-level
   issue.
-- **Decision point reached.** Three distinct shader-path configs all
-  produce garbage, plus a memory-accounting bug at teardown ⇒ the
-  bug is structural or driver-level, not a single kernel. Options:
-  (a) try one more env-var lever (`GGML_VK_DISABLE_INTEGER_DOT_PRODUCT`)
-  since `int dot: 1` is active on the device, (b) bisect llama.cpp to
-  a Vulkan-on-Adreno known-good commit, (c) pivot primary GPU
-  attention to OpenCL. **Plan of record: (c), with (a) as one cheap
-  manual sanity check before giving up.**
+- **Decision point reached and acted on.** Five distinct shader-path
+  configs (B0, B1, B4, B6, B7) all produce incorrect output; the
+  `DISABLE_INTEGER_DOT_PRODUCT` variants (B6/B7) are actively worse,
+  collapsing the model to a single repeated token `edly`. Combined
+  with the memory-accounting underflow at teardown, this is
+  structural or driver-level breakage, not a single kernel. **Plan
+  of record: pivot primary GPU attention to OpenCL** (Qualcomm's
+  maintained backend for Adreno). Remaining options on Vulkan (bisect
+  llama.cpp, wait for Qualcomm driver update, file upstream issue)
+  are deferred, not abandoned.
 - **Vendor-path note.** Qualcomm engineers actively maintain
   llama.cpp's `ggml-opencl` backend for Adreno; the Vulkan backend is
   generic and Qualcomm does not tune it. The garbage-out behavior on
@@ -235,17 +237,57 @@ human-eyeballed correctness checks. A rebuild that includes
 ### Phase B results — Qwen3-0.6B Q8_0 (`llama-bench -p 128,512 -n 64 -r 2`)
 
 Script: `scripts/adreno_bench_matrix.ps1`. Per-row logs in
-`results/adreno-perf-B*.log`. Driver string per row: `Qualcomm
-Technologies Inc. Adreno Vulkan Driver`.
+`results/adreno-perf-0.6B-B*.log`. Driver string per row: `Qualcomm
+Technologies Inc. Adreno Vulkan Driver`. **Reminder:** every row
+below produced incorrect output at correctness time — perf numbers
+document how the broken backend behaves under each config, nothing
+more.
 
-| Row | Env vars                                                   | fp16 | matrix_cores | PP128 t/s   | PP512 t/s   | TG64 t/s     |
-|:---:|:-----------------------------------------------------------|:----:|:-------------|------------:|------------:|-------------:|
-| B0  | *(none — baseline)*                                        |  1   | KHR_coopmat  | 37.5 ± 1.6  | 20.4 ± 0.8  | 104.8 ± 1.0  |
-| B1  | `GGML_VK_DISABLE_COOPMAT=1`                                |  1   | none         | 38.8 ± 1.0  | 21.0 ± 0.6  |  99.9 ± 2.2  |
-| B2  | `GGML_VK_DISABLE_COOPMAT=1` + `..._COOPMAT2=1`             |  1   | none         | 40.4 ± 3.1  | 20.6 ± 0.1  |  98.6 ± 3.3  |
-| B3  | `GGML_VK_DISABLE_F16=1`                                    |  0   | KHR_coopmat  | **599.8 ± 6.2** | **604.2 ± 1.2** | 100.3 ± 0.7 |
-| B4  | `DISABLE_F16` + `DISABLE_COOPMAT` + `DISABLE_COOPMAT2`     |  0   | none         | **593.4 ± 9.4** | **599.5 ± 7.5** | 101.1 ± 1.7 |
-| B5  | *(none)*, `-ngl 0` (CPU path via Vulkan binary)            |  1   | KHR_coopmat  | 58.7 ± 1.0  | 30.9 ± 0.5  | 145.9 ± 0.5  |
+| Row | Env vars                                                   | fp16 | int_dot | matrix_cores | PP128 t/s   | PP512 t/s   | TG64 t/s     |
+|:---:|:-----------------------------------------------------------|:----:|:-------:|:-------------|------------:|------------:|-------------:|
+| B0  | *(none — baseline)*                                        |  1   | 1       | KHR_coopmat  | 37.5 ± 1.6  | 20.4 ± 0.8  | 104.8 ± 1.0  |
+| B1  | `GGML_VK_DISABLE_COOPMAT=1`                                |  1   | 1       | none         | 38.8 ± 1.0  | 21.0 ± 0.6  |  99.9 ± 2.2  |
+| B2  | `GGML_VK_DISABLE_COOPMAT=1` + `..._COOPMAT2=1`             |  1   | 1       | none         | 40.4 ± 3.1  | 20.6 ± 0.1  |  98.6 ± 3.3  |
+| B3  | `GGML_VK_DISABLE_F16=1`                                    |  0   | 1       | KHR_coopmat  | **599.8 ± 6.2** | **604.2 ± 1.2** | 100.3 ± 0.7 |
+| B4  | `DISABLE_F16` + `DISABLE_COOPMAT` + `DISABLE_COOPMAT2`     |  0   | 1       | none         | **593.4 ± 9.4** | **599.5 ± 7.5** | 101.1 ± 1.7 |
+| B5  | *(none)*, `-ngl 0` (CPU path via Vulkan binary)            |  1   | 1       | KHR_coopmat  | 58.7 ± 1.0  | 30.9 ± 0.5  | 145.9 ± 0.5  |
+| B6  | `GGML_VK_DISABLE_INTEGER_DOT_PRODUCT=1`                    |  1   | 0       | KHR_coopmat  | 21.3 ± 1.7  | 15.6 ± 0.1  |  96.3 ± 2.7  |
+| B7  | scorched: F16 + COOPMAT + COOPMAT2 + INTEGER_DOT_PRODUCT   |  0   | 0       | none         | 369.7 ± 12.2 | 389.9 ± 1.6 |  98.0 ± 1.2  |
+
+Observations from the perf side:
+- `DISABLE_INTEGER_DOT_PRODUCT` is an orthogonal perf dial: turning
+  it off costs ~200 t/s on PP on the fp32 path (B4 → B7: 600 → 370)
+  and roughly halves PP on the fp16 path (B0 → B6: 37 → 21).
+- Neither perf-winner config (B3/B4) nor any of its variants is a
+  correctness winner. Treat this table as "how fast the broken
+  backend runs" — useful only to bound what a fixed backend might
+  eventually look like.
+
+### Partial 8B data — Qwen3-8B Q4_K_M
+
+The 8B matrix was run but two rows crashed mid-bench (fp16-on
+configs at 8B appear to fault the driver after a first measurement).
+Partial data:
+
+| Row | fp16 | matrix_cores | PP128 t/s | PP512 t/s | TG64 t/s | Notes |
+|:---:|:----:|:-------------|----------:|----------:|---------:|:------|
+| B0  |  1   | KHR_coopmat  | 2.00 ± 0.03 | —      |   —      | crashed after pp128 |
+| B3  |  0   | KHR_coopmat  | 44.6 ± 0.1  | 44.7 ± 0.1 | 19.7 ± 0.4 | completed |
+| B4  |  0   | none         | 44.2 ± 0.0  | 44.6 ± 0.1 | 19.5 ± 0.1 | completed |
+| B5  |  1   | KHR_coopmat (ngl=0) | 2.97 ± 0.00 | —  |   —      | crashed after pp128 |
+
+What this adds: even at 8B (larger GEMMs, GPU should shine), the
+fp32 path plateaus around ~45 t/s PP. That's roughly in line with
+what CPU does on this size class — no GPU win to be had from this
+backend even if it were correct. The fp16-on rows hit a hard driver
+fault rather than just being slow; a second signal that the Adreno
+Vulkan driver's fp16 path is not merely slow but actively unstable
+on 8B-scale kernels.
+
+These 8B perf numbers are also moot from a correctness standpoint
+— they are on the same broken backend that produced garbled output
+on 0.6B. They inform how much performance ceiling OpenCL would need
+to beat to be worth the pivot (spoiler: not much).
 
 CPU build reference on the same model (from session 1, 18 threads):
 **PP ~826 / TG 111**.
@@ -282,8 +324,9 @@ inference regardless of env-var tuning we have tried.
 Decision: **pivot primary GPU attention to OpenCL** (the
 vendor-maintained path). Leave Vulkan built so we can revisit
 cheaply after a Qualcomm driver update, but don't sink more tuning
-hours into it. Single remaining cheap check: `DISABLE_INTEGER_DOT_PRODUCT`
-(manual), then drop it.
+hours into it. The `DISABLE_INTEGER_DOT_PRODUCT` experiment (B6/B7)
+was run and made things strictly worse — model output collapsed to a
+single repeated token. Door closed on Vulkan for this driver revision.
 
 ### Correctness results (manual llama-cli runs, 2026-04-19)
 
@@ -299,7 +342,17 @@ doesn't confound the comparison.
 | B0 baseline | `iciesäre有条件ebraoramesarapixelewith жеinizquel락iage...`       | 🔴 garble |
 | B1 DISABLE_COOPMAT | `iciesäre有条件ebraoramesarapixelewith жеinizquel清明...`   | 🔴 garble |
 | B4 all three disabled | `weepMOST TSR下发ONGLinjaermland cheapestilly<<<<...`   | 🔴 garble |
+| B6 DISABLE_INTEGER_DOT_PRODUCT | `edlyedlyedlyedlyedlyedlyedly...` (single token repeated) | 🔴 worse: degenerate repetition |
+| B7 scorched (all four off) | `edlyedlyedlyedlyedlyedlyedly...` (identical to B6)    | 🔴 worse: degenerate repetition |
 | CPU build | `[Start thinking] Okay, the user is asking about the Snapdragon X2 Elite Extreme. First, I need to confirm if this is a real product...` | ✅ coherent |
+
+The B6/B7 collapse to a single repeated token ("edly") is a harder
+failure than the varied-garble from B0/B1/B4. Disabling
+`INTEGER_DOT_PRODUCT` on the Adreno Vulkan driver appears to corrupt
+logits outright (softmax → near-one-hot on one token). Confirms that
+int-dot-product disable is **not** a correctness lever — it's strictly
+harmful here. Output signature was identical across B6 and B7,
+independent of whether coopmat/fp16 were also disabled.
 
 Full raw session logs (uncaptured to file, taken from terminal
 scrollback) — summarized here. Stands as evidence for the pivot.

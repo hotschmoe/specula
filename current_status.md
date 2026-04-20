@@ -15,7 +15,7 @@ be able to read this page, skim the README, and resume work.
 - [x] llama.cpp sibling checkout at `llama.cpp/` (HEAD `e365e658f07b63371489570dfde597f199b26c23`)
 - [x] **Preset `cpu`** built (`llama.cpp\build-cpu\bin\`), runtime DLLs copied, smoke-tested
 - [x] Vulkan SDK installed (`C:\VulkanSDK\1.4.341.1\`, `VULKAN_SDK` env var set)
-- [x] **Preset `vulkan`** built; device enumeration correct (Adreno X2-90, native driver, `KHR_coopmat`). **Vulkan on this driver is broken for correct inference**: manual llama-cli on B0 / B1 / B4 all produced garbled tokens on Qwen3-0.6B Q8_0 with greedy sampling, while the CPU build on the same seed returned coherent Qwen3 thinking-mode text. `DISABLE_F16=1` makes PP ~30× faster (20 → 600 t/s) but also wrong — fast + wrong, not a rescue. Vulkan memory breakdown at shutdown also shows an `unaccounted | 17592186039033` MiB wraparound, i.e. a size_t underflow in the backend's buffer accounting. Decision: **pivot primary GPU attention to OpenCL** (Qualcomm's maintained backend); keep vulkan build around for later retry. Full writeup in `docs/adreno_debugging.md`.
+- [x] **Preset `vulkan`** built; device enumeration correct (Adreno X2-90, native driver, `KHR_coopmat`). **Vulkan on this driver is broken for correct inference.** Tested five env-var configs (B0 baseline, B1 DISABLE_COOPMAT, B4 DISABLE_F16+COOPMAT+COOPMAT2, B6 DISABLE_INTEGER_DOT_PRODUCT, B7 all four disabled). All five produce incorrect output on Qwen3-0.6B Q8_0 with greedy/seed=1 while CPU on same seed returns coherent Qwen3 thinking-mode text. B6/B7 additionally collapse to a single repeated token (`edlyedlyedly...`) — disabling `INTEGER_DOT_PRODUCT` makes things strictly worse. `DISABLE_F16=1` makes PP ~30× faster (20 → 600 t/s) but fast + wrong, not a rescue. Vulkan memory breakdown at shutdown also shows `unaccounted | 17592186039033` MiB — a size_t underflow in the backend's buffer accounting. Decision: **pivot primary GPU attention to OpenCL** (Qualcomm's maintained backend); keep vulkan build around for later retry after a Qualcomm driver update. Full writeup in `docs/adreno_debugging.md`.
 - [ ] **Preset `opencl`** -- blocked on OpenCL headers + `OpenCL.lib` for ARM64 (see Outstanding issues)
 - [ ] **Preset `vulkan-opencl`** -- depends on both of the above
 - [ ] **Preset `cpu-kleidiai`** -- deferred to Phase 1 SME2 retry
@@ -122,29 +122,51 @@ specula/
 
 ## Immediate next steps (next session)
 
-1. **Unblock OpenCL (new top priority).** Vulkan is out for now --
-   correctness broken across every env-var combo tried, plus
-   memory-accounting underflow at shutdown. OpenCL is Qualcomm's
-   maintained path. Steps:
+**Top priority: investigate and unblock OpenCL/Adreno.** Vulkan
+exhausted — all seven env-var combos tested produced incorrect
+output, and the one extension left to try (`INTEGER_DOT_PRODUCT`)
+made things worse. OpenCL is Qualcomm's maintained backend and the
+vendor-blessed GPU path on Adreno.
+
+1. **Survey the OpenCL/Adreno landscape before building anything.**
+   Spend 20-30 min on:
+     - llama.cpp `ggml/src/ggml-opencl/` — what's supported, Adreno
+       extensions used (`cl_qcom_reqd_sub_group_size`,
+       `cl_qcom_image_pitch`, etc.), build flags (`GGML_OPENCL_USE_ADRENO_KERNELS`).
+     - llama.cpp issues/discussions: "OpenCL Adreno", "Snapdragon
+       X2", "X Elite OpenCL" — known bugs, working configs, perf
+       reference points.
+     - Qualcomm AIStack / QAIRT install at `C:\Program Files\Qualcomm\AIStack` --
+       what ships, is there already a usable `OpenCL.lib` + headers
+       bundled (previous QAIRT check only found a sample-app `cl.h`).
+     - ICD registration: confirm `QCOclIcd.dll` location (System32?
+       elsewhere?) and the exact registry key format Khronos ICD
+       loader expects. Needs admin to write.
+2. **Build + smoke test OpenCL preset.**
      a. Install OpenCL headers + ARM64 `OpenCL.lib` (vcpkg
         `opencl:arm64-windows` is the fastest route; fallback is
-        building Khronos `OpenCL-Headers` + `OpenCL-ICD-Loader`).
-     b. Build `-Preset opencl`.
-     c. Register Qualcomm's ICD: add a `REG_DWORD` entry for
-        `C:\Windows\System32\QCOclIcd.dll` = 0 under
+        building Khronos `OpenCL-Headers` + `OpenCL-ICD-Loader` for
+        ARM64 and pointing cmake at the results).
+     b. Build `-Preset opencl`. Confirm `GGML_OPENCL_USE_ADRENO_KERNELS`
+        is ON in the preset.
+     c. Register the Qualcomm ICD if not already: `REG_DWORD` entry
+        for `<path-to-QCOclIcd.dll>` = 0 under
         `HKLM\SOFTWARE\Khronos\OpenCL\Vendors` (needs admin).
-     d. Smoke test: `llama-bench -d GPUOpenCL -m Qwen3-0.6B-Q8_0.gguf`.
-     e. Manual correctness check with llama-cli + the same prompt
-        used in session 2 Adreno debugging.
-2. **Widen `LLAMA_BUILD_TOOLS` in the build script** so the next
-   rebuild also includes `llama-completion` and `llama-perplexity`.
-   Needed for scripted correctness/perplexity assays; `llama-cli` is
-   interactive-only in current llama.cpp and ignores `-no-cnv`.
-3. **One-shot remaining Vulkan experiment (optional, cheap).** Try
-   `GGML_VK_DISABLE_INTEGER_DOT_PRODUCT=1` manually on Qwen3-0.6B --
-   last escape hatch we haven't pulled. If it fixes garble, revive
-   the Vulkan pivot; if not, close the door on Vulkan for this
-   driver revision.
+     d. Smoke test: `llama-bench -m Qwen3-0.6B-Q8_0.gguf` with the
+        OpenCL-built binary (backend will show up as OpenCL if the
+        build succeeded).
+     e. Manual correctness check with the same Session-2 prompt
+        (*"The Snapdragon X2 Elite Extreme is"* @ `--temp 0 --seed 1`)
+        for a direct A/B against the Vulkan garble.
+3. **Widen `LLAMA_BUILD_TOOLS`.** While rebuilding, add
+   `llama-completion` and `llama-perplexity` so the next round of
+   correctness work can be scripted instead of requiring a human at
+   the terminal. `llama-cli` is interactive-only in current
+   llama.cpp and ignores `-no-cnv`.
+4. **Only if OpenCL also misbehaves**, revisit Vulkan via
+   llama.cpp bisect or file an upstream issue with the driver
+   version + the B0/B4/B6 output signatures + memory-underflow dump
+   captured in `docs/adreno_debugging.md`.
 4. **Phase 1 formal baselines.** Once a working GPU backend is locked
    in (Vulkan B3/B4 or OpenCL), run `sweep_baseline.ps1` across all
    built backends for the Qwen3-0.6B / 1.7B / 8B model set. First real
