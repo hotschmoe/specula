@@ -299,6 +299,16 @@ and measurably helps PP on Q8_0 models (+16-22% at t=18 on 1.7B
 Q8_0) while regressing TG (-14%). Net = workload-dependent; use
 it for PP-heavy phases, use stock CPU for TG-heavy phases.
 
+### Upstream issue filed
+
+[ggml-org/llama.cpp#22182](https://github.com/ggml-org/llama.cpp/issues/22182)
+— "Misc. bug: cpu-kleidiai build crashes with
+STATUS_ILLEGAL_INSTRUCTION by default on Windows ARM64 (Oryon v2 /
+Snapdragon X2)". Body archived at `docs/upstream_issue_body.md`.
+Proposed fix: flip the `#else return 1;` in `detect_num_smcus` to
+`return 0;`. We've offered to open the PR if the maintainers agree
+with the direction.
+
 ### Upstream fix path (not done)
 
 Proper fix is a PR to llama.cpp replacing the
