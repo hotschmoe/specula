@@ -1,0 +1,10 @@
+{"prompt": "def fibonacci(n):\n    # Return the nth Fibonacci number using memoization\n    "}
+{"prompt": "def binary_search(arr, target):\n    # Return the index of target in arr, or -1 if not found\n    "}
+{"prompt": "def is_palindrome(s):\n    # Return True if s reads the same forwards and backwards, ignoring case and non-alphanumerics\n    "}
+{"prompt": "def merge_sorted(a, b):\n    # Merge two sorted lists into a single sorted list\n    "}
+{"prompt": "def quicksort(arr):\n    # Return a new list containing the elements of arr sorted in ascending order\n    "}
+{"prompt": "def count_words(text):\n    # Return a dict mapping each unique word to its count in text\n    "}
+{"prompt": "def flatten(nested):\n    # Flatten an arbitrarily nested list of lists into a single flat list\n    "}
+{"prompt": "def matrix_multiply(A, B):\n    # Multiply two matrices A and B represented as lists of lists\n    "}
+{"prompt": "class LinkedList:\n    def __init__(self):\n        self.head = None\n\n    def append(self, value):\n        "}
+{"prompt": "def parse_ini(text):\n    # Parse an INI-format string into a dict of section -> dict of key -> value\n    "}

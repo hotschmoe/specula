@@ -1,0 +1,27 @@
+# Models (large, fetched by download_models.ps1)
+models/
+*.gguf
+
+# Sibling llama.cpp checkout and build dirs
+llama.cpp/
+build-*/
+
+# Python venv
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Results — keep the directory, ignore contents initially
+# (uncomment if you want git-tracked results)
+# results/*.csv
+# results/*.log
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store

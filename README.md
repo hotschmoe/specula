@@ -1,0 +1,236 @@
+# specula
+
+Speculative decoding research on Windows-on-ARM. Target hardware: Snapdragon X2 Elite
+Extreme, 48 GB LPDDR5X unified memory @ 228 GB/s, Adreno X2 GPU, Hexagon NPU.
+
+*Specula (Latin):* a watchtower, a vantage from which you look ahead.
+Exactly what a draft model is.
+
+## Goal
+
+Characterize and push the ceiling of speculative decoding on Windows-on-ARM,
+then contribute back upstream. Three concentric ambitions:
+
+1. **Baseline the hardware.** Measure stock llama.cpp speculative decoding across
+   every available backend (CPU, Vulkan/Adreno, OpenCL/Adreno, Hexagon NPU) with
+   a clean sweep matrix. No such characterization exists publicly for X2 Elite
+   Extreme.
+2. **Land new speculative techniques on llama.cpp for this hardware.** Validate
+   EAGLE-3 (PR #18039) on Adreno/Hexagon. Port DFlash (block-diffusion drafting,
+   arXiv:2602.06036) which currently exists only for CUDA and MLX.
+3. **Novel placement: draft on NPU, verify on GPU.** No other mainstream platform
+   exposes an independently-addressable NPU to user-space inference code. Apple
+   Silicon cannot do this. This is the architectural advantage Snapdragon has
+   that nobody has exploited yet.
+
+## Hardware assumptions
+
+| Component        | Spec                                               |
+|------------------|----------------------------------------------------|
+| CPU              | Oryon v2, 18 cores (2 prime + 16 performance)      |
+| GPU              | Adreno X2                                          |
+| NPU              | Hexagon (v79 generation)                           |
+| Memory           | 48 GB LPDDR5X unified, 228 GB/s                    |
+| OS               | Windows 11 ARM64 (native — no WSL2/Docker for GPU) |
+
+At 228 GB/s, autoregressive decode of any model >2 GB is firmly memory-bandwidth
+bound. That is precisely the regime where speculative decoding pays maximum
+dividends: one weight-read amortizes across K verified tokens.
+
+## Why native Windows and not WSL2/Docker
+
+- **WSL2 Vulkan** is dzn (Mesa Vulkan→D3D12 translation). Non-conformant,
+  slow for compute, unstable under LLM load. Same problem on NVIDIA in WSL.
+- **WSL2 OpenCL** — no Qualcomm ICD in WSL.
+- **WSL2 Hexagon** — QNN SDK and FastRPC are Windows-native; no passthrough.
+- **Docker Desktop on Windows ARM** uses the WSL2 backend, so same constraints.
+
+WSL2 remains useful for: CPU-only baselines, running reference CUDA-only
+implementations (z-lab's DFlash Transformers path) on CPU to understand their
+behavior, and Python tooling.
+
+## Progression
+
+### Phase 0 — Infrastructure
+
+- [ ] Clone and build llama.cpp native ARM64 with all backends enabled
+  (Vulkan, OpenCL/Adreno, Hexagon)
+- [ ] Download initial model set (see `scripts/download_models.ps1`)
+- [ ] Verify each backend runs a trivial generation
+- [ ] Establish sweep harness that writes structured CSV results
+
+### Phase 1 — Autoregressive baselines
+
+For each `{model, quant, backend, threads, ngl}`:
+measure prompt-processing tok/s and token-generation tok/s at ctx ∈ {512, 2048, 8192}.
+
+This gives us the ceiling. Every speculative-decoding experiment is measured
+as a ratio against the corresponding baseline in this table.
+
+### Phase 2 — Stock speculative decoding
+
+1. **Draft-model spec** (`llama-speculative`): Qwen3-0.6B → Qwen3-8B/14B,
+   sweep `--draft-max ∈ {4, 8, 16, 32}`, `--draft-min ∈ {0, 1, 4}`, temperature=0.
+   Record acceptance rate + effective tok/s.
+2. **Draftless ngram spec**: `--spec-type` ∈ {`ngram-cache`, `ngram-simple`,
+   `ngram-map-k`, `ngram-map-k4v`, `ngram-mod`}. Memory-free win on
+   structured output. Quick to run.
+3. **Mixed-device placement**: draft on CPU, target on Adreno. Draft on
+   Hexagon NPU, target on Adreno. This is novel; llama.cpp supports per-model
+   `--device` selection but nobody has benchmarked asymmetric placement on WoA.
+
+Workloads sweep over: HumanEval code completion (high-acceptance regime),
+JSON generation (very high acceptance, ngram sweet spot), long prose
+(low-acceptance regime), multi-turn chat (mixed).
+
+### Phase 3 — EAGLE-3 validation
+
+- [ ] Check out llama.cpp PR #18039 branch
+- [ ] Build for Adreno/Hexagon
+- [ ] Validate `GGML_TENSOR_FLAG_SYNC` semantics on non-CUDA backends
+  (this is where the port is most likely to silently break)
+- [ ] Benchmark against Phase 2 baselines
+- [ ] File issues / contribute fixes upstream
+
+### Phase 4 — DFlash port
+
+DFlash is the current spec-decode SOTA on acceptance rate: block-diffusion
+drafter generates K tokens in parallel, conditioned on target hidden states.
+No llama.cpp implementation exists. Pieces required:
+
+- [ ] New `LLM_ARCH_DFLASH_QWEN` in `convert_hf_to_gguf.py`
+- [ ] GGUF converter for z-lab's drafter weights
+  (`z-lab/Qwen3-8B-DFlash-b16` etc.)
+- [ ] Block-diffusion forward pass (~4 denoising iterations)
+- [ ] Hidden-state tap at configured target layers
+  (shared plumbing with EAGLE-3; watch PR #18039)
+- [ ] KV cache rollback on rejection — pure-attention Qwen3 is just length
+  truncation; Qwen3.5 hybrid is harder (tape-replay à la bstnxbt/dflash-mlx)
+
+### Phase 5 — NPU-accelerated drafting (novel)
+
+This is where QAIRT and the Qualcomm cloud compile token earn their keep.
+Block-diffusion drafting is a small dense compute burst — perfect NPU workload —
+and can overlap with target verify on the GPU.
+
+- [ ] Profile drafter on Hexagon v79 backend (stock)
+- [ ] Identify compute-bound kernels in draft path
+- [ ] Author QNN custom ops via QAIRT; cross-compile to Hexagon
+  (reuse device-targeting info from prior transcription project)
+- [ ] Implement async pipelining: NPU drafts block N+1 while GPU verifies N
+- [ ] Measure effective throughput against Phase 4 baseline
+
+## Models and quants
+
+All from Qwen's official GGUF repos. Dense models only for Phase 1–2
+(MoE comes later to avoid routing-contention confounds on initial data).
+
+| Role               | Model           | Quant   | Size    | Purpose                           |
+|--------------------|-----------------|---------|---------|-----------------------------------|
+| Draft (primary)    | Qwen3-0.6B      | Q8_0    | 0.64 GB | Default draft, high-fidelity      |
+| Draft (alternate)  | Qwen3-1.7B      | Q8_0    | 1.83 GB | Higher acceptance, higher cost    |
+| Target (iter)      | Qwen3-8B        | Q4_K_M  | 5.03 GB | Fast iteration                    |
+| Target (prod)      | Qwen3-14B       | Q4_K_M  | 9.00 GB | Realistic production size         |
+| Target (stretch)   | Qwen3-32B       | Q4_K_M  | ~19 GB  | Scale test (Phase 2+)             |
+| Target (MoE)       | Qwen3-30B-A3B   | Q4_K_M  | ~18 GB  | MoE dimension (Phase 4+)          |
+
+**Rationale for Qwen3 (not Qwen3.5):** uniform full attention across all layers.
+Qwen3.5 mixes full attention, sliding-window attention, and linear attention
+(GatedDeltaNet). KV cache rollback on rejection is trivial for Qwen3 (just
+truncate length per layer) and nontrivial for Qwen3.5 (needs per-layer rollback
+rules; the MLX DFlash port used a custom tape-replay Metal kernel specifically
+for this). Establish clean numbers first, then add complexity.
+
+**Rationale for Q4_K_M target + Q8_0 draft:** Q4_K_M is the standard target
+quant, supported cleanly across all backends. For the draft, the extra memory
+of Q8_0 is negligible (<1 GB), and higher draft fidelity compounds: +10%
+acceptance rate is worth more than any other single knob in the system.
+
+**Rationale for skipping Q4_0 CPU baseline initially:** llama.cpp does online
+repacking of Q4_0 for ARM now, but the effective compute win mostly matters for
+prompt processing — and speculative decoding doesn't change prompt-processing
+behavior, only token generation. Come back to Q4_0 CPU only if ARM-repacked
+CPU ever beats Adreno.
+
+## Directory layout
+
+```
+specula/
+├── README.md                  # this file
+├── pyproject.toml             # uv-managed python env
+├── .python-version            # 3.12 pin
+├── .gitignore
+├── scripts/
+│   ├── download_models.ps1    # HF GGUF fetcher with resume support
+│   ├── build_llama_cpp.ps1    # multi-backend native ARM64 build
+│   ├── sweep_baseline.ps1     # Phase 1 autoregressive matrix
+│   ├── sweep_speculative.ps1  # Phase 2 spec-decode matrix
+│   └── analyze_results.py     # CSV → plots
+├── prompts/
+│   ├── humaneval_subset.jsonl # 20 prompts, code completion
+│   ├── structured_json.jsonl  # JSON generation
+│   ├── prose_longform.jsonl   # low-acceptance workload
+│   └── chat_multiturn.jsonl
+├── models/                    # GGUFs (gitignored)
+├── results/                   # CSVs + logs
+├── notebooks/                 # analysis
+└── llama.cpp/                 # sibling checkout, version pinned below
+```
+
+`llama.cpp` is a sibling git checkout, not a submodule — too much local
+patching will happen (EAGLE-3 branch, DFlash in-progress work, custom
+Hexagon kernels). The exact upstream commit used for each result row is
+recorded in the CSV.
+
+## Tooling
+
+**Native C/C++** — llama.cpp core, eventual DFlash implementation,
+custom Hexagon kernels. This is where 80% of the real work lives.
+
+**Python (uv-managed venv)** — HuggingFace model download/conversion,
+results analysis, plotting, EAGLE-3/DFlash HF→GGUF converters. Minimal Python
+dependency footprint; every script single-file and self-documenting.
+
+**PowerShell** — sweep orchestration, build drivers. Native to Windows ARM,
+no shell-emulation layer. Scripts emit structured CSV rows to `results/`.
+
+**QAIRT / QNN C++** — Phase 5 custom NPU kernel authorship. Qualcomm cloud
+compile token is for this. Reference: prior transcription project
+device-targeting info.
+
+**Zig** — optional. A pure-Zig harness is attractive long-term if we want to
+script experiments without touching Python, and a Zig implementation of the
+block-diffusion drafter is in scope if we pursue a standalone runtime that
+doesn't require llama.cpp's ggml graph machinery.
+
+## Quickstart
+
+```powershell
+# clone
+git clone <this repo> specula
+cd specula
+
+# download models (resumable, ~18 GB total)
+.\scripts\download_models.ps1
+
+# clone + build llama.cpp (sibling)
+.\scripts\build_llama_cpp.ps1
+
+# python env for analysis
+uv venv
+.\.venv\Scripts\Activate.ps1
+uv sync
+
+# run first baseline
+.\scripts\sweep_baseline.ps1 -Backend cpu -Model Qwen3-8B-Q4_K_M.gguf
+```
+
+## References
+
+- DFlash paper: arXiv:2602.06036
+- DFlash reference (CUDA): <https://github.com/z-lab/dflash>
+- DFlash MLX port: <https://github.com/bstnxbt/dflash-mlx>
+- EAGLE-3 llama.cpp PR: <https://github.com/ggml-org/llama.cpp/pull/18039>
+- llama.cpp Snapdragon backend docs: `docs/backend/snapdragon/README.md`
+- llama.cpp speculative decoding docs: `docs/speculative.md`
+- WoA LLM inference context: llama.cpp discussions #8273, #8336, #8455
