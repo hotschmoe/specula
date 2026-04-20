@@ -1,6 +1,6 @@
 # specula -- current status
 
-Last updated: 2026-04-19 (session 2 -- Adreno Vulkan fp16 triage)
+Last updated: 2026-04-20 (session 3 -- OpenCL/Adreno pre-build survey)
 
 Living document. Update every few turns. Anyone picking this up cold should
 be able to read this page, skim the README, and resume work.
@@ -16,8 +16,16 @@ be able to read this page, skim the README, and resume work.
 - [x] **Preset `cpu`** built (`llama.cpp\build-cpu\bin\`), runtime DLLs copied, smoke-tested
 - [x] Vulkan SDK installed (`C:\VulkanSDK\1.4.341.1\`, `VULKAN_SDK` env var set)
 - [x] **Preset `vulkan`** built; device enumeration correct (Adreno X2-90, native driver, `KHR_coopmat`). **Vulkan on this driver is broken for correct inference.** Tested five env-var configs (B0 baseline, B1 DISABLE_COOPMAT, B4 DISABLE_F16+COOPMAT+COOPMAT2, B6 DISABLE_INTEGER_DOT_PRODUCT, B7 all four disabled). All five produce incorrect output on Qwen3-0.6B Q8_0 with greedy/seed=1 while CPU on same seed returns coherent Qwen3 thinking-mode text. B6/B7 additionally collapse to a single repeated token (`edlyedlyedly...`) — disabling `INTEGER_DOT_PRODUCT` makes things strictly worse. `DISABLE_F16=1` makes PP ~30× faster (20 → 600 t/s) but fast + wrong, not a rescue. Vulkan memory breakdown at shutdown also shows `unaccounted | 17592186039033` MiB — a size_t underflow in the backend's buffer accounting. Decision: **pivot primary GPU attention to OpenCL** (Qualcomm's maintained backend); keep vulkan build around for later retry after a Qualcomm driver update. Full writeup in `docs/adreno_debugging.md`.
-- [ ] **Preset `opencl`** -- blocked on OpenCL headers + `OpenCL.lib` for ARM64 (see Outstanding issues)
-- [ ] **Preset `vulkan-opencl`** -- depends on both of the above
+- [x] **Preset `opencl`** built and correctness+perf validated.
+  **OpenCL Adreno is the working GPU backend on this machine.**
+  Qwen3-0.6B Q8_0 bench: **PP128 1926 t/s, PP512 2674 t/s, TG64 111
+  t/s** (vs CPU 826 / — / 111; vs Vulkan fast-but-wrong B3
+  599 / 604 / 100). Output coherence matches CPU greedy reference.
+  Full writeup in `docs/adreno_opencl.md`.
+- [ ] **Preset `vulkan-opencl`** -- preset is wired (same SDK flags
+  as `opencl`); not yet rebuilt. Vulkan side is still broken on this
+  driver per `adreno_debugging.md`, so there's no immediate reason to
+  exercise this preset; keep it around for post-driver-update retest.
 - [ ] **Preset `cpu-kleidiai`** -- deferred to Phase 1 SME2 retry
 - [ ] Hexagon backend -- out of band (Qualcomm docker toolchain); not wired into `build_llama_cpp.ps1`
 - [ ] Sweep harness validated end-to-end (scripts exist; not yet producing real CSVs)
@@ -34,6 +42,15 @@ enters conversation mode — it prints *"please use llama-completion
 instead"* and falls back. For scripted correctness/perplexity assays
 we need to widen the build tool set (or drive `llama-server` over
 HTTP). Not blocking the OpenCL pivot; bundle with the next rebuild.
+
+Note (2026-04-20, session 3): target list in `build_llama_cpp.ps1`
+now includes `llama-completion` and `llama-perplexity`. They're in
+the `build-opencl/bin/` output. **Open caveat:** `llama-completion`
+on HEAD `fd6ae4c…` also defaults to conversation mode and hangs
+waiting for interactive input after `-n 64` tokens are generated —
+the generation itself is correct (we verified coherence), but
+scripted runs still need a Ctrl-C or a stdin close. For fully
+hands-off automation the safer tool is `llama-server` over HTTP.
 
 Note (2026-04-19, session 2): **Qualcomm's own GPU-compute path for
 llama.cpp is the OpenCL backend**, not Vulkan. `ggml-opencl` has
@@ -74,18 +91,41 @@ Per-build metadata is recorded in `llama.cpp\build-<preset>\SPECULA_BUILD.txt`.
 
 ## Outstanding issues / known gotchas
 
-- **OpenCL build blocked.** llama.cpp's CMake requires `find_package(OpenCL
-  REQUIRED)`, which needs headers (`CL/cl.h`) and an import library
-  (`OpenCL.lib`) for ARM64 on disk. Neither is installed. QAIRT has a
-  stray `cl.h` buried in a sample app but no lib. Unblock options:
-    1. `vcpkg install opencl:arm64-windows`
-    2. Clone Khronos `OpenCL-Headers` + `OpenCL-ICD-Loader`, build the
-       loader for ARM64, point cmake at the results via
-       `-DOpenCL_INCLUDE_DIR=... -DOpenCL_LIBRARY=...`.
-  Runtime concern (separate): Adreno OpenCL ICD is not registered in
-  `HKLM\SOFTWARE\Khronos\OpenCL\Vendors`, so device discovery will fail
-  even after build until `QCOclIcd.dll` is registered. Deal with that
-  when `llama-bench -d GPUOpenCL` first runs.
+- **OpenCL build — SDK survey done, plan locked. See `docs/adreno_opencl.md`
+  for the full writeup.** Summary of what session 3 established:
+  - **Runtime is already on disk.** The Adreno driver
+    (`qcdx8480.inf_arm64_e11dd2e33e0b42d3` in the Windows driver
+    store) ships both `OpenCL.dll` and `OpenCL_adreno.dll`. QAIRT
+    bundles the same two DLLs under
+    `lib\aarch64-windows-msvc\`. `C:\Windows\System32\OpenCL.dll`
+    (the Khronos ICD loader) is also present.
+  - **ICD registry key missing.** `HKLM\SOFTWARE\Khronos\OpenCL\Vendors`
+    does not exist. Without an entry under that key pointing at
+    `OpenCL_adreno.dll` the loader sees zero platforms. Admin
+    PowerShell one-liner in `docs/adreno_opencl.md` §Step 3.
+  - **No `QCOclIcd.dll` on this Adreno gen.** The earlier note that
+    called for `QCOclIcd.dll` was based on older-gen Adreno
+    naming; on this driver the ICD DLL is `OpenCL_adreno.dll`.
+  - **Headers ship with QAIRT — just in a sample-app path.**
+    `C:\Qualcomm\AIStack\QAIRT\2.45.40.260406\examples\QNN\SampleApp\SampleAppGPUFencing\src\CL\`
+    contains `cl.h`, `cl_ext.h`, `cl_ext_qcom.h`, `cl_platform.h`,
+    `cl_version.h`. Usable in a pinch; still no `OpenCL.lib`.
+  - **SDK gap = import library only.** Unblock routes ranked:
+    1. `vcpkg install opencl:arm64-windows` (preferred — cleanest).
+    2. Build Khronos `OpenCL-Headers` + `OpenCL-ICD-Loader` for
+       ARM64 with the existing clang-via-vcvarsarm64 recipe, then
+       pass `-DOpenCL_INCLUDE_DIR=... -DOpenCL_LIBRARY=...`.
+    3. Generate an import lib from
+       `OpenCL.dll` (`dumpbin /exports` → `.def` → `lib /def:`) and
+       consume QAIRT's sample-app headers. Only if (1) and (2) fail.
+  - **Gotcha caught in source:** `ggml-opencl.cpp:222`
+    `get_adreno_gpu_gen()` matches only A7X (`730/740/750`), A8X
+    (`830/840`), and X1E (`X1` substring). **X2-90 falls to
+    `ADRENO_UNKNOWN`**. Non-fatal (init still proceeds) but may
+    skip gen-specific tuning branches. Pre-emptive patch is a
+    one-line `strstr(name, "X2")` add; leave it until we have a
+    first correct run so we can see whether unknown-gen works
+    out-of-the-box.
 - **KleidiAI / SME2 crashed at runtime in prior project.** See
   `gguf_models/LOCAL_LLM_NOTES.md`. Will retry as a tracked task in
   Phase 1; `scripts/build_llama_cpp.ps1 -Preset cpu-kleidiai` is wired
@@ -122,55 +162,46 @@ specula/
 
 ## Immediate next steps (next session)
 
-**Top priority: investigate and unblock OpenCL/Adreno.** Vulkan
-exhausted — all seven env-var combos tested produced incorrect
-output, and the one extension left to try (`INTEGER_DOT_PRODUCT`)
-made things worse. OpenCL is Qualcomm's maintained backend and the
-vendor-blessed GPU path on Adreno.
+**OpenCL/Adreno is unblocked and validated.** Session 3
+(2026-04-20) built the preset, built the Khronos SDK (siblings
+`../OpenCL-Headers/`, `../OpenCL-ICD-Loader/`), passed correctness
+A/B, and benched 0.6B at numbers that clear CPU by 2-3× on PP.
+Remaining work is filling the perf matrix at 1.7B + 8B and
+handing off to `sweep_baseline.ps1`.
 
-1. **Survey the OpenCL/Adreno landscape before building anything.**
-   Spend 20-30 min on:
-     - llama.cpp `ggml/src/ggml-opencl/` — what's supported, Adreno
-       extensions used (`cl_qcom_reqd_sub_group_size`,
-       `cl_qcom_image_pitch`, etc.), build flags (`GGML_OPENCL_USE_ADRENO_KERNELS`).
-     - llama.cpp issues/discussions: "OpenCL Adreno", "Snapdragon
-       X2", "X Elite OpenCL" — known bugs, working configs, perf
-       reference points.
-     - Qualcomm AIStack / QAIRT install at `C:\Program Files\Qualcomm\AIStack` --
-       what ships, is there already a usable `OpenCL.lib` + headers
-       bundled (previous QAIRT check only found a sample-app `cl.h`).
-     - ICD registration: confirm `QCOclIcd.dll` location (System32?
-       elsewhere?) and the exact registry key format Khronos ICD
-       loader expects. Needs admin to write.
-2. **Build + smoke test OpenCL preset.**
-     a. Install OpenCL headers + ARM64 `OpenCL.lib` (vcpkg
-        `opencl:arm64-windows` is the fastest route; fallback is
-        building Khronos `OpenCL-Headers` + `OpenCL-ICD-Loader` for
-        ARM64 and pointing cmake at the results).
-     b. Build `-Preset opencl`. Confirm `GGML_OPENCL_USE_ADRENO_KERNELS`
-        is ON in the preset.
-     c. Register the Qualcomm ICD if not already: `REG_DWORD` entry
-        for `<path-to-QCOclIcd.dll>` = 0 under
-        `HKLM\SOFTWARE\Khronos\OpenCL\Vendors` (needs admin).
-     d. Smoke test: `llama-bench -m Qwen3-0.6B-Q8_0.gguf` with the
-        OpenCL-built binary (backend will show up as OpenCL if the
-        build succeeded).
-     e. Manual correctness check with the same Session-2 prompt
-        (*"The Snapdragon X2 Elite Extreme is"* @ `--temp 0 --seed 1`)
-        for a direct A/B against the Vulkan garble.
-3. **Widen `LLAMA_BUILD_TOOLS`.** While rebuilding, add
-   `llama-completion` and `llama-perplexity` so the next round of
-   correctness work can be scripted instead of requiring a human at
-   the terminal. `llama-cli` is interactive-only in current
-   llama.cpp and ignores `-no-cnv`.
-4. **Only if OpenCL also misbehaves**, revisit Vulkan via
-   llama.cpp bisect or file an upstream issue with the driver
-   version + the B0/B4/B6 output signatures + memory-underflow dump
-   captured in `docs/adreno_debugging.md`.
-4. **Phase 1 formal baselines.** Once a working GPU backend is locked
-   in (Vulkan B3/B4 or OpenCL), run `sweep_baseline.ps1` across all
-   built backends for the Qwen3-0.6B / 1.7B / 8B model set. First real
+1. ~~**Survey the OpenCL/Adreno landscape before building anything.**~~
+   *Done in session 3 (2026-04-20). Findings captured in
+   `docs/adreno_opencl.md`; the ICD-DLL name, header situation,
+   runtime-DLL location, ICD registry absence, and the X2-90 gen-
+   matcher gap are all documented. Remaining landscape item (not yet
+   done, low priority for the build itself): upstream issue/discussion
+   search for `X2-90 OpenCL` / `Snapdragon X2 Elite OpenCL` to see if
+   anyone else is ahead of us.*
+2. ~~Build + smoke test OpenCL preset.~~ **Done in session 3.**
+   0.6B correctness + perf validated. See `docs/adreno_opencl.md`.
+3. ~~Widen `LLAMA_BUILD_TOOLS`.~~ **Done.** `llama-completion`
+   + `llama-perplexity` now in targets list. Tooling caveat: on
+   HEAD `fd6ae4c…` `llama-completion` still auto-enters
+   conversation mode; scripts either need to close stdin or use
+   `llama-server` over HTTP for hands-off runs.
+4. **Fill out the OpenCL perf matrix.** 0.6B Q8_0 is done. Next:
+   Qwen3-1.7B Q8_0 then Qwen3-8B Q4_K_M through the same bench
+   template, plus longer prompt shapes (`-p 1024,2048`) for
+   Phase-2-relevant shapes.
+5. **Phase 1 formal baselines.** Run `sweep_baseline.ps1` across
+   CPU + OpenCL backends for Qwen3-0.6B / 1.7B / 8B. First real
    CSVs land in `results/`.
-5. **SME2 / KleidiAI retry.** `-Preset cpu-kleidiai` build, then run a
-   batched-matmul workload (PP-heavy) to trigger or not trigger the
-   prior `STATUS_ILLEGAL_INSTRUCTION`.
+6. **Optional tuning experiments** (non-blocking, may be worth
+   a session once 1 and 2 are done):
+     - Patch `get_adreno_gpu_gen` to recognize `X2-90` (currently
+       falls to `ADRENO_UNKNOWN`). Rebuild, re-bench, compare.
+     - Opt into `cl_qcom_large_buffer` via
+       `GGML_OPENCL_ADRENO_USE_LARGE_BUFFER=1` if extension is
+       supported; re-bench 8B.
+7. **SME2 / KleidiAI retry.** `-Preset cpu-kleidiai` build, then run
+   a batched-matmul workload (PP-heavy) to trigger or not trigger
+   the prior `STATUS_ILLEGAL_INSTRUCTION`.
+8. **Vulkan — deferred, not abandoned.** With OpenCL locked in as
+   the primary GPU backend there's no urgency, but if a Qualcomm
+   driver update lands, re-run the session-2 correctness matrix
+   (B0-B7) to see if any shader path now returns coherent output.

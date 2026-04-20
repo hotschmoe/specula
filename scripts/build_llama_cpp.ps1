@@ -57,10 +57,20 @@ param(
     [int]$Jobs = 12,
     [string]$LlvmRoot = 'C:\Program Files\LLVM',
     [string]$VsRoot = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools',
+    # OpenCL SDK (headers + ARM64 import lib) as produced by the
+    # sibling OpenCL-Headers/OpenCL-ICD-Loader checkouts per
+    # docs/adreno_opencl.md §Step 1. Override if you built to a
+    # different location.
+    [string]$OpenClHeadersDir = (Join-Path $PSScriptRoot '..\..\OpenCL-Headers\install\include'),
+    [string]$OpenClLibrary    = (Join-Path $PSScriptRoot '..\..\OpenCL-ICD-Loader\install\lib\OpenCL.lib'),
     [switch]$DryRun
 )
 
-$ErrorActionPreference = 'Stop'
+# NB: intentionally NOT 'Stop' — PS 5.1 wraps every stderr line from a
+# native exe in a NativeCommandError, and with 'Stop' that terminates
+# the script even when the exe returned exit 0. Native calls here all
+# check $LASTEXITCODE explicitly, which is the correct signal.
+$ErrorActionPreference = 'Continue'
 
 # GetShortPathNameW — resolves e.g. "C:\Program Files\LLVM\..." to
 # "C:\PROGRA~1\LLVM\...". We use this for any path that needs to be stored
@@ -174,23 +184,36 @@ try {
             $patchKleidiai = $false
         }
         'opencl' {
-            # Requires OpenCL headers + an import lib (OpenCL.lib) for ARM64
-            # on disk; see scripts/install_opencl_sdk.ps1 (TODO) or use vcpkg.
-            # Runtime loader (OpenCL.dll) ships with Windows. Adreno ICD
-            # discovery is a separate runtime concern.
+            # Headers + ARM64 import lib supplied via sibling
+            # OpenCL-Headers / OpenCL-ICD-Loader checkouts (see
+            # docs/adreno_opencl.md §Step 1). Runtime loader is
+            # C:\Windows\System32\OpenCL.dll (Khronos ICD loader) and
+            # the Adreno ICD lives under the Windows driver store.
+            # Device enumeration additionally requires the Khronos
+            # Vendors registry entry — see §Step 3 of the doc.
+            $openclInc = (Resolve-Path -LiteralPath $OpenClHeadersDir -ErrorAction Stop).Path -replace '\\','/'
+            $openclLib = (Resolve-Path -LiteralPath $OpenClLibrary    -ErrorAction Stop).Path -replace '\\','/'
             $presetFlags = @(
                 '-DGGML_OPENCL=ON',
                 '-DGGML_OPENCL_USE_ADRENO_KERNELS=ON',
+                '-DGGML_OPENCL_EMBED_KERNELS=ON',
+                "-DOpenCL_INCLUDE_DIR=$openclInc",
+                "-DOpenCL_LIBRARY=$openclLib",
                 '-DGGML_CPU_KLEIDIAI=OFF'
             )
             $patchKleidiai = $false
         }
         'vulkan-opencl' {
             # Combined preset; needs both SDK states satisfied above.
+            $openclInc = (Resolve-Path -LiteralPath $OpenClHeadersDir -ErrorAction Stop).Path -replace '\\','/'
+            $openclLib = (Resolve-Path -LiteralPath $OpenClLibrary    -ErrorAction Stop).Path -replace '\\','/'
             $presetFlags = @(
                 '-DGGML_VULKAN=ON',
                 '-DGGML_OPENCL=ON',
                 '-DGGML_OPENCL_USE_ADRENO_KERNELS=ON',
+                '-DGGML_OPENCL_EMBED_KERNELS=ON',
+                "-DOpenCL_INCLUDE_DIR=$openclInc",
+                "-DOpenCL_LIBRARY=$openclLib",
                 '-DGGML_CPU_KLEIDIAI=OFF'
             )
             $patchKleidiai = $false
@@ -249,8 +272,14 @@ try {
     }
 
     # --- Build ---------------------------------------------------------------
+    # llama-cli is interactive-only in current llama.cpp and silently
+    # ignores -no-cnv; llama-completion + llama-perplexity are needed
+    # for scripted correctness / perplexity assays (see
+    # docs/adreno_debugging.md §Tooling caveat).
     $targets = @(
         'llama-cli',
+        'llama-completion',
+        'llama-perplexity',
         'llama-bench',
         'llama-batched-bench',
         'llama-speculative',

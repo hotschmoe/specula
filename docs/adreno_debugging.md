@@ -4,6 +4,13 @@ Session 1 start: 2026-04-19. Session 2 (same day) added the fp16
 finding below. Living doc for the Adreno Vulkan correctness +
 performance investigation.
 
+> **Sequel:** OpenCL pivot executed in session 3 (2026-04-20) and
+> worked on first try — coherent output, PP 2674 t/s at pp512 on
+> Qwen3-0.6B Q8_0 (~4.4× the broken-but-fast Vulkan B3 ceiling
+> documented below). See `docs/adreno_opencl.md`. This file is kept
+> as the Vulkan-specific reference; no further active work on
+> Vulkan unless a Qualcomm driver update lands.
+
 ## TL;DR of where we are (post-session 2, after manual correctness run)
 
 - **The Adreno Vulkan backend produces garbage text on every env-var
