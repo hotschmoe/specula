@@ -278,59 +278,189 @@ specula/
 
 ## Immediate next steps (next session)
 
-**Phase 2 mapped; pivoting to Phase 4 (DFlash+DDTree).** Session 4
-(2026-04-20) produced six spec-decode sweeps and merged in the
-lucebox-hub paper, which supplies a reference implementation.
-- CPU spec peaks at **1.55× (40.2 t/s) at k=3**; ceiling ~1.6×.
-- OpenCL-in-any-role regresses (per-round kernel-launch overhead
-  dominates small-k verify batches). Session 4's mixed-device run
-  empirically justifies skipping EAGLE-3-alone -- accept-only won't
-  break the overhead ceiling.
-- lucebox-hub hit 3.43× on RTX 3090 with DFlash+DDTree, confirming
-  the combined "higher accept + bigger verify batches" attack is
-  what clears this class of ceiling. DFlash becomes the Phase-3+
-  anchor; EAGLE-3 demoted to a deferred viability probe.
+**Strategy (session 5, 2026-04-20): close out Qwen3, then graduate
+fully to Qwen3.5 for all further work.**
+
+The Qwen3 family has been our scaffolding model because it has more
+public literature (EAGLE PRs, community benchmarks, llama.cpp coverage).
+Production target is Qwen3.5 → Qwen3.6 -- see
+`memory/project_target_model.md`. Rather than running two parallel
+tracks (keep poking at Qwen3, start Qwen3.5), we treat this as a
+clean graduation:
+
+- Use the Qwen3 window to land everything *adventurous* that only
+  makes sense on pure-attention + smaller models: **NPU drafting** is
+  the headline item (simplest path into QAIRT), but any stashed
+  Phase-2 experiments (see below) that we care about should finish
+  in this window too -- they'll be orphaned after graduation.
+- Once NPU drafting on Qwen3-0.6B + Qwen3-8B has a stable baseline
+  (win, lose, or tie against Phase 2's 1.55× CPU-spec), declare Qwen3
+  *closed* and move all subsequent phases (DFlash, NPU-on-dense-small,
+  MoE) to Qwen3.5+.
+- This keeps the codebase from accumulating two model-family branches
+  and keeps our attention on Qwen3-era questions while the tooling is
+  still fresh.
+
+**Revised phase order: NPU-first (close out Qwen3), then Phase 4
+DFlash (opens Qwen3.5 era).**
+Session 5 scoped Phase 4 against lucebox-hub and then re-sequenced:
+
+- **Phase 5 (NPU drafting on Qwen3) moves ahead of Phase 4.** The
+  Phase-2 mixed-device negative result told us CPU↔OpenCL sync breaks
+  small-batch heterogeneous exec on this hardware. It did NOT tell us
+  whether heterogeneous exec works *at all* -- only that ggml-opencl's
+  per-round launch profile loses in the specific CPU-draft +
+  OpenCL-target pairing. The NPU path is the structurally different
+  bet: pipelined async dispatch + ION-backed buffers + parallel-to-
+  target draft. Answering "does heterogeneous work on X2 at all" is
+  a prior-scope question that gates DFlash's eventual Phase-5-style
+  async design. If NPU-draft also regresses, we learn that before
+  committing to a DFlash-on-OpenCL port with the same sync shape.
+- **Phase 4 (DFlash + DDTree on Qwen3.5) follows NPU work.** The
+  scoping pass already landed (see "Phase 4" section below); the
+  assets can be downloaded in parallel with NPU bring-up so Phase 4
+  is ready to start the moment NPU drafting answers its core
+  question. Session 5 scoping remains valid regardless of ordering.
+- CPU spec peaks at **1.55× (40.2 t/s) at k=3**; ceiling ~1.6×. This
+  remains the target-side baseline for both phases.
+- lucebox-hub hit 3.43× on RTX 3090 with DFlash+DDTree (pure-CUDA,
+  single device). Our win condition is different: we're stitching
+  heterogeneous compute (NPU + CPU + GPU) via shared LPDDR5X, not
+  competing on single-device throughput.
 - Phase-2 stretch items (`--draft-p-min`, 14B target, prose/multi-
-  turn, ngram spec, upstream writeup) are stashed -- none of them
-  will break 1.6×. See "Stashed for after Phase 4 lands" below.
+  turn, ngram spec, upstream writeup) stay stashed -- none break 1.6×.
 
-### Pivoting to Phase 4 (DFlash + DDTree) next
+### Phase intersection — why NPU-first is cheap information
 
-Session 4 answered the Phase-2 core question (what's the draft-model
-spec ceiling, is OpenCL usable, which workload regime matters). The
-remaining Phase-2 items below are worth doing, but **none of them
-will break the 1.6× ceiling** -- that requires DFlash or DDTree, i.e.
-a Phase-4 move. Going straight to Phase 4 is the right call.
+The two tracks share less code than they look to at first, but the
+one thing they DO share is the work that matters most.
 
-### Stashed for after Phase 4 lands
+- **Shared, high-value: zero-copy buffer model on shared LPDDR5X.**
+  NPU drafting needs NPU↔CPU/GPU shared allocations via
+  `cl_qcom_ion_host_ptr` or QAIRT buffer handoff so the NPU draft
+  doesn't pay a cache-flush round trip to hand tokens back to the
+  target. DFlash-on-OpenCL needs the *same* pattern for its per-
+  round `target_feat` → draft → verify loop -- the Snapdragon
+  analogue of the D2D copy that gave lucebox +3.3% on PCIe. Doing
+  NPU first forces us to solve ION-backed allocation + async
+  dispatch first; Phase 4's OpenCL port then inherits that
+  infrastructure intact. This is the single biggest intersection.
+- **Shared, low-value: benchmark harness + prompt fixtures + metric
+  logging.** `sweep_speculative.ps1`, the humaneval/json JSONL
+  fixtures, the AL/accept/tok-s columns in our CSVs all carry over.
+  Already built in Phase 2.
+- **NOT shared: kernel ports.** NPU drafting doesn't touch
+  ggml-opencl (draft runs on QAIRT, target uses stock llama.cpp).
+  DFlash-on-OpenCL doesn't touch Hexagon. Two independent skill
+  trees; doing one doesn't accelerate the other's kernel work.
+- **NOT shared: target-side code.** NPU spec decode uses llama.cpp's
+  stock `--draft` pipeline -- zero target patching, just swap which
+  binary runs the draft forward. DFlash needs the custom
+  non-libllama target loader + 5-layer hidden capture hooks.
+- **NOT shared: draft/target pairing.** NPU standard spec decode
+  only needs tokenizer compatibility (Qwen3-0.6B-draft +
+  Qwen3-8B-target works). DFlash requires the drafter to be trained
+  on the specific target's hidden states -- Qwen3-trained drafter
+  cannot verify a Qwen3.5 target. So NPU-on-Qwen3 and
+  DFlash-on-Qwen3.5 are independent experiments, not a shared lane.
 
-The following are tracked so we don't forget, but are deprioritized
-until DFlash+DDTree is working:
+### Session 5.5 prep (do in parallel with NPU bring-up)
 
-- **Tighten `--draft-p-min`.** Default 0.75 over-drafts on
+To keep Phase 4 unblocked once NPU drafting answers its core
+question, stage these in the background:
+
+- [ ] Download `unsloth/Qwen3.5-27B-GGUF` Q4_K_M (~16 GB) into
+      `models/`. Verify `arch=qwen35` in the GGUF metadata.
+- [ ] Download `z-lab/Qwen3.5-27B-DFlash` safetensors (~3.5 GB BF16).
+- [ ] Read `delta_net_chunked.cpp` (237 LOC) and list every ggml op
+      it calls. Cross-check against ggml-opencl's `supports_op`.
+      This is the Phase-4 gating item.
+- [ ] Confirm `ggml_rope_ext` section-mode support on OpenCL (Qwen3.5
+      M-RoPE uses sections `[11,11,10,0]`; plain NEOX is fine for the
+      draft and verified working).
+
+### NPU drafting on Qwen3 — why Qwen3 (not Qwen3.5) for this phase
+
+Two sub-questions people conflate:
+
+1. **NPU porting difficulty.** Pure-attention (Qwen3 small variants)
+   maps cleanly onto QNN's shipped op library (matmul + rmsnorm + rope
+   + swiglu). Hybrid variants (Qwen3.5 with `gated_delta_net` +
+   `ssm_conv`) require persistent-state handling on NPU that isn't in
+   the sample ops. **Hybrid is the blocker, not Qwen3 vs Qwen3.5.**
+   Pure-attention variants of either family work equivalently.
+2. **Draft/target pairing** for standard speculative decoding (not
+   DFlash): only needs tokenizer compatibility. Qwen3 and Qwen3.5
+   share the same tokenizer (Qwen family policy), so a tokenizer-
+   compatible cross-family pairing is valid. But for apples-to-apples
+   baselines it's cleaner to stay one-family-per-experiment.
+
+So the Phase 5 NPU plan is: bring-up on Qwen3-0.6B-Q8_0 draft +
+Qwen3-8B-Q4_K_M target (same pair as Phase 2). Once it works, swap
+to Qwen3.5-*dense-small* draft + Qwen3.5-*dense* target for the
+production-target experiment. We **don't** attempt NPU + hybrid
+(Qwen3.5-27B-hybrid) together yet -- layering two unknowns. That
+combination lands after both Phase 4 (DFlash on hybrid) and Phase 5
+(NPU on pure-attention) have baselines.
+
+### Caveats carried into Phase 5
+
+- Read `voice_project/current_status.md` and trident's
+  `npu_postmortem.md` / `npu_path_back.md` / `npu_current_status.md`
+  BEFORE touching QAIRT. Those are the project's hedge against
+  re-discovering known failure modes (see `docs/reference-projects.md`).
+- Pin the NPU bring-up draft to **Qwen3-0.6B-Q8_0** (not 1.7B).
+  Smaller compile iterations + fewer custom-op surprises on the
+  first pass.
+- Keep target side identical to Phase 2 winning config: Qwen3-8B-
+  Q4_K_M on CPU at 18 threads (25.91 t/s TG baseline, 40.2 t/s
+  CPU-spec at k=3). That way the first NPU-spec number is directly
+  comparable to the CPU-spec result; we can say cleanly whether
+  NPU-as-draft wins, loses, or ties vs CPU-as-draft.
+- The Hexagon v79 / v81 targeting detail still needs confirming on
+  X2E specifically -- voice_project's `encoder_info_v81.json` is a
+  hint but verify via QAIRT's device enumeration before trusting it.
+
+### Stashed -- now reframed as "Qwen3 close-out" candidates
+
+After the session-5 re-sequencing, these items fall into the Qwen3
+window that closes with Phase 5 NPU. Anything we don't do here
+gets orphaned at graduation -- pick deliberately. Priority marks:
+**[keep]** = worth doing before graduation, **[drop]** = fine to
+skip, **[carry]** = trivially portable to Qwen3.5 so not time-
+pressured.
+
+- **[keep] Tighten `--draft-p-min`.** Default 0.75 over-drafts on
   low-confidence streaks (the `flatten` pathology). Try 0.80, 0.85,
-  0.90 at k=3. Cheap; do it if we need more Phase-2 data for a writeup.
-- **14B target + 0.6B draft (or 1.7B draft).** Draft/target compute
-  ratio drops ~2×; break-even k shifts higher. Need to download
-  `Qwen3-14B-Q4_K_M.gguf` first. Good datapoint once we have DFlash
-  for an apples-to-apples scaling story.
-- **Prose + multi-turn workloads.** `prompts/prose_longform.jsonl`,
-  `prompts/chat_multiturn.jsonl` stubs still empty. Low-acceptance +
-  realistic regimes respectively.
-- **Draftless ngram spec** (`--spec-type ngram-*`). Memory-free; should
-  fly on JSON. Quick A/B.
-- **Negative-result contribution upstream.** The Adreno-OpenCL
-  spec-decode story (no win at any k or placement) is worth a
-  llama.cpp docs/discussion post. Wait until Phase 4 lands so we
-  can contribute "here's what does work" alongside.
-- **EAGLE-3 viability probe** (was Phase 3 anchor, now deferred).
-  Build llama.cpp PR #18039, one sweep, decision-gate at 2×. The
-  lucebox paper showed chain-over-tree only gives +15% on Q4_K_M
-  (quantization flattens draft softmax); EAGLE-3 alone is unlikely
-  to break our ceiling. Skip until we have bandwidth or DFlash
-  underperforms expectations.
+  0.90 at k=3. Cheap data point; improves our CPU-spec baseline
+  before we compare it to NPU-draft. Actively useful inside the
+  Qwen3 window.
+- **[carry] 14B target + 0.6B draft (or 1.7B draft).** Draft/target
+  compute ratio drops ~2×; break-even k shifts higher. Needs
+  `Qwen3-14B-Q4_K_M.gguf` download. Not time-pressured -- we'll do
+  the equivalent exercise on Qwen3.5 dense variants after
+  graduation, so skipping on Qwen3 loses no learning. Do only if
+  convenient alongside Phase 5 NPU.
+- **[keep] Prose + multi-turn workloads.** `prompts/prose_longform.jsonl`,
+  `prompts/chat_multiturn.jsonl` stubs still empty. Worth filling
+  before NPU-draft data collection so the first NPU-spec numbers
+  already cover the full workload matrix we'd want for a writeup.
+- **[keep] Draftless ngram spec** (`--spec-type ngram-*`). Memory-
+  free; should fly on JSON. Quick A/B, closes a gap in the Qwen3
+  spec-decode story and sets a useful floor for "dumbest possible
+  draft" that NPU-draft and DFlash both need to beat.
+- **[keep] Negative-result contribution upstream.** The Adreno-
+  OpenCL spec-decode story (no win at any k or placement) is worth
+  a llama.cpp docs/discussion post. Write after Phase 5 NPU so we
+  can contribute "here's what does work on heterogeneous X2"
+  alongside. High visibility, low effort once the NPU number is in.
+- **[drop] EAGLE-3 viability probe.** Was Phase 3 anchor, demoted
+  already. Lucebox paper showed chain-over-tree gives +15% on Q4_K_M
+  (quantization flattens draft softmax); EAGLE-3 alone won't break
+  our 1.6× ceiling. Not worth Qwen3-window time. Revisit on Qwen3.5
+  only if DFlash underperforms.
 
-### Phase 4 (DFlash + DDTree) -- next active phase
+### Phase 4 (DFlash + DDTree on Qwen3.5) -- queued behind Phase 5 NPU
 
 Reference impl to mine: `C:\Users\hotschmoe\Documents\GitHub\lucebox-hub/dflash/src/`
 (sibling checkout pulled 2026-04-20). See
@@ -438,10 +568,13 @@ published (3.43× HumanEval on 3090). Strong alignment with
 stated production target (see user memory:
 `project_target_model.md`).
 
-Downsides: 27B Q4_K_M + drafter + KV + intermediates fits on
-32 GB LPDDR5X but with less margin than 8B. Hybrid port is more
-unknown than pure-attention. Per-node DDTree memory tax caps
-budget ~22-26.
+Downsides: 27B Q4_K_M (~16 GB) + drafter (~3.5 GB BF16) + KV +
+intermediates leaves comfortable margin in 48 GB LPDDR5X --
+less than Qwen3-8B (~4.5 GB weights) but nowhere near tight.
+Long-context 128K via Q4_0 KV would add ~8 GB and still fit.
+Hybrid port is more unknown than pure-attention. Per-node
+DDTree memory tax caps budget ~22-26 on hybrid only (a
+pure-attention target would be uncapped).
 
 **Option B — Train our own DFlash drafter for a pure-attention Qwen (revisit later)**
 
@@ -525,6 +658,42 @@ graduating to a full runtime like trident. See README Phase 6 for
 scope. Lever: `CL_MEM_USE_HOST_PTR` / `clSVMAlloc` /
 `cl_qcom_ion_host_ptr` as allocation invariants, plus fused kernels
 and direct QAIRT↔OpenCL ION-buffer handoff for the NPU draft path.
+
+### Phase 7+ -- MoE targets (Qwen3.6-35B-A3B), explicitly deferred
+
+Holding until the fundamentals land on dense/hybrid. Rationale:
+
+- We're doing fundamental exploration on niche hardware (X2 Elite
+  Extreme is an almost unstudied platform for spec decode). Stacking
+  architectural novelty (MoE expert routing) on top of platform
+  novelty multiplies the unknowns without adding information.
+- MoE expert routing is a **new op class on NPU**. Qualcomm's shipped
+  sample ops don't cover it; custom-op development would be an
+  unrelated rabbit hole that delays the platform-characterization
+  results we're actually trying to get.
+- Spec-decode research on MoE is still unsettled in the literature --
+  expert-miss rate adds a second acceptance axis beyond token-accept,
+  and the interactions with tree-verify/DFlash aren't
+  well-characterized.
+- Our 48 GB LPDDR5X has room for Qwen3.6-35B-A3B Q5_K_M (reference
+  numbers in `gguf_models/LOCAL_LLM_NOTES.md`), so the only thing
+  deferring Phase 7 costs us is research novelty -- not hardware
+  reach.
+
+What triggers unblocking Phase 7:
+
+- DFlash+DDTree on Qwen3.5 hybrid target has a stable baseline
+  (Phase 4 closed).
+- NPU drafting has a stable zero-copy pipeline on pure-attention
+  (Phase 5 closed, regardless of whether it wins vs CPU-spec).
+- At least one of (a) Phase 6 lite harness lands, or (b) we can
+  articulate a concrete bandwidth-budget model that predicts MoE
+  expert routing's cost on LPDDR5X.
+
+Then Phase 7 is additive: reuse the existing DFlash target-loader
+path (qwen3.6 GGUF → extend `gguf_target_loader.cpp` with MoE tensor
+naming), add expert-selection to the target graph, and treat it as
+an incremental A/B vs Phase 4's 27B result.
 
 ### Deferred / answered
 
