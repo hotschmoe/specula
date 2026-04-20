@@ -67,6 +67,30 @@ measure prompt-processing tok/s and token-generation tok/s at ctx ∈ {512, 2048
 This gives us the ceiling. Every speculative-decoding experiment is measured
 as a ratio against the corresponding baseline in this table.
 
+**CPU baseline must match the numbers in `gguf_models/LOCAL_LLM_NOTES.md`**
+(e.g. Qwen3-4B Q4_K_M @ 18 threads: ~248 t/s PP / ~42 t/s TG; Qwen3.6-35B-A3B
+Q5_K_M with FA + q8 KV: ~145 t/s PP / ~29.6 t/s TG). Anything lower is a
+build/config regression, not a hardware result.
+
+**SME2 / KleidiAI retry.** Prior attempt (see `LOCAL_LLM_NOTES.md`) built
+llama.cpp with `-DGGML_CPU_KLEIDIAI=ON` cleanly, but its SME2 MOPA kernels
+tripped `STATUS_ILLEGAL_INSTRUCTION` on any batched matmul — suspected
+Windows-on-ARM64 missing the full SME2 ZA-tile user-mode state (basic SME
+smstart/smstop works; ZA-tile extensions do not). The 4096-bit Matrix
+Engine is sitting idle until this is unlocked. Tasks:
+
+- [ ] Re-test on current Windows 11 ARM64 build; specifically look for a
+  post-2026-04 servicing patch mentioning SME2 user-mode / context-switch
+- [ ] Confirm whether the ZA-tile trap is kernel-level (no user-mode enable)
+  or KleidiAI-level (kernel ok, compile target wrong)
+- [ ] Try `-DGGML_CPU_KLEIDIAI=ON` isolated to TG-only paths first
+  (the prior crash was PP batched matmul; TG is single-token and may
+  exercise different kernels)
+- [ ] If it runs, add SME2 on/off as a column in the baseline sweep so
+  we can quote the lift directly
+- [ ] Escalate upstream (llama.cpp + KleidiAI) with the exact trap signature
+  if we cannot make it work
+
 ### Phase 2 — Stock speculative decoding
 
 1. **Draft-model spec** (`llama-speculative`): Qwen3-0.6B → Qwen3-8B/14B,
@@ -160,17 +184,20 @@ specula/
 ├── pyproject.toml             # uv-managed python env
 ├── .python-version            # 3.12 pin
 ├── .gitignore
+├── .gitattributes
+├── docs/
+│   └── reference-projects.md  # local sibling projects we can raid per phase
 ├── scripts/
 │   ├── download_models.ps1    # HF GGUF fetcher with resume support
 │   ├── build_llama_cpp.ps1    # multi-backend native ARM64 build
 │   ├── sweep_baseline.ps1     # Phase 1 autoregressive matrix
 │   ├── sweep_speculative.ps1  # Phase 2 spec-decode matrix
-│   └── analyze_results.py     # CSV → plots
+│   └── analyze_results.py     # CSV → plots (TODO)
 ├── prompts/
-│   ├── humaneval_subset.jsonl # 20 prompts, code completion
-│   ├── structured_json.jsonl  # JSON generation
-│   ├── prose_longform.jsonl   # low-acceptance workload
-│   └── chat_multiturn.jsonl
+│   ├── humaneval_subset.jsonl # 10 prompts, code completion
+│   ├── structured_json.jsonl  # JSON generation (TODO)
+│   ├── prose_longform.jsonl   # low-acceptance workload (TODO)
+│   └── chat_multiturn.jsonl   # (TODO)
 ├── models/                    # GGUFs (gitignored)
 ├── results/                   # CSVs + logs
 ├── notebooks/                 # analysis
@@ -227,6 +254,8 @@ uv sync
 
 ## References
 
+- Local reference projects (trident, voice_project, gguf_models): see
+  `docs/reference-projects.md`
 - DFlash paper: arXiv:2602.06036
 - DFlash reference (CUDA): <https://github.com/z-lab/dflash>
 - DFlash MLX port: <https://github.com/bstnxbt/dflash-mlx>
