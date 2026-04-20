@@ -22,6 +22,11 @@ __pycache__/
 .idea/
 *.swp
 
+# Built probe binaries (source + build script tracked, binary not)
+scripts/sme_probe/*.exe
+scripts/sme_probe/*.obj
+scripts/sme_probe/*.pdb
+
 # OS
 Thumbs.db
 .DS_Store

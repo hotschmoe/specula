@@ -21,7 +21,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][string]$Model,
-    [ValidateSet('cpu', 'vulkan', 'opencl')][string]$Backend = 'cpu',
+    [ValidateSet('cpu', 'cpu-kleidiai', 'vulkan', 'opencl')][string]$Backend = 'cpu',
     # BuildDir is resolved from $Backend if not supplied. Each backend
     # has its own build-<preset>/ directory (see build_llama_cpp.ps1).
     [string]$BuildDir = '',
@@ -61,9 +61,10 @@ $csv = Join-Path $ResultsDir "baseline-$($Backend)-$($Model -replace '\.gguf$','
 # backend available at runtime is the one we asked for. llama-bench
 # auto-selects it.
 switch ($Backend) {
-    'cpu'    { $deviceArgs = @('-ngl', '0',  '-t', '8,12,18') }
-    'vulkan' { $deviceArgs = @('-ngl', '99', '-t', '8') }
-    'opencl' { $deviceArgs = @('-ngl', '99', '-t', '8') }
+    'cpu'          { $deviceArgs = @('-ngl', '0',  '-t', '8,12,18') }
+    'cpu-kleidiai' { $deviceArgs = @('-ngl', '0',  '-t', '8,12,18') }
+    'vulkan'       { $deviceArgs = @('-ngl', '99', '-t', '8') }
+    'opencl'       { $deviceArgs = @('-ngl', '99', '-t', '8') }
 }
 
 Write-Host "Sweep: $Model on $Backend" -ForegroundColor Green

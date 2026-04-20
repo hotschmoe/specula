@@ -163,6 +163,25 @@ try {
     $currentCommit = (git rev-parse HEAD).Trim()
     Write-Host "llama.cpp @ $currentCommit" -ForegroundColor Green
 
+    # --- KleidiAI detect_num_smcus Windows patch -----------------------------
+    # llama.cpp's detect_num_smcus falls through to `return 1;` on
+    # non-Linux, non-Apple platforms — i.e. Windows — which makes
+    # KleidiAI dispatch its SME kernel by default and fault on Oryon
+    # v2 (STATUS_ILLEGAL_INSTRUCTION). The patch script forces the
+    # Windows fallthrough to return 0 so SME is opt-in via
+    # GGML_KLEIDIAI_SME=<n>. Idempotent; safe to run on every build.
+    # See docs/SME_investigation.md for the full findings.
+    if ($Preset -in @('cpu-kleidiai')) {
+        $detectPatch = Join-Path $PSScriptRoot 'patch_kleidiai_detect.py'
+        if (Test-Path $detectPatch) {
+            Write-Host "Applying KleidiAI detect_num_smcus Windows patch..." -ForegroundColor Cyan
+            & python $detectPatch $RepoDir
+            if ($LASTEXITCODE -ne 0) { throw "patch_kleidiai_detect.py failed" }
+        } else {
+            Write-Warning "patch_kleidiai_detect.py not found at $detectPatch; default cpu-kleidiai build will fault with STATUS_ILLEGAL_INSTRUCTION on Windows unless GGML_KLEIDIAI_SME=0 is set at runtime."
+        }
+    }
+
     # --- Preset -> cmake flags -----------------------------------------------
     $buildDir = "build-$Preset"
     switch ($Preset) {
