@@ -1,0 +1,116 @@
+# Phase 5 step 1 - NPU environment snapshot
+# Session 6 start, 2026-04-20
+# Against npu_scoping.md section 5 checklist.
+
+## 5.1 QAIRT install + arch binaries - PASS
+
+Install root: C:\Qualcomm\AIStack\QAIRT\2.45.40.260406\
+  (matches pinned version, voice_project/build_qnn_models.py:18)
+
+lib/ subdirs present:
+  aarch64-windows-msvc     <-- ARM64 Windows runtime stubs
+  arm64x-windows-msvc      <-- cross-architecture variant
+  x86_64-windows-msvc      <-- x64 (for emulated converter tools)
+  hexagon-v66, v68, v69, v73, v75, v79, v81  <-- all arch targets shipped
+  aarch64-android, aarch64-oe-linux-*, android, etc.
+  python/
+
+ARM64 Windows QnnHtp runtime DLLs (lib/aarch64-windows-msvc/):
+  QnnHtp.dll, QnnHtp.lib
+  QnnHtpPrepare.dll
+  QnnHtpV81Stub.dll, QnnHtpV81CalculatorStub.dll   <-- v81 stubs present
+  QnnHtpV73Stub.dll, QnnHtpV68Stub.dll (earlier arch stubs)
+  QnnHtpNetRunExtensions.dll, QnnHtpOptraceProfilingReader.dll
+  QnnHtpProfilingReader.dll
+
+Hexagon v81 Skel (lib/hexagon-v81/unsigned/):
+  libQnnHtpV81.so
+  libQnnHtpV81Skel.so                  <-- v81 Skel present, UNSIGNED
+  libQnnNetRunDirectV81Skel.so
+  libSnpeHtpV81Skel.so
+
+Note: "unsigned/" path confirms voice_project's driver-signing wall
+applies to raw QAIRT usage. This is exactly why the primary path is
+ORT-QNN (pip onnxruntime-qnn 1.24.4 bundles its own signed stack)
+rather than loading this v81 Skel directly via QnnContext_*.
+See npu_scoping.md section 3.1.
+
+## 5.2 OS-level NPU visibility - PASS
+
+Get-PnpDevice match (Class=ComputeAccelerator):
+  FriendlyName: Snapdragon(R) X2 Elite Extreme - X2E94100 - Qualcomm(R) Hexagon(TM) NPU
+  InstanceId:   ACPI\VEN_QCOM&DEV_0FF0&SUBSYS_CRD08480&REV_0056\2&DABA3FF&0
+  Status:       OK
+
+Adjacent DSP/compute devices (all Status=OK):
+  Qualcomm(R) Audio DSP Subsystem Device     (ACPI\QCOM0F1B)
+  Qualcomm(R) Aqstic(TM) Audio DSP and Calibration Manager
+  Qualcomm(R) Compute DSP Subsystem Device   (ACPI\QCOM0FA6)
+  Qualcomm(R) NSP0 CDSP SW Thermal Device    (ACPI\QCOM0FB8)
+
+Win32_PnPSignedDriver (IsSigned=True):
+  DeviceName:           Snapdragon(R) X2 Elite Extreme - X2E94100 - Qualcomm(R) Hexagon(TM) NPU
+  DriverVersion:        30.0.220.11010
+  DriverProviderName:   Qualcomm Technologies, Inc.
+  IsSigned:             True
+
+Win32_PnPSignedDriver DSP entries (IsSigned=True):
+  Qualcomm Compute DSP Subsystem Device      685.13804.70.0
+  Qualcomm Audio DSP Subsystem Device        685.13804.70.0
+  Qualcomm(R) Aqstic(TM) Audio DSP...        685.13804.40.0
+
+SoC identifiers (for AI Hub target mapping):
+  Device ID:    X2E94100
+  Subsystem:    CRD08480 (matches AI Hub device string "Snapdragon X2 Elite CRD")
+  Revision:     0056
+  Hexagon arch: v81 (per npu_scoping.md section 4; to reconfirm at compile time)
+
+## 5.3 ORT-QNN can enumerate NPU - PENDING (needs venv + install)
+
+Requires: pip install onnxruntime-qnn==1.24.4 in a Python venv.
+Target Python: 3.12 ARM64 (C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64).
+No .venv yet in specula/.
+
+## 5.4 AI Hub token + device targetable - PENDING (needs venv + install)
+
+Requires: pip install qai-hub.
+AI Hub API token expected from prior voice_project setup (trident/npu_path_back.md:7).
+Target device string to confirm: "Snapdragon X2 Elite CRD"
+
+## Summary
+
+Hardware + SDK: READY.
+- X2E94100 NPU enumerated and signed (driver 30.0.220.11010).
+- QAIRT 2.45.40.260406 installed with all v81 artefacts.
+- Hexagon v81 confirmed as the arch target on this silicon.
+
+Runtime toolchain: NOT YET INSTALLED.
+- Needs Python venv for onnxruntime-qnn + qai-hub.
+- This is the step-1 exit gate; once installed and both SDKs enumerate
+  successfully, step 1 closes and step 2 (ORT-QNN sidecar skeleton) opens.
+
+
+## 5.3 + 5.4 probe results (appended by scripts/npu_probe.py)
+
+### 5.3 ORT-QNN
+
+- onnxruntime version : 1.24.4
+- available providers : ['QNNExecutionProvider', 'AzureExecutionProvider', 'CPUExecutionProvider']
+- QNN EP visible      : True
+- package dir         : C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime
+- bundled QNN DLLs    : 6 files
+    capi\QnnHtp.dll
+    capi\QnnHtpPrepare.dll
+    capi\QnnHtpV68Stub.dll
+    capi\QnnHtpV73Stub.dll
+    capi\QnnHtpV81Stub.dll
+    capi\onnxruntime_providers_qnn.dll
+
+### 5.4 qai-hub
+
+- qai-hub version     : 0.48.0
+- auth state          : ok
+- device catalogue    : 80 devices
+- X2-family matches   : 1
+    Snapdragon X2 Elite CRD  os=11  attrs=['os:windows', 'format:compute', 'framework:onnx', 'vendor:qualcomm', 'abi:aarch64-windows', 'chipset:qualcomm-snapdragon-x2-elite', 'chipset:sc8480xp', 'hexagon:v81', 'soc-model:88', 'htp-supports-fp16:true', 'htp-supports-weight-sharing:true', 'framework:qnn']
+- 'Snapdragon X2 Elite CRD' present: True

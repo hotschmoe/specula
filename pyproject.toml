@@ -31,6 +31,14 @@ reference = [
     "accelerate>=0.34",
 ]
 
+# Phase 5 NPU drafting path. Pinned per docs/npu_scoping.md section 4.
+# ORT-QNN bundles a signed QAIRT stack, which is the only path that loads on
+# retail Windows on ARM without Secure Boot tricks.
+npu = [
+    "onnxruntime-qnn==1.24.4",
+    "qai-hub>=0.48",
+]
+
 [tool.uv]
 # Default to CPU torch on Windows ARM (no CUDA, no ROCm on WoA).
 # Reference implementations run on a different machine; Windows-ARM Python is
