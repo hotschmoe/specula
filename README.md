@@ -198,6 +198,60 @@ and can overlap with target verify on the GPU.
 - [ ] Implement async pipelining: NPU drafts block N+1 while GPU verifies N
 - [ ] Measure effective throughput against Phase 4 baseline
 
+### Phase 6 — Standalone lite harness (optional, post-Phase-5)
+
+If by the end of Phase 5 the verdict is that llama.cpp's backend model
+keeps leaving X2-specific performance on the table — specifically the
+OpenCL buffer model (plain `clCreateBuffer(CL_MEM_READ_WRITE)` with no
+`USE_HOST_PTR` / SVM / `cl_qcom_ion_host_ptr`; see session-4 findings
+and `docs/reference-projects.md` "Unified memory vs zero-copy") and the
+per-op kernel dispatch that can't be batched across graph boundaries —
+spin a **narrow, lucebox-shaped** harness rather than a full runtime.
+
+**Why "lite" and not trident:**
+
+- trident is a full ground-up Zig inference engine; it's a large project
+  in its own right. Valuable, but probably too much work to do as a
+  side-quest to the main spec-decode research.
+- lucebox-hub proves the narrow shape works: ~2000 LOC of C++/ggml-only,
+  no libllama link, one hand-written graph for a specific model pair.
+  That's days–weeks of work, not months.
+- By the time Phase 5 is complete we have our target use case locked in
+  (Qwen3-8B + DFlash drafter, and/or Hexagon-resident drafter handing
+  off to Adreno). A lite harness can commit to that shape from day one.
+
+**Scope sketch (if we do this):**
+
+- [ ] Fork just the ggml kernels we need (+ the DFlash kernels from
+  Phase 4 / Hexagon kernels from Phase 5) into a standalone CMake
+  project sibling-checked-out from llama.cpp, like lucebox does.
+- [ ] One hand-written graph for the final `{target, draft}` pair.
+- [ ] **Zero-copy buffer model from day one.** Pick one of:
+      - `CL_MEM_USE_HOST_PTR` with page-aligned host allocs — skips the
+        driver memcpy, still pays cache maintenance. Simplest.
+      - OpenCL 2.0 SVM (`clSVMAlloc`) — single pointer valid both sides,
+        cleanest. Adreno supports it.
+      - `cl_qcom_ion_host_ptr` — vendor-native ION-backed zero-copy,
+        *required* if we co-use Hexagon via QAIRT (QAIRT's DSP buffers
+        are ION-backed; sharing them with the GPU requires this path).
+- [ ] Fused/batched kernels to cut OpenCL dispatch count per verify
+  step. Session 4 mixed-device data implicates dispatch overhead as
+  the primary tax on small verify batches; this is the lever.
+- [ ] Direct QAIRT-to-OpenCL handoff for NPU-drafted tokens via a
+  shared ION buffer, skipping any round-trip through host memory.
+
+**When NOT to do this:**
+
+- If Phase 4/5 land above 3× end-to-end without this lane, it's wasted
+  work — we've already cleared the "is this hardware worth publishing
+  for" bar.
+- If llama.cpp upstream lands zero-copy buffers or SVM support in
+  ggml-opencl in the meantime (unlikely but watch for it).
+- If we decide the trident Zig runtime is actually the better
+  long-term bet. This is the "do we do lucebox-style or trident-style"
+  decision point; lite harness is the lower-risk answer but not the
+  only one.
+
 ## Models and quants
 
 All from Qwen's official GGUF repos. Dense models only for Phase 1–2

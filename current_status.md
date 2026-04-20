@@ -278,50 +278,93 @@ specula/
 
 ## Immediate next steps (next session)
 
-**Phase 2 thoroughly mapped on 8B+0.6B.** Session 4 (2026-04-20)
-produced six spec-decode sweeps: wide k, narrow k, JSON workload,
-mixed-device at 3 k values, OpenCL-all at 2 k values.
+**Phase 2 mapped; pivoting to Phase 4 (DFlash+DDTree).** Session 4
+(2026-04-20) produced six spec-decode sweeps and merged in the
+lucebox-hub paper, which supplies a reference implementation.
 - CPU spec peaks at **1.55× (40.2 t/s) at k=3**; ceiling ~1.6×.
-- OpenCL-in-any-role is a regression for stock spec decode (per-round
-  kernel-launch overhead dominates small-k verify batches).
-- JSON (82% accept) barely improves on humaneval (80%); ceiling is
-  overhead, not accept rate.
-- Next work below is about pushing outward: new shapes (14B target,
-  1.7B draft), tunables (`--draft-p-min`), and non-code workloads,
-  *not* more mixed-device k scanning -- that axis is answered.
+- OpenCL-in-any-role regresses (per-round kernel-launch overhead
+  dominates small-k verify batches). Session 4's mixed-device run
+  empirically justifies skipping EAGLE-3-alone -- accept-only won't
+  break the overhead ceiling.
+- lucebox-hub hit 3.43× on RTX 3090 with DFlash+DDTree, confirming
+  the combined "higher accept + bigger verify batches" attack is
+  what clears this class of ceiling. DFlash becomes the Phase-3+
+  anchor; EAGLE-3 demoted to a deferred viability probe.
+- Phase-2 stretch items (`--draft-p-min`, 14B target, prose/multi-
+  turn, ngram spec, upstream writeup) are stashed -- none of them
+  will break 1.6×. See "Stashed for after Phase 4 lands" below.
 
-### Phase 2 -- near-term
+### Pivoting to Phase 4 (DFlash + DDTree) next
 
-1. **Tighten `--draft-p-min`.** Default 0.75 drafts aggressively even on
-   low-confidence streaks (the `flatten` pathology). Try 0.80, 0.85,
-   0.90 at k=3; expect lower `n_drafted` on pathological prompts with
-   minimal accept loss on easy ones. Cheap to run.
-2. **14B target + 0.6B draft (or 1.7B draft).** Draft/target compute
-   ratio drops ~2×; break-even k should shift higher, and the
-   speculative ceiling may rise past 1.6× on a heavier target. Need to
-   ingest `Qwen3-14B-Q4_K_M.gguf` first.
-3. **Prose + multi-turn workloads.** `prompts/prose_longform.jsonl`
-   and `prompts/chat_multiturn.jsonl` stubs. Prose is the
-   low-acceptance regime; multi-turn is the realistic one.
-4. **Draftless ngram spec** (`--spec-type ngram-*`). Memory-free;
-   should fly on JSON (very high repetition structure). Quick A/B vs
-   the draft-model numbers we already have.
-5. **Negative-result contribution upstream.** The Adreno-OpenCL
-   spec-decode story (no win at any k or placement) is non-obvious and
-   currently undocumented in llama.cpp discussions. Draft a
-   docs/discussion post with the numbers from session 4.
+Session 4 answered the Phase-2 core question (what's the draft-model
+spec ceiling, is OpenCL usable, which workload regime matters). The
+remaining Phase-2 items below are worth doing, but **none of them
+will break the 1.6× ceiling** -- that requires DFlash or DDTree, i.e.
+a Phase-4 move. Going straight to Phase 4 is the right call.
 
-### Phase 3/4 preview (post-Phase-2 wrap)
+### Stashed for after Phase 4 lands
 
-6. **EAGLE-3 viability probe.** Build llama.cpp PR #18039 for CPU +
-   OpenCL, run one humaneval sweep. Decision gate: ≥2× continues the
-   integration; <2× archives it and hands off to Phase 4. Do not port
-   the full PR before the probe.
-7. **Start DFlash port planning** by reading `lucebox-hub/dflash/src/`
-   (sibling checkout at `C:\Users\hotschmoe\Documents\GitHub\lucebox-hub`).
-   Pin down: scope of a Qwen3-8B pure-attention DFlash drafter,
-   expected CUDA→OpenCL kernel translation effort, DDTree verify graph
-   as a reusable component. No code yet -- this is scoping.
+The following are tracked so we don't forget, but are deprioritized
+until DFlash+DDTree is working:
+
+- **Tighten `--draft-p-min`.** Default 0.75 over-drafts on
+  low-confidence streaks (the `flatten` pathology). Try 0.80, 0.85,
+  0.90 at k=3. Cheap; do it if we need more Phase-2 data for a writeup.
+- **14B target + 0.6B draft (or 1.7B draft).** Draft/target compute
+  ratio drops ~2×; break-even k shifts higher. Need to download
+  `Qwen3-14B-Q4_K_M.gguf` first. Good datapoint once we have DFlash
+  for an apples-to-apples scaling story.
+- **Prose + multi-turn workloads.** `prompts/prose_longform.jsonl`,
+  `prompts/chat_multiturn.jsonl` stubs still empty. Low-acceptance +
+  realistic regimes respectively.
+- **Draftless ngram spec** (`--spec-type ngram-*`). Memory-free; should
+  fly on JSON. Quick A/B.
+- **Negative-result contribution upstream.** The Adreno-OpenCL
+  spec-decode story (no win at any k or placement) is worth a
+  llama.cpp docs/discussion post. Wait until Phase 4 lands so we
+  can contribute "here's what does work" alongside.
+- **EAGLE-3 viability probe** (was Phase 3 anchor, now deferred).
+  Build llama.cpp PR #18039, one sweep, decision-gate at 2×. The
+  lucebox paper showed chain-over-tree only gives +15% on Q4_K_M
+  (quantization flattens draft softmax); EAGLE-3 alone is unlikely
+  to break our ceiling. Skip until we have bandwidth or DFlash
+  underperforms expectations.
+
+### Phase 4 (DFlash + DDTree) -- next active phase
+
+Reference impl to mine: `C:\Users\hotschmoe\Documents\GitHub\lucebox-hub/dflash/src/`
+(sibling checkout pulled 2026-04-20). See
+`docs/reference-projects.md` for file-level guidance on what to read
+first.
+
+High-level plan (detailed checklist in README Phase 4):
+
+1. **Scoping pass** (no code). Read `dflash_graph.h`, `qwen3_dflash_graph.cpp`,
+   `safetensors_draft.cpp`. Map CUDA→OpenCL effort per kernel.
+   Decide target: a Qwen3-8B pure-attention DFlash drafter + 8B or
+   larger target, to side-step the Qwen3.5 hybrid `gated_delta_net`
+   cost.
+2. Drafter-weight pipeline: GGUF converter vs direct safetensors
+   load. lucebox uses safetensors -- we can too if the converter
+   proves painful.
+3. Minimum-viable DFlash (chain-verify, no DDTree) on CPU first.
+   Compare to session-4 CPU chain-spec numbers (40 t/s at 1.55×).
+   Expected: AL pushes toward 5-6, but still per-round-overhead
+   bound until DDTree lands.
+4. Add DDTree verify. This is the step that attacks the *batch-size*
+   axis where we left 1.6× sitting. Target: match or clear 2× end-to-end.
+5. Port kernels to OpenCL (and later Hexagon for Phase 5).
+
+### Phase 6 -- Standalone lite harness (flagged for way later)
+
+If Phase 5 closes with llama.cpp's backend model still leaving perf on
+the table (specifically the OpenCL buffer model -- no zero-copy on
+shared LPDDR5X -- and uncoalesced kernel dispatch), spin a narrow
+lucebox-shaped harness (~2000 LOC, no libllama link) rather than
+graduating to a full runtime like trident. See README Phase 6 for
+scope. Lever: `CL_MEM_USE_HOST_PTR` / `clSVMAlloc` /
+`cl_qcom_ion_host_ptr` as allocation invariants, plus fused kernels
+and direct QAIRT↔OpenCL ION-buffer handoff for the NPU draft path.
 
 ### Deferred / answered
 
