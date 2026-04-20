@@ -38,6 +38,14 @@ npu = [
     "onnxruntime-qnn==1.24.4",
     "qai-hub>=0.48",
     "onnx>=1.17",
+    # Hugging Face tooling for downloading pre-exported ONNX + BPE tokenizer.
+    # NOTE: torch + optimum were initially in this list for a local
+    # Qwen3 ONNX export, but torch has no cp312 win_arm64 wheel (only
+    # cp38-cp311 on older 2.1.2). We bypass by using onnx-community's
+    # pre-exported Qwen3-0.6B-ONNX instead. Local re-export would need
+    # a non-WoA machine.
+    "huggingface-hub>=0.24",
+    "tokenizers>=0.20",
 ]
 
 [tool.uv]
