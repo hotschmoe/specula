@@ -1,6 +1,6 @@
 # specula -- current status
 
-Last updated: 2026-04-20 (session 5 -- Phase 4 scoping pass against lucebox-hub)
+Last updated: 2026-04-20 (session 5 -- Phase 4 + Phase 5 scoping passes; Phase 5 integrates prior-art review)
 
 Living document. Update every few turns. Anyone picking this up cold should
 be able to read this page, skim the README, and resume work.
@@ -405,10 +405,15 @@ combination lands after both Phase 4 (DFlash on hybrid) and Phase 5
 
 ### Caveats carried into Phase 5
 
-- Read `voice_project/current_status.md` and trident's
-  `npu_postmortem.md` / `npu_path_back.md` / `npu_current_status.md`
-  BEFORE touching QAIRT. Those are the project's hedge against
-  re-discovering known failure modes (see `docs/reference-projects.md`).
+- **Scoping doc is canonical:** `docs/npu_scoping.md` (session 5,
+  2026-04-20) has the 10-step bring-up plan, toolchain pins
+  (QAIRT 2.45.40, ORT-QNN 1.24.4), known-failure-mode catalog, and
+  prior-art review. The bullets below are the short version; the
+  doc is the single source of truth for Phase 5 execution.
+- Hedge docs already absorbed into the scoping doc:
+  `voice_project/current_status.md` + trident's `postmortem.md` /
+  `npu_path_back.md` / `npu_current_status.md` /
+  `npu_optimizations_thoughts.md`.
 - Pin the NPU bring-up draft to **Qwen3-0.6B-Q8_0** (not 1.7B).
   Smaller compile iterations + fewer custom-op surprises on the
   first pass.
@@ -417,9 +422,21 @@ combination lands after both Phase 4 (DFlash on hybrid) and Phase 5
   CPU-spec at k=3). That way the first NPU-spec number is directly
   comparable to the CPU-spec result; we can say cleanly whether
   NPU-as-draft wins, loses, or ties vs CPU-as-draft.
-- The Hexagon v79 / v81 targeting detail still needs confirming on
-  X2E specifically -- voice_project's `encoder_info_v81.json` is a
-  hint but verify via QAIRT's device enumeration before trusting it.
+- Hexagon arch target is **v81** on X2E -- proven by voice_project's
+  working AI Hub compile (`dspArch: 81, socModel: 88`). Session 6
+  step 1 still does a QAIRT device-enum sanity check before any
+  code, but v81 is the pin.
+- **Primary path = AI Hub cloud compile + ORT-QNN EP 1.24.4 runtime.**
+  Not raw `QnnContext_createFromBinary`. voice_project hit three
+  driver-signing walls on the raw path and only escaped via ORT's
+  bundled signed QAIRT stack. Our Phase 5 target/draft integration
+  needs an external-drafter sidecar (no QNN backend in llama.cpp),
+  tracked as blocking in npu_scoping.md §8.
+- **Prior-art review integrated** from
+  `npu_thoughts_previous_examples.md` (sd.npu, Mirror-SD, HeteroLLM,
+  Dovetail, OpenPangu). Structural plan unchanged; key post-bring-up
+  lever is sd.npu's pad/recycle trick for <8-token drafts (our k=3
+  is deep in that regime). Full analysis in npu_scoping.md §10.
 
 ### Stashed -- now reframed as "Qwen3 close-out" candidates
 
