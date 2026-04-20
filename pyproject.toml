@@ -37,6 +37,7 @@ reference = [
 npu = [
     "onnxruntime-qnn==1.24.4",
     "qai-hub>=0.48",
+    "onnx>=1.17",
 ]
 
 [tool.uv]

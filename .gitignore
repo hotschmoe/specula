@@ -1,6 +1,9 @@
 # Models (large, fetched by download_models.ps1)
 models/
 *.gguf
+*.onnx
+*.onnx_data
+*.safetensors
 
 # Sibling llama.cpp checkout and build dirs
 llama.cpp/

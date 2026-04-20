@@ -114,3 +114,44 @@ Runtime toolchain: NOT YET INSTALLED.
 - X2-family matches   : 1
     Snapdragon X2 Elite CRD  os=11  attrs=['os:windows', 'format:compute', 'framework:onnx', 'vendor:qualcomm', 'abi:aarch64-windows', 'chipset:qualcomm-snapdragon-x2-elite', 'chipset:sc8480xp', 'hexagon:v81', 'soc-model:88', 'htp-supports-fp16:true', 'htp-supports-weight-sharing:true', 'framework:qnn']
 - 'Snapdragon X2 Elite CRD' present: True
+
+
+## Step 2 - ORT-QNN sidecar smoke test (2026-04-20)
+
+Script: scripts/npu_draft_sidecar.py
+Graph: 2-op MatMul([1,64] @ [64,32]) -> Relu (8337-byte ONNX)
+
+- Provider chain (ordered) : ['QNNExecutionProvider', 'CPUExecutionProvider']
+  (QNN first = actual executor; CPU retained as ORT's automatic
+   unsupported-op fallback, never activates because QNN partitions 100%)
+- Backend DLL loaded       : .venv/.../onnxruntime/capi/QnnHtp.dll
+- Provider options used    : htp_performance_mode=burst, soc_model=88,
+                             htp_arch=81, enable_htp_fp16_precision=1
+- QNN partition coverage   : 1 partition, 2/2 nodes on QNN (MatMul + Relu)
+- HTP graph-prep stages observed:
+    Graph Preparation Initializing (167 us)
+    Graph Optimizations (1226 us)
+    Post Graph Optimization (234 us)
+    Graph Sequencing for Target (263 us)
+    VTCM Allocation (23 us)
+    Parallelization Optimization (15 us)
+    Finalizing Graph Sequence (51 us)
+    Completion (7 us)
+  (VTCM Allocation is Hexagon-specific; confirms HTP backend, not QNN-CPU.)
+- HTP DDR bandwidth profiler:
+    write_total_bytes = 2048
+    read_total_bytes  = 8192
+    spill_bytes       = 0
+    fill_bytes        = 0
+  (Zero spill/fill = graph fits entirely in on-chip VTCM SRAM. Useful
+   baseline for the DMA-exhaustion risk at step 5 when weights are
+   ~600 MB.)
+- Mean per-call latency    : 48.8 us (5 warmups + 200 measured calls)
+- Step 2 exit target       : < 5000 us ............................ PASS
+- Silent-CPU-fallback guard: providers=[("QNNExecutionProvider", opts)]
+                             only; no CPU in the requested list; session
+                             would error rather than fall back.
+
+Known profiling gotcha: setting provider option `profiling_level` to
+anything other than "off" requires `profiling_file_path` (or ETW).
+Encoded in NPUSession's __init__ as a ValueError guard.
