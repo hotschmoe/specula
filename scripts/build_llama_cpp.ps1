@@ -76,6 +76,12 @@ $clangRc  = Join-Path $LlvmRoot 'bin\llvm-rc.exe'
 foreach ($p in @($clangC, $clangCxx, $clangRc)) {
     if (-not (Test-Path $p)) { throw "Not found: $p. Set -LlvmRoot or install LLVM." }
 }
+# CMake treats backslashes in cache-stored strings as escape characters
+# (e.g. "\P" is an invalid escape). Use forward slashes for every path we
+# pass via -D<var>=<path>.
+$clangC   = $clangC   -replace '\\','/'
+$clangCxx = $clangCxx -replace '\\','/'
+$clangRc  = $clangRc  -replace '\\','/'
 
 # clang_rt builtins path is version-scoped (e.g. ...\lib\clang\22\...). Auto-detect.
 $rtCandidates = Get-ChildItem -Path (Join-Path $LlvmRoot 'lib\clang') -Directory -ErrorAction SilentlyContinue |
@@ -83,7 +89,7 @@ $rtCandidates = Get-ChildItem -Path (Join-Path $LlvmRoot 'lib\clang') -Directory
     ForEach-Object { Join-Path $_.FullName 'lib\windows\clang_rt.builtins-aarch64.lib' } |
     Where-Object { Test-Path $_ }
 if (-not $rtCandidates) { throw "clang_rt.builtins-aarch64.lib not found under $LlvmRoot\lib\clang\*\lib\windows\. Is LLVM installed with Windows ARM runtime support?" }
-$clangRtLib = $rtCandidates[0]
+$clangRtLib = $rtCandidates[0] -replace '\\','/'
 
 # --- Import vcvarsarm64 env into this PowerShell session ---------------------
 # vcvarsarm64 is a cmd.exe .bat. Run it in a cmd subshell, dump env, then
