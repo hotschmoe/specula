@@ -1,0 +1,30 @@
+has anyone tried successfully to do speculative decoding (llm inference) with a tiny model on NPU hardware for drafts? (using cpu or gpu for larger prod model? unified or not memory? ie -> snapdragon x2 has cpu, gpu, and npu on same 48 unified memory)3:12 PMInvestigated cutting-edge speculative decoding across unified memory architecturesInvestigated cutting-edge speculative decoding across unified memory architecturesGreat question — this is right at the intersection of your Snapdragon X2 work. Let me dig into what's actually been done here.Synthesized comprehensive understanding for technical responseSynthesized comprehensive understanding for technical responseShort answer: yes, people have done it and published results, but it's almost entirely in the mobile SoC research space (Snapdragon 8 Gen 2/3), not on laptop-class Snapdragon X chips. Nobody has a turnkey solution for your X2 Elite yet. Here's the landscape:
+What actually exists
+The most directly relevant work is Mirror-SD (arXiv, Oct 2025), which explicitly partitions speculative decoding across heterogeneous compute units, mapping draft inference onto NPUs and target verification onto GPUs arXiv. They tested with the target model distributed across eight M2 Ultra GPUs and the draft running on eight NPUs arXiv — so datacenter-scale Apple hardware, but it proves the architecture works and the token-channel communication overhead between accelerators is manageable (they only pass top-k token IDs and log-probs in bf16).
+On the mobile side, sd.npu (arXiv, Dec 2025) is the first system doing end-to-end NPU-offloaded speculative decoding on phones. They evaluated across three smartphones (Redmi K60 Pro, K70 Pro, OnePlus 13) with Qwen2.5-1.5B, Qwen2.5-0.5B, and LLaMA3.2-3B, achieving 1.06–3.81× energy reduction arXiv. Key finding: over 75% of drafts are shorter than 8 tokens, whereas mobile NPUs typically require sequences of 32+ tokens to approach peak utilization arXiv. So short speculative drafts actually underutilize the NPU — they had to pad/recycle rejected tokens to keep it busy.
+HeteroLLM / HeteroInfer (SOSP 2025) proposes tensor partition strategies across GPU and NPU during both prefill and decode phases on mobile SoCs, focusing on maximizing aggregate SoC memory bandwidth arXiv. This isn't speculative decoding per se but rather splitting a single model's layers across GPU+NPU in parallel on unified memory — which is conceptually closer to what you'd want on the X2 Elite.
+Dovetail (EMNLP 2025) does heterogeneous spec decoding but CPU/GPU, not NPU — the draft model on GPU generating draft tokens while the target model verifies on CPU, achieving ~5.86 tok/s for LLaMA2-Chat-7B with only 3GB VRAM arXiv. Relevant pattern even though it doesn't touch NPU.
+The fundamental tension for your X2 setup
+There's a core problem with NPU-as-drafter that several papers identify:
+
+Static graph constraint. NPUs emphasize high throughput via a static execution model, and speculative decoding inherently involves conditional branches — the number of accepted tokens changes every step. On GPU this is handled via dynamic kernel launches; on NPU it forces fallback to CPU or expensive JIT recompilation. arXiv The OpenPangu team solved this with static lookup tables and zero-copy retrieval, but it required significant rearchitecting.
+GEMV underutilization. During autoregressive decode (batch=1), the NPU's matrix units are starved because it's basically doing matrix-vector ops. The whole point of spec decode is to batch the verification step into a larger matrix op — but the drafting is still sequential token-by-token, which is exactly what NPUs are bad at.
+Hexagon SDK limitations. The Hexagon cDSP is a 32-bit processor with a 32-bit virtual address space, limiting model sizes to roughly below 4B parameters in a single NPU session. GitHub The llama.cpp-npu fork for Hexagon exists but is Android-only research prototype quality.
+
+What this means for Snapdragon X2 Elite specifically
+Your X2 has the Hexagon NPU (45 TOPS INT8) + Adreno GPU + Oryon CPU all on unified 48GB LPDDR5x. The unified memory is the killer advantage — no PCIe transfer penalty. In theory:
+
+Draft model (0.5-1.5B) on NPU → low power, frees GPU/CPU for verification
+Target model (7-14B) on CPU or GPU → verification as a batched forward pass
+Zero-copy between them since it's all unified memory — just pointer passing
+
+But in practice, nobody has built this for Windows on ARM + Snapdragon X. The Hexagon NPU on laptop Snapdragon X chips uses a different SDK path than mobile (QNN vs. direct Hexagon SDK), llama.cpp doesn't have QNN/NPU support yet, and even Vulkan on Snapdragon X has had stability issues GitHub. As of early 2026, even basic NPU or GPU inference via llama.cpp on Snapdragon X ARM64 laptops remains unsolved for most users Hugging Face — the only working NPU path is Microsoft's AI Toolkit running tiny models like DeepSeek R1 Distilled (Qwen 1.5B).
+If you wanted to actually build this
+The most viable path I see for your hardware would be:
+
+Use QNN SDK to compile a tiny draft model (Qwen2.5-0.5B or similar) for the Hexagon NPU with static input shapes
+Run the target model on CPU via llama.cpp (which you already have working well with Vulkan/Adreno for some models)
+Implement the spec decode loop in your own orchestrator, passing token IDs between the two — unified memory means this is essentially free
+The sd.npu paper's trick of recycling rejected tokens to pad draft length for NPU efficiency would be critical
+
+It's a real research project though, not a weekend hack. The HeteroLLM team's finding is probably the most relevant architectural insight: parallel execution on both GPU and NPU can leverage the aggregate memory bandwidth of the SoC, which exceeds what any single processor can saturate alone arXiv. That's the real win on unified memory — not just offloading one model to NPU, but getting more total bandwidth out of the memory subsystem.
