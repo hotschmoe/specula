@@ -56,10 +56,32 @@ param(
     [string]$RepoDir = (Join-Path $PSScriptRoot '..\llama.cpp'),
     [int]$Jobs = 12,
     [string]$LlvmRoot = 'C:\Program Files\LLVM',
-    [string]$VsRoot = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools'
+    [string]$VsRoot = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools',
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
+
+# GetShortPathNameW — resolves e.g. "C:\Program Files\LLVM\..." to
+# "C:\PROGRA~1\LLVM\...". We use this for any path that needs to be stored
+# verbatim in the CMake cache (linker flags, etc.) because PS 5.1 does not
+# reliably preserve literal double-quotes when passing args to native exes,
+# so we cannot use "quote the path with spaces" like the reference .bat
+# does. Removing the spaces entirely side-steps the quoting problem.
+Add-Type -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+public static extern uint GetShortPathNameW(string lpszLongPath, System.Text.StringBuilder lpszShortPath, uint cchBuffer);
+'@ -Name SpeculaPaths -Namespace Specula -ErrorAction SilentlyContinue
+
+function Get-ShortPath {
+    param([Parameter(Mandatory=$true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { throw "Get-ShortPath: not found: $Path" }
+    $full = (Resolve-Path -LiteralPath $Path).Path
+    $sb = New-Object System.Text.StringBuilder 260
+    $n = [Specula.SpeculaPaths]::GetShortPathNameW($full, $sb, [uint32]$sb.Capacity)
+    if ($n -eq 0) { throw "GetShortPathNameW failed for: $full" }
+    return $sb.ToString()
+}
 
 # --- Hexagon is out of scope for this script ---------------------------------
 if ($Preset -eq 'hexagon') {
@@ -89,7 +111,13 @@ $rtCandidates = Get-ChildItem -Path (Join-Path $LlvmRoot 'lib\clang') -Directory
     ForEach-Object { Join-Path $_.FullName 'lib\windows\clang_rt.builtins-aarch64.lib' } |
     Where-Object { Test-Path $_ }
 if (-not $rtCandidates) { throw "clang_rt.builtins-aarch64.lib not found under $LlvmRoot\lib\clang\*\lib\windows\. Is LLVM installed with Windows ARM runtime support?" }
-$clangRtLib = $rtCandidates[0] -replace '\\','/'
+# @(...) forces array context: Where-Object unwraps a single match to a bare
+# string, and then [0] would index the first character instead of the first
+# path. @(...) keeps [0] behaving like a list index regardless of arity.
+$rtCandidates = @($rtCandidates)
+# 8.3 short form (no spaces) + forward slashes (no \P-style escape) so the
+# path survives both the PS->cmake argv hop and cmake->linker re-invocation.
+$clangRtLib = (Get-ShortPath $rtCandidates[0]) -replace '\\','/'
 
 # --- Import vcvarsarm64 env into this PowerShell session ---------------------
 # vcvarsarm64 is a cmd.exe .bat. Run it in a cmd subshell, dump env, then
@@ -156,12 +184,28 @@ try {
         "-DCMAKE_RC_COMPILER=$clangRc",
         '-DCMAKE_C_FLAGS=-DNOMINMAX -DWIN32_LEAN_AND_MEAN',
         '-DCMAKE_CXX_FLAGS=-DNOMINMAX -DWIN32_LEAN_AND_MEAN',
-        "-DCMAKE_EXE_LINKER_FLAGS=`"$clangRtLib`"",
-        "-DCMAKE_SHARED_LINKER_FLAGS=`"$clangRtLib`"",
+        "-DCMAKE_EXE_LINKER_FLAGS=$clangRtLib",
+        "-DCMAKE_SHARED_LINKER_FLAGS=$clangRtLib",
         '-DGGML_NATIVE=ON',
         '-DLLAMA_CURL=OFF',
         '-DLLAMA_BUILD_TESTS=OFF'
     )
+
+    if ($DryRun) {
+        Write-Host ""
+        Write-Host "DryRun -- not executing cmake. Resolved configuration:" -ForegroundColor Yellow
+        Write-Host "  RepoDir:    $RepoDir"
+        Write-Host "  BuildDir:   $buildDir"
+        Write-Host "  Preset:     $Preset"
+        Write-Host "  clangC:     $clangC"
+        Write-Host "  clangCxx:   $clangCxx"
+        Write-Host "  clangRc:    $clangRc"
+        Write-Host "  clangRtLib: $clangRtLib"
+        Write-Host ""
+        Write-Host "Would invoke:"
+        Write-Host "  cmake $([string]::Join(' ', ($commonFlags + $presetFlags)))"
+        return
+    }
 
     Write-Host "Configuring $buildDir (preset: $Preset)..." -ForegroundColor Cyan
     & cmake @commonFlags @presetFlags
