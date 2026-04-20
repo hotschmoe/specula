@@ -1,6 +1,6 @@
 # specula -- current status
 
-Last updated: 2026-04-19 (end of session 1)
+Last updated: 2026-04-19 (session 2 -- Adreno Vulkan fp16 triage)
 
 Living document. Update every few turns. Anyone picking this up cold should
 be able to read this page, skim the README, and resume work.
@@ -15,7 +15,7 @@ be able to read this page, skim the README, and resume work.
 - [x] llama.cpp sibling checkout at `llama.cpp/` (HEAD `e365e658f07b63371489570dfde597f199b26c23`)
 - [x] **Preset `cpu`** built (`llama.cpp\build-cpu\bin\`), runtime DLLs copied, smoke-tested
 - [x] Vulkan SDK installed (`C:\VulkanSDK\1.4.341.1\`, `VULKAN_SDK` env var set)
-- [x] **Preset `vulkan`** built; device enumeration correct (Adreno X2-90, native driver, `KHR_coopmat`). **Correctness issue open** -- see `docs/adreno_debugging.md`.
+- [x] **Preset `vulkan`** built; device enumeration correct (Adreno X2-90, native driver, `KHR_coopmat`). **Vulkan on this driver is broken for correct inference**: manual llama-cli on B0 / B1 / B4 all produced garbled tokens on Qwen3-0.6B Q8_0 with greedy sampling, while the CPU build on the same seed returned coherent Qwen3 thinking-mode text. `DISABLE_F16=1` makes PP ~30× faster (20 → 600 t/s) but also wrong — fast + wrong, not a rescue. Vulkan memory breakdown at shutdown also shows an `unaccounted | 17592186039033` MiB wraparound, i.e. a size_t underflow in the backend's buffer accounting. Decision: **pivot primary GPU attention to OpenCL** (Qualcomm's maintained backend); keep vulkan build around for later retry. Full writeup in `docs/adreno_debugging.md`.
 - [ ] **Preset `opencl`** -- blocked on OpenCL headers + `OpenCL.lib` for ARM64 (see Outstanding issues)
 - [ ] **Preset `vulkan-opencl`** -- depends on both of the above
 - [ ] **Preset `cpu-kleidiai`** -- deferred to Phase 1 SME2 retry
@@ -25,6 +25,21 @@ be able to read this page, skim the README, and resume work.
 Note (2026-04-19): initial combined `vulkan-opencl` preset split into
 standalone `vulkan` and `opencl` presets so a missing OpenCL SDK doesn't
 block Vulkan work. Combined preset kept for when both are satisfied.
+
+Note (2026-04-19, session 2): the vulkan build does not include
+`llama-perplexity` or `llama-completion` (our `LLAMA_BUILD_TOOLS`
+subset is narrower than default). This matters because the shipped
+`llama-cli` silently ignores `-no-cnv` on newer llama.cpp and always
+enters conversation mode — it prints *"please use llama-completion
+instead"* and falls back. For scripted correctness/perplexity assays
+we need to widen the build tool set (or drive `llama-server` over
+HTTP). Not blocking the OpenCL pivot; bundle with the next rebuild.
+
+Note (2026-04-19, session 2): **Qualcomm's own GPU-compute path for
+llama.cpp is the OpenCL backend**, not Vulkan. `ggml-opencl` has
+Adreno-specific optimizations landed by Qualcomm engineers (lhez,
+max-krasnyansky). Vulkan remains useful as a second GPU path, but
+OpenCL is the vendor-blessed one and should be unblocked soon.
 
 **Phase 1 onward:** not started.
 
@@ -107,22 +122,33 @@ specula/
 
 ## Immediate next steps (next session)
 
-1. **Work through the Adreno test matrix in `docs/adreno_debugging.md`.**
-   Phase A (correctness) first: run `llama-cli` with each env-var
-   combination (COOPMAT/COOPMAT2/F16 disabled in various combos) and
-   record which configs produce coherent English. Phase B (performance)
-   for every Phase-A-passing config: `llama-bench` across
-   `pp32,128,512` x `tg16,64,128` on both Qwen3-0.6B and Qwen3-8B.
-   Log everything to `results/adreno-*.log`.
-2. Based on Phase A+B results: either lock in a working Adreno Vulkan
-   config as the Phase 1 GPU baseline, or declare Vulkan/Adreno broken
-   on this driver and pivot primary GPU attention to OpenCL/Adreno.
-3. **Unblock OpenCL.** Pick vcpkg or manual Khronos checkout (see
-   Outstanding issues), build `-Preset opencl`, smoke-test.
+1. **Unblock OpenCL (new top priority).** Vulkan is out for now --
+   correctness broken across every env-var combo tried, plus
+   memory-accounting underflow at shutdown. OpenCL is Qualcomm's
+   maintained path. Steps:
+     a. Install OpenCL headers + ARM64 `OpenCL.lib` (vcpkg
+        `opencl:arm64-windows` is the fastest route; fallback is
+        building Khronos `OpenCL-Headers` + `OpenCL-ICD-Loader`).
+     b. Build `-Preset opencl`.
+     c. Register Qualcomm's ICD: add a `REG_DWORD` entry for
+        `C:\Windows\System32\QCOclIcd.dll` = 0 under
+        `HKLM\SOFTWARE\Khronos\OpenCL\Vendors` (needs admin).
+     d. Smoke test: `llama-bench -d GPUOpenCL -m Qwen3-0.6B-Q8_0.gguf`.
+     e. Manual correctness check with llama-cli + the same prompt
+        used in session 2 Adreno debugging.
+2. **Widen `LLAMA_BUILD_TOOLS` in the build script** so the next
+   rebuild also includes `llama-completion` and `llama-perplexity`.
+   Needed for scripted correctness/perplexity assays; `llama-cli` is
+   interactive-only in current llama.cpp and ignores `-no-cnv`.
+3. **One-shot remaining Vulkan experiment (optional, cheap).** Try
+   `GGML_VK_DISABLE_INTEGER_DOT_PRODUCT=1` manually on Qwen3-0.6B --
+   last escape hatch we haven't pulled. If it fixes garble, revive
+   the Vulkan pivot; if not, close the door on Vulkan for this
+   driver revision.
 4. **Phase 1 formal baselines.** Once a working GPU backend is locked
-   in, run `sweep_baseline.ps1` across all built backends for the
-   Qwen3-0.6B / 1.7B / 8B model set. First real CSVs land in
-   `results/`.
+   in (Vulkan B3/B4 or OpenCL), run `sweep_baseline.ps1` across all
+   built backends for the Qwen3-0.6B / 1.7B / 8B model set. First real
+   CSVs land in `results/`.
 5. **SME2 / KleidiAI retry.** `-Preset cpu-kleidiai` build, then run a
    batched-matmul workload (PP-heavy) to trigger or not trigger the
    prior `STATUS_ILLEGAL_INSTRUCTION`.
