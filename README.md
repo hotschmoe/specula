@@ -53,11 +53,24 @@ behavior, and Python tooling.
 
 ### Phase 0 — Infrastructure
 
-- [ ] Clone and build llama.cpp native ARM64 with all backends enabled
-  (Vulkan, OpenCL/Adreno, Hexagon)
-- [ ] Download initial model set (see `scripts/download_models.ps1`)
-- [ ] Verify each backend runs a trivial generation
+- [x] Download initial model set (`scripts/download_models.ps1`)
+- [ ] Build llama.cpp native ARM64, per preset:
+  - [ ] `cpu` — reproduces `LOCAL_LLM_NOTES.md` CPU numbers; sanity check the toolchain
+  - [ ] `vulkan-opencl` — Adreno backends for Phase 1/2 GPU baselines
+  - [ ] `cpu-kleidiai` — Phase 1 SME2 retry (expected to crash today, see Phase 1)
+  - [ ] `hexagon` — out-of-band; needs the Qualcomm toolchain docker image
+- [ ] Verify each built backend runs a trivial generation
 - [ ] Establish sweep harness that writes structured CSV results
+
+Build invocation:
+```powershell
+.\scripts\build_llama_cpp.ps1 -Preset cpu
+.\scripts\build_llama_cpp.ps1 -Preset vulkan-opencl
+.\scripts\build_llama_cpp.ps1 -Preset cpu-kleidiai    # applies the clang-on-Windows KleidiAI .S patch
+```
+Each preset builds into its own `llama.cpp\build-<preset>\` directory so
+configurations coexist. Runtime DLLs (`msvcp140`, `vcruntime140`,
+`libomp140.aarch64`) are copied next to the binaries automatically.
 
 ### Phase 1 — Autoregressive baselines
 

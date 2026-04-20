@@ -12,7 +12,7 @@
 
 .PARAMETER Backend
     Which device to test: cpu, vulkan, opencl. (hexagon requires a separate
-    build — see docs/backend/snapdragon/README.md).
+    build -- see docs/backend/snapdragon/README.md).
 
 .EXAMPLE
     .\sweep_baseline.ps1 -Model Qwen3-8B-Q4_K_M.gguf -Backend cpu
@@ -33,7 +33,7 @@ $modelPath = Join-Path $ModelsDir $Model
 if (-not (Test-Path $modelPath)) { throw "Model not found: $modelPath" }
 
 $bench = Get-ChildItem "$BuildDir\bin\Release\llama-bench.exe","$BuildDir\bin\llama-bench.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $bench) { throw "llama-bench.exe not found under $BuildDir — run build_llama_cpp.ps1 first" }
+if (-not $bench) { throw "llama-bench.exe not found under $BuildDir -- run build_llama_cpp.ps1 first" }
 
 New-Item -ItemType Directory -Force -Path $ResultsDir | Out-Null
 $ts = Get-Date -Format "yyyyMMdd-HHmmss"

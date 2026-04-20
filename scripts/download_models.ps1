@@ -11,10 +11,10 @@
 
 .PARAMETER Tier
     Which model tier(s) to fetch:
-        core      – draft + Qwen3-8B target          (~7.5 GB total) [default]
-        prod      – adds Qwen3-14B target            (+9.0 GB)
-        stretch   – adds Qwen3-32B target            (+19 GB)
-        all       – everything including MoE         (~50 GB)
+        core      - draft + Qwen3-8B target          (~7.5 GB total) [default]
+        prod      - adds Qwen3-14B target            (+9.0 GB)
+        stretch   - adds Qwen3-32B target            (+19 GB)
+        all       - everything including MoE         (~50 GB)
 
 .EXAMPLE
     .\download_models.ps1
@@ -31,13 +31,14 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # Model registry: {repo, file, role, tier, approx_size_gb}
+# PSCustomObject (not hashtable) so Measure-Object -Property can see SizeGB.
 $allModels = @(
-    @{ Repo='Qwen/Qwen3-0.6B-GGUF';    File='Qwen3-0.6B-Q8_0.gguf';    Role='draft (primary)';     Tier='core';    SizeGB=0.64 },
-    @{ Repo='Qwen/Qwen3-1.7B-GGUF';    File='Qwen3-1.7B-Q8_0.gguf';    Role='draft (alternate)';   Tier='core';    SizeGB=1.83 },
-    @{ Repo='Qwen/Qwen3-8B-GGUF';      File='Qwen3-8B-Q4_K_M.gguf';    Role='target (iteration)';  Tier='core';    SizeGB=5.03 },
-    @{ Repo='Qwen/Qwen3-14B-GGUF';     File='Qwen3-14B-Q4_K_M.gguf';   Role='target (prod)';       Tier='prod';    SizeGB=9.00 },
-    @{ Repo='Qwen/Qwen3-32B-GGUF';     File='Qwen3-32B-Q4_K_M.gguf';   Role='target (stretch)';    Tier='stretch'; SizeGB=19.0 },
-    @{ Repo='Qwen/Qwen3-30B-A3B-GGUF'; File='Qwen3-30B-A3B-Q4_K_M.gguf'; Role='target (MoE)';      Tier='all';     SizeGB=18.0 }
+    [PSCustomObject]@{ Repo='Qwen/Qwen3-0.6B-GGUF';    File='Qwen3-0.6B-Q8_0.gguf';      Role='draft (primary)';    Tier='core';    SizeGB=0.64 },
+    [PSCustomObject]@{ Repo='Qwen/Qwen3-1.7B-GGUF';    File='Qwen3-1.7B-Q8_0.gguf';      Role='draft (alternate)';  Tier='core';    SizeGB=1.83 },
+    [PSCustomObject]@{ Repo='Qwen/Qwen3-8B-GGUF';      File='Qwen3-8B-Q4_K_M.gguf';      Role='target (iteration)'; Tier='core';    SizeGB=5.03 },
+    [PSCustomObject]@{ Repo='Qwen/Qwen3-14B-GGUF';     File='Qwen3-14B-Q4_K_M.gguf';     Role='target (prod)';      Tier='prod';    SizeGB=9.00 },
+    [PSCustomObject]@{ Repo='Qwen/Qwen3-32B-GGUF';     File='Qwen3-32B-Q4_K_M.gguf';     Role='target (stretch)';   Tier='stretch'; SizeGB=19.0 },
+    [PSCustomObject]@{ Repo='Qwen/Qwen3-30B-A3B-GGUF'; File='Qwen3-30B-A3B-Q4_K_M.gguf'; Role='target (MoE)';       Tier='all';     SizeGB=18.0 }
 )
 
 # Filter by tier: each tier includes all lower tiers
@@ -51,7 +52,7 @@ $ModelsDir = (Resolve-Path $ModelsDir).Path
 
 $totalGB = ($models | Measure-Object -Property SizeGB -Sum).Sum
 Write-Host ""
-Write-Host "specula — model fetch" -ForegroundColor Green
+Write-Host "specula -- model fetch" -ForegroundColor Green
 Write-Host "  destination: $ModelsDir"
 Write-Host "  tier:        $Tier ($($models.Count) files, ~$([math]::Round($totalGB,1)) GB total)"
 Write-Host ""
@@ -67,7 +68,7 @@ foreach ($m in $models) {
     $dest = Join-Path $ModelsDir $m.File
     $url  = "https://huggingface.co/$($m.Repo)/resolve/main/$($m.File)"
 
-    Write-Host "── $($m.File)" -ForegroundColor Cyan
+    Write-Host "-- $($m.File)" -ForegroundColor Cyan
     Write-Host "   role: $($m.Role)   (~$($m.SizeGB) GB)"
     Write-Host "   src:  $url"
     Write-Host "   dest: $dest"
@@ -82,7 +83,7 @@ foreach ($m in $models) {
     & curl.exe -L -C - --retry 5 --retry-delay 5 --fail --progress-bar -o $dest $url
 
     if ($LASTEXITCODE -ne 0) {
-        Write-Warning "   FAILED (curl exit $LASTEXITCODE) — will continue with remaining files"
+        Write-Warning "   FAILED (curl exit $LASTEXITCODE) -- will continue with remaining files"
         $failures += $m.File
     } else {
         $sizeMB = [math]::Round((Get-Item $dest).Length / 1MB, 1)

@@ -48,7 +48,7 @@ foreach ($p in @($targetPath, $draftPath)) {
     if (-not (Test-Path $p)) { throw "Missing: $p" }
 }
 
-# Backend → -ngl
+# Backend -> -ngl
 $ngl = if ($Backend -eq 'cpu') { 0 } else { 99 }
 
 New-Item -ItemType Directory -Force -Path $ResultsDir | Out-Null
@@ -60,7 +60,7 @@ $csvPath = Join-Path $ResultsDir "spec-$($Backend)-$($TargetModel -replace '\.gg
 
 # Load prompts
 if (-not (Test-Path $Prompts)) {
-    Write-Warning "Prompt file $Prompts not found — falling back to a single built-in prompt."
+    Write-Warning "Prompt file $Prompts not found -- falling back to a single built-in prompt."
     $promptLines = @('{"prompt":"def fibonacci(n):\n    # Return the nth Fibonacci number\n    "}')
 } else {
     $promptLines = Get-Content $Prompts
@@ -74,11 +74,11 @@ foreach ($dMax in $DraftMaxValues) {
         try {
             $prompt = ($promptLines[$i] | ConvertFrom-Json).prompt
         } catch {
-            Write-Warning "Bad JSON on prompt line $i — skipping"
+            Write-Warning "Bad JSON on prompt line $i -- skipping"
             continue
         }
 
-        Write-Host "── draft-max=$dMax   prompt $i" -ForegroundColor Cyan
+        Write-Host "-- draft-max=$dMax   prompt $i" -ForegroundColor Cyan
 
         $start = Get-Date
         $output = & $spec.FullName `
