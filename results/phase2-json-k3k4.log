@@ -1,0 +1,43 @@
+[1/20] draft-max=3 prompt=0
+   accept=89.048%  decoded=43.895 t/s  wall=11.1034678s
+[2/20] draft-max=3 prompt=1
+   accept=88.571%  decoded=43.782 t/s  wall=11.0689983s
+[3/20] draft-max=3 prompt=2
+   accept=60.440%  decoded=31.766 t/s  wall=13.0797731s
+[4/20] draft-max=3 prompt=3
+   accept=86.574%  decoded=43.112 t/s  wall=11.0835616s
+[5/20] draft-max=3 prompt=4
+   accept=89.048%  decoded=43.138 t/s  wall=11.0650828s
+[6/20] draft-max=3 prompt=5
+   accept=84.932%  decoded=39.885 t/s  wall=12.0848761s
+[7/20] draft-max=3 prompt=6
+   accept=84.932%  decoded=40.805 t/s  wall=11.0610289s
+[8/20] draft-max=3 prompt=7
+   accept=89.524%  decoded=44.879 t/s  wall=11.0848203s
+[9/20] draft-max=3 prompt=8
+   accept=79.386%  decoded=40.755 t/s  wall=11.0993733s
+[10/20] draft-max=3 prompt=9
+   accept=67.054%  decoded=36.257 t/s  wall=12.0632908s
+[11/20] draft-max=4 prompt=0
+   accept=86.638%  decoded=42.484 t/s  wall=11.0781397s
+[12/20] draft-max=4 prompt=1
+   accept=78.226%  decoded=37.765 t/s  wall=12.0728127s
+[13/20] draft-max=4 prompt=2
+   accept=55.247%  decoded=30.369 t/s  wall=14.0754977s
+[14/20] draft-max=4 prompt=3
+   accept=70.522%  decoded=36.067 t/s  wall=12.074782s
+[15/20] draft-max=4 prompt=4
+   accept=82.083%  decoded=38.832 t/s  wall=12.0688163s
+[16/20] draft-max=4 prompt=5
+   accept=77.381%  decoded=38.740 t/s  wall=12.1037613s
+[17/20] draft-max=4 prompt=6
+   accept=75.781%  decoded=38.008 t/s  wall=12.1080743s
+[18/20] draft-max=4 prompt=7
+   accept=81.667%  decoded=38.527 t/s  wall=12.0868349s
+[19/20] draft-max=4 prompt=8
+   accept=74.615%  decoded=36.551 t/s  wall=12.0938529s
+[20/20] draft-max=4 prompt=9
+   accept=63.889%  decoded=33.700 t/s  wall=13.0827376s
+
+Wrote C:\Users\hotschmoe\Documents\GitHub\specula\scripts\..\results\spec-cpu-Qwen3-8B-Q4_K_M-vs-Qwen3-0.6B-Q8_0-20260420-132358.csv
+Raw logs in C:\Users\hotschmoe\Documents\GitHub\specula\scripts\..\results\spec-cpu-Qwen3-8B-Q4_K_M-vs-Qwen3-0.6B-Q8_0-20260420-132358

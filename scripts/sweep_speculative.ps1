@@ -49,6 +49,9 @@ param(
     [int]$Threads = 18,
     [string]$Backend = 'cpu',
     [string]$BuildDir,
+    [int]$TargetNgl = -1,
+    [int]$DraftNgl  = -1,
+    [string]$PlacementTag,
     [string]$ModelsDir = (Join-Path $PSScriptRoot '..\models'),
     [string]$ResultsDir = (Join-Path $PSScriptRoot '..\results'),
     [string]$LogDir
@@ -70,17 +73,24 @@ foreach ($p in @($targetPath, $draftPath)) {
     if (-not (Test-Path $p)) { throw "Missing: $p" }
 }
 
-# Backend -> -ngl / -ngld. CPU-only build has no GPU devices so the flag is
-# rejected with a warning; omit it entirely. For any GPU backend, offload all
-# layers from both target and draft.
+# Layer-offload resolution:
+#   - Explicit -TargetNgl / -DraftNgl override everything (use -1 for "omit",
+#     0 for "all CPU", 99 for "all GPU"). Allows asymmetric placement like
+#     target=OpenCL + draft=CPU on the build-opencl binary.
+#   - Otherwise fall back to Backend-driven default: cpu omits flags, any
+#     other backend passes -ngl 99 -ngld 99.
 $gpuLayerArgs = @()
-if ($Backend -ne 'cpu') {
+if ($TargetNgl -ge 0 -or $DraftNgl -ge 0) {
+    if ($TargetNgl -ge 0) { $gpuLayerArgs += @('-ngl',  $TargetNgl) }
+    if ($DraftNgl  -ge 0) { $gpuLayerArgs += @('-ngld', $DraftNgl)  }
+} elseif ($Backend -ne 'cpu') {
     $gpuLayerArgs = @('-ngl', '99', '-ngld', '99')
 }
 
 New-Item -ItemType Directory -Force -Path $ResultsDir | Out-Null
 $ts = Get-Date -Format "yyyyMMdd-HHmmss"
-$tag = "$Backend-$($TargetModel -replace '\.gguf$','')-vs-$($DraftModel -replace '\.gguf$','')"
+$placement = if ($PlacementTag) { "-$PlacementTag" } else { "" }
+$tag = "$Backend$placement-$($TargetModel -replace '\.gguf$','')-vs-$($DraftModel -replace '\.gguf$','')"
 $csvPath = Join-Path $ResultsDir "spec-$tag-$ts.csv"
 
 if (-not $LogDir) { $LogDir = Join-Path $ResultsDir "spec-$tag-$ts" }

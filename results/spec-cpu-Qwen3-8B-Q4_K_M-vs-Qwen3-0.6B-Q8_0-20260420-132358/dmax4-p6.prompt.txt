@@ -1,0 +1,5 @@
+﻿Output a JSON object representing a GeoJSON FeatureCollection with 3 Point features, each with id, geometry (coordinates as [lng, lat]), and properties (name, category). Respond with ONLY the JSON.
+
+{
+  "type": "FeatureCollection",
+  "features": 

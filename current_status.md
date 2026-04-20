@@ -1,6 +1,6 @@
 # specula -- current status
 
-Last updated: 2026-04-20 (session 4 -- Phase 2 CPU spec-decode, first sweep)
+Last updated: 2026-04-20 (session 4 -- Phase 2 CPU/mixed/OpenCL spec-decode, 6 sweeps)
 
 Living document. Update every few turns. Anyone picking this up cold should
 be able to read this page, skim the README, and resume work.
@@ -66,53 +66,101 @@ Reference numbers the rest of this document assumes:
 - 0.6B Q8_0 CPU @ 18t: TG128 **149.66 t/s** (draft ceiling)
 - 8B Q4_K_M OpenCL: PP512 much stronger, TG lower than CPU -- CPU wins TG
 
-**Phase 2 -- Stock speculative decoding (started 2026-04-20, session 4):**
+**Phase 2 -- Stock speculative decoding (session 4, 2026-04-20):**
 
-First real spec-decode sweep is in the books. Target
-Qwen3-8B-Q4_K_M + draft Qwen3-0.6B-Q8_0 on CPU (18t), greedy (temp=0),
-`--draft-min 0`, 10 humaneval prompts, `-n 256`, swept `--draft-max ∈ {4, 8, 16, 32}`.
-Raw CSV + per-run logs: `results/spec-cpu-Qwen3-8B-Q4_K_M-vs-Qwen3-0.6B-Q8_0-20260420-125354{.csv,/}`.
+Six sweeps complete. Fixed rig throughout: target Qwen3-8B-Q4_K_M +
+draft Qwen3-0.6B-Q8_0, greedy (temp=0), `--draft-min 0`, `-n 256`,
+10-prompt fixtures. Baselines from Phase 1:
 
-Mean-of-10 by `--draft-max` vs the **25.91 t/s** 8B CPU TG baseline:
+- 8B CPU TG: **25.91 t/s** -- the reference for every speedup below.
+- 8B OpenCL TG: 13.50 t/s (PP is strong, TG is weak on Adreno).
 
-| draft-max | mean accept | mean decode t/s | speedup |
-|-----------|-------------|-----------------|---------|
-| 4         | 74.5%       | 36.85           | **1.42×** |
-| 8         | 58.4%       | 36.02           | 1.39×   |
-| 16        | 43.0%       | 30.43           | 1.17×   |
-| 32        | 27.5%       | 21.23           | **0.82× (slower than no-spec)** |
+### Summary table (all humaneval, best k per config)
 
-Takeaways, in priority order for the next round:
+| Config (k shown) | mean accept | mean decode t/s | vs CPU TG | vs own TG baseline |
+|------------------|------------:|----------------:|----------:|-------------------:|
+| **CPU spec, k=3** (winner) | 79.6% | **40.19** | **1.55×** | 1.55× |
+| CPU spec, k=4  | 74.6% | 37.51 | 1.45× | 1.45× |
+| CPU spec, k=2  | 82.3% | 29.93 | 1.16× | 1.16× |
+| CPU spec, k=6  | 65.1% | 32.32 | 1.25× | 1.25× |
+| CPU spec, k=8  | 58.4% | 36.02 | 1.39× | 1.39× |
+| CPU spec, k=16 | 43.0% | 30.43 | 1.17× | 1.17× |
+| CPU spec, k=32 | 27.5% | 21.23 | 0.82× | 0.82× |
+| Mixed tgt=OpenCL dft=CPU, k=3 | 77.1% | 9.52 | 0.37× | 0.71× |
+| Mixed tgt=OpenCL dft=CPU, k=8 | -- | 14.37 | 0.55× | 1.06× |
+| Mixed tgt=OpenCL dft=CPU, k=16 | -- | 16.14 | 0.62× | 1.20× |
+| OpenCL-all spec, k=3 | 77.7% | 9.14 | 0.35× | 0.68× |
+| OpenCL-all spec, k=8 | 59.2% | 13.19 | 0.51× | 0.98× |
 
-1. **k=4 wins on mean; k=32 is actively worse than no-spec.** Break-even on
-   this hardware / prompt mix lands between k=16 and k=32. The draft cost
-   (draft-model forward × k rounds) overwhelms the verification savings
-   once accept% falls below ~30%.
-2. **Per-prompt variance is huge.** `binary_search` (prompt 5) holds 55--91%
-   accept across all k; peak single run is prompt 5 @ k=8 at **49.0 t/s
-   (1.88×)**. `flatten` (prompt 6) collapses from 58% → 13% as k grows and
-   at k=32 decodes at 10.8 t/s (0.41× -- less than half baseline). A single
-   pathological prompt can eat an entire sweep's wall-clock.
-3. **k=4 and k=8 are within 2% of each other on mean decode** (36.85 vs
-   36.02 t/s) despite very different accept rates -- so draft cost at k=8
-   roughly cancels the higher accept count. Worth testing k ∈ {2, 3, 6}
-   once we care about tuning: the optimum may be below 4.
-4. **Encoded (prompt-eval) speed is insensitive to `draft-max`** as
-   expected (~115 t/s mean across all runs) -- it's the target model's
-   one-time prompt ingest.
+### Key findings
 
-Open questions these numbers raise (not yet explored):
+1. **k=3 is optimal for draft-model spec on this hardware.** Not k=4 as
+   the coarse {4,8,16,32} sweep suggested. k=2 has highest accept (82%)
+   but lowest decode (30 t/s) -- too little amortization per verify batch.
+   k=3 hits 40.2 t/s mean (1.55×) with 79.6% accept.
+2. **Draft-model spec caps near ~1.6× on this rig regardless of
+   workload.** JSON accept is higher than humaneval (82.0% vs 79.6% at
+   k=3) but decode barely moves (40.83 vs 40.19 t/s). Peak single run
+   is JSON prompt-7 (git commits) at **44.88 t/s (1.73×)**. The ceiling
+   is per-round overhead, not accept-limited. Phase-3+ techniques need
+   to either drastically raise accept with the same k *or* cut the
+   round-trip cost; higher accept alone will not break through 1.6×.
+3. **Mixed-device placement (tgt=OpenCL, dft=CPU) is a regression.**
+   Monotone improvement with k (9.5 → 14.4 → 16.1 for k ∈ {3, 8, 16})
+   pinpoints per-round CPU↔OpenCL sync as the bottleneck -- larger
+   verify batches amortize it but never enough to beat CPU-alone TG
+   (26 t/s), let alone CPU speculative (40 t/s). Peak mixed run was
+   26.6 t/s at k=16, only matching (not beating) CPU-alone. Same story
+   for fully-on-OpenCL spec (9.1 t/s at k=3, 13.2 at k=8) -- converges
+   to OpenCL-alone TG baseline, never wins.
+4. **Per-prompt variance is large.** `binary_search` (p5) accepts at
+   55--91% across all k and gave the 1.88× peak (49.0 t/s at k=8).
+   `flatten` (p6) is pathological: 58% accept at k=8 collapses to 13%
+   at k=32, decode drops from 31.7 to 10.8 t/s (0.41×). A single
+   pathological prompt can drag a whole sweep mean noticeably.
+5. **Encoded (prompt-eval) speed is invariant to k** (~115 t/s across
+   all CPU runs). PP is target-only and one-time; k only affects TG.
+6. **OpenCL per-call kernel-launch overhead is the killer.** Adreno
+   crushes large-batch PP (0.6B Q8_0 at 2674 t/s PP512) but the tiny
+   4-10-token verify batches in spec decode don't amortize kernel
+   dispatch. This is the architectural lesson behind the negative
+   mixed-device and OpenCL-all results.
 
-- Does OpenCL-as-verifier change the calculus? Adreno PP is 2-3× CPU's;
-  if we offload *target verify* to OpenCL while keeping *draft* on CPU,
-  we might win on prompts where small-batch verification is the
-  bottleneck. CPU beat OpenCL on TG in Phase 1, but spec-decode verify
-  is not pure-TG -- it's batched-PP on a draft of size k.
-- 14B target + 0.6B draft: draft/target compute ratio drops ~2×, so
-  break-even k shifts higher. Worth measuring once we've ingested 14B.
-- `--draft-p-min` was left at default 0.75; stricter thresholds should
-  cut `n_drafted` on low-confidence prompts (helping the `flatten`
-  pathology) at the cost of some accepts on the easy prompts.
+### Research implications (feeding Phases 3-5)
+
+The 1.6× ceiling observed here is the *draft-model* spec ceiling on
+this hardware. The negative OpenCL results redirect the research plan:
+
+- **DFlash (Phase 4) is better positioned than EAGLE-3 (Phase 3) for
+  this hardware.** DFlash generates K tokens in parallel in one pass,
+  producing a K-fat verify batch. That directly attacks the OpenCL
+  per-call overhead observed here. EAGLE-3's value is higher accept,
+  which our data shows is *not* the binding constraint.
+- **NPU drafting (Phase 5) becomes more important.** Hexagon and
+  Adreno share LPDDR; an NPU-drafted block can be consumed by Adreno
+  without the CPU↔GPU DMA round-trip that torpedoed mixed-device
+  here. Also, NPU draft in parallel with GPU verify converts the
+  per-round sync into pipelined overlap.
+- **CPU speculative is the working baseline to contribute upstream.**
+  1.55× on code, 1.58× on JSON, stable, clean. llama.cpp's Adreno
+  spec story is currently worse than CPU-alone; the data above is
+  probably worth a docs/discussion contribution even before new
+  techniques land.
+
+### Input artefacts
+
+Prompt fixtures (`prompts/`): `humaneval_subset.jsonl` (10 code
+completions), `structured_json.jsonl` (10 JSON generations).
+`prose_longform.jsonl` and `chat_multiturn.jsonl` still TODO.
+
+CSVs + per-run logs (all under `results/`):
+
+- `spec-cpu-...-125354`     : k ∈ {4,8,16,32} CPU humaneval
+- `spec-cpu-...-131451`     : k ∈ {2,3,4,6}   CPU humaneval
+- `spec-cpu-...-132358`     : k ∈ {3,4}       CPU JSON
+- `spec-opencl-tgt-ocl-dft-cpu-...-132850` : k=3     mixed humaneval
+- `spec-opencl-tgt-ocl-dft-cpu-...-133742` : k ∈ {8,16} mixed humaneval
+- `spec-opencl-...-134935`  : k ∈ {3,8}     OpenCL-all humaneval
 
 **Phase 3 onward:** not started.
 
@@ -218,38 +266,45 @@ specula/
 
 ## Immediate next steps (next session)
 
-**Phase 2 is live.** Session 4 (2026-04-20) produced the first
-spec-decode CSV; CPU-only, 8B-target + 0.6B-draft, humaneval.
-k=4 is the sweet spot at 1.42× mean (peak 1.88× on well-drafted
-prompts). k=32 regresses below baseline. Next work is
-narrowing the k sweep, adding mixed-device placement, and
-probing non-code workloads.
+**Phase 2 thoroughly mapped on 8B+0.6B.** Session 4 (2026-04-20)
+produced six spec-decode sweeps: wide k, narrow k, JSON workload,
+mixed-device at 3 k values, OpenCL-all at 2 k values.
+- CPU spec peaks at **1.55× (40.2 t/s) at k=3**; ceiling ~1.6×.
+- OpenCL-in-any-role is a regression for stock spec decode (per-round
+  kernel-launch overhead dominates small-k verify batches).
+- JSON (82% accept) barely improves on humaneval (80%); ceiling is
+  overhead, not accept rate.
+- Next work below is about pushing outward: new shapes (14B target,
+  1.7B draft), tunables (`--draft-p-min`), and non-code workloads,
+  *not* more mixed-device k scanning -- that axis is answered.
 
 ### Phase 2 -- near-term
 
-1. **Narrow the k sweep.** k=4 won; probe `--draft-max ∈ {2, 3, 4, 6}`
-   to find the true optimum, same 10-prompt humaneval fixture,
-   same `-n 256`. Aim: shave wall-clock variance and confirm k=4 isn't
-   just the lucky floor.
-2. **Tighten `--draft-p-min`.** Default 0.75 drafts aggressively even on
-   low-confidence streaks (flatten pathology). Try 0.80, 0.85, 0.90 at
-   k=4 and k=8; expect lower `n_drafted` on pathological prompts with
-   minimal accept loss on easy ones.
-3. **Non-code workloads.** Humaneval is high-repetition, high-structure.
-   Add `prompts/structured_json.jsonl` (expected: higher accept, ngram
-   sweet-spot territory) and `prompts/prose_longform.jsonl` (expected:
-   lower accept, where spec-decode's floor matters). Stub files exist
-   in the README-described layout but are empty today.
-4. **Mixed-device placement (novel).** Draft on CPU, target on OpenCL.
-   Phase-1 showed CPU wins TG but OpenCL wins PP512 by 2-3×. Speculative
-   *verify* is batched-PP of size k on the target, which is the regime
-   where OpenCL might win. `llama-speculative --device` and `-ngl` /
-   `-ngld` already support asymmetric placement; needs a build that
-   has both backends linked (the `vulkan-opencl` preset is closest;
-   OpenCL-only would also work if we force draft onto `-ngld 0`).
-5. **Draftless ngram spec.** `--spec-type ngram-*` family. Memory-free;
-   should fly on structured JSON. Quick to add once we have the JSON
-   prompts.
+1. **Tighten `--draft-p-min`.** Default 0.75 drafts aggressively even on
+   low-confidence streaks (the `flatten` pathology). Try 0.80, 0.85,
+   0.90 at k=3; expect lower `n_drafted` on pathological prompts with
+   minimal accept loss on easy ones. Cheap to run.
+2. **14B target + 0.6B draft (or 1.7B draft).** Draft/target compute
+   ratio drops ~2×; break-even k should shift higher, and the
+   speculative ceiling may rise past 1.6× on a heavier target. Need to
+   ingest `Qwen3-14B-Q4_K_M.gguf` first.
+3. **Prose + multi-turn workloads.** `prompts/prose_longform.jsonl`
+   and `prompts/chat_multiturn.jsonl` stubs. Prose is the
+   low-acceptance regime; multi-turn is the realistic one.
+4. **Draftless ngram spec** (`--spec-type ngram-*`). Memory-free;
+   should fly on JSON (very high repetition structure). Quick A/B vs
+   the draft-model numbers we already have.
+5. **Negative-result contribution upstream.** The Adreno-OpenCL
+   spec-decode story (no win at any k or placement) is non-obvious and
+   currently undocumented in llama.cpp discussions. Draft a
+   docs/discussion post with the numbers from session 4.
+
+### Deferred / answered
+
+- ~~**Mixed-device CPU-draft + OpenCL-target.**~~ *Answered, negative.
+  Sync overhead dominates; monotone decode improvement with k tops
+  out at 16.1 t/s, under CPU-alone TG. Not worth more scanning.*
+- ~~**Narrow k sweep + JSON workload.**~~ *Done; k=3 is the optimum.*
 
 ### Backlog (non-Phase-2)
 

@@ -1,0 +1,5 @@
+﻿Output a JSON OpenAPI 3.0 fragment describing a single GET /products/{id} endpoint, including parameters, 200 response schema with id/name/price, and 404 error response. Respond with ONLY the JSON.
+
+{
+  "paths": {
+    "/products/{id}": 
