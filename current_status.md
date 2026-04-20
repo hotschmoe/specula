@@ -1,6 +1,6 @@
 # specula -- current status
 
-Last updated: 2026-04-19
+Last updated: 2026-04-19 (end of session 1)
 
 Living document. Update every few turns. Anyone picking this up cold should
 be able to read this page, skim the README, and resume work.
@@ -14,10 +14,17 @@ be able to read this page, skim the README, and resume work.
 - [x] Models downloaded (`core` tier -- Qwen3-0.6B-Q8_0, Qwen3-1.7B-Q8_0, Qwen3-8B-Q4_K_M in `models/`)
 - [x] llama.cpp sibling checkout at `llama.cpp/` (HEAD `e365e658f07b63371489570dfde597f199b26c23`)
 - [x] **Preset `cpu`** built (`llama.cpp\build-cpu\bin\`), runtime DLLs copied, smoke-tested
-- [ ] **Preset `vulkan-opencl`** -- blocked on Vulkan SDK install (in progress)
+- [x] Vulkan SDK installed (`C:\VulkanSDK\1.4.341.1\`, `VULKAN_SDK` env var set)
+- [x] **Preset `vulkan`** built; device enumeration correct (Adreno X2-90, native driver, `KHR_coopmat`). **Correctness issue open** -- see `docs/adreno_debugging.md`.
+- [ ] **Preset `opencl`** -- blocked on OpenCL headers + `OpenCL.lib` for ARM64 (see Outstanding issues)
+- [ ] **Preset `vulkan-opencl`** -- depends on both of the above
 - [ ] **Preset `cpu-kleidiai`** -- deferred to Phase 1 SME2 retry
 - [ ] Hexagon backend -- out of band (Qualcomm docker toolchain); not wired into `build_llama_cpp.ps1`
 - [ ] Sweep harness validated end-to-end (scripts exist; not yet producing real CSVs)
+
+Note (2026-04-19): initial combined `vulkan-opencl` preset split into
+standalone `vulkan` and `opencl` presets so a missing OpenCL SDK doesn't
+block Vulkan work. Combined preset kept for when both are satisfied.
 
 **Phase 1 onward:** not started.
 
@@ -52,20 +59,27 @@ Per-build metadata is recorded in `llama.cpp\build-<preset>\SPECULA_BUILD.txt`.
 
 ## Outstanding issues / known gotchas
 
-- **Vulkan SDK not installed yet.** Downloaded installer at
-  `C:\Users\hotschmoe\Downloads\vulkansdk-windows-ARM64-1.4.341.1.exe`.
-  Install will put it at `C:\VulkanSDK\1.4.341.1\` and set `VULKAN_SDK`.
-  After install, `-Preset vulkan-opencl` should configure cleanly.
-- **Adreno OpenCL ICD not visible.** `C:\Windows\System32\OpenCL.dll`
-  (loader) is present but `qcopencl.dll` / `QCOclIcd.dll` is not in
-  System32. Build will still link (headers+loader suffice); runtime
-  Adreno device discovery is a separate problem to solve when we first
-  try `llama-bench -d GPUOpenCL`. Typical fix: registry entry under
-  `HKLM\SOFTWARE\Khronos\OpenCL\Vendors`.
+- **OpenCL build blocked.** llama.cpp's CMake requires `find_package(OpenCL
+  REQUIRED)`, which needs headers (`CL/cl.h`) and an import library
+  (`OpenCL.lib`) for ARM64 on disk. Neither is installed. QAIRT has a
+  stray `cl.h` buried in a sample app but no lib. Unblock options:
+    1. `vcpkg install opencl:arm64-windows`
+    2. Clone Khronos `OpenCL-Headers` + `OpenCL-ICD-Loader`, build the
+       loader for ARM64, point cmake at the results via
+       `-DOpenCL_INCLUDE_DIR=... -DOpenCL_LIBRARY=...`.
+  Runtime concern (separate): Adreno OpenCL ICD is not registered in
+  `HKLM\SOFTWARE\Khronos\OpenCL\Vendors`, so device discovery will fail
+  even after build until `QCOclIcd.dll` is registered. Deal with that
+  when `llama-bench -d GPUOpenCL` first runs.
 - **KleidiAI / SME2 crashed at runtime in prior project.** See
   `gguf_models/LOCAL_LLM_NOTES.md`. Will retry as a tracked task in
   Phase 1; `scripts/build_llama_cpp.ps1 -Preset cpu-kleidiai` is wired
   up and applies the clang-on-Windows `.S` patch automatically.
+- **Good sign for the SME2 retry:** the `vulkan` configure pass showed
+  `HAVE_SME - Success` for the compiler feature probe, meaning the
+  toolchain *thinks* SME codegen works. The runtime-trap suspicion from
+  `LOCAL_LLM_NOTES.md` (ZA-tile user-mode state not enabled) may still
+  bite, but the build side is not the problem.
 
 ## Directory layout snapshot
 
@@ -91,13 +105,24 @@ specula/
     └── build-cpu/              # built; binaries in bin/, DLLs copied
 ```
 
-## Immediate next steps
+## Immediate next steps (next session)
 
-1. Install Vulkan SDK (ARM64) from the downloaded installer.
-2. `.\scripts\build_llama_cpp.ps1 -Preset vulkan-opencl -DryRun` to confirm the
-   new `VULKAN_SDK` env is picked up, then drop `-DryRun` and build.
-3. Smoke-test Vulkan: `llama-cli -ngl 99 ...` against Qwen3-0.6B.
-4. Smoke-test OpenCL: `llama-cli -ngl 99 -d GPUOpenCL ...`. If device
-   discovery fails, fix the ICD registry entry, then retry.
-5. Once both GPU backends run a trivial generation, move to Phase 1
-   formal baselines via `sweep_baseline.ps1`.
+1. **Work through the Adreno test matrix in `docs/adreno_debugging.md`.**
+   Phase A (correctness) first: run `llama-cli` with each env-var
+   combination (COOPMAT/COOPMAT2/F16 disabled in various combos) and
+   record which configs produce coherent English. Phase B (performance)
+   for every Phase-A-passing config: `llama-bench` across
+   `pp32,128,512` x `tg16,64,128` on both Qwen3-0.6B and Qwen3-8B.
+   Log everything to `results/adreno-*.log`.
+2. Based on Phase A+B results: either lock in a working Adreno Vulkan
+   config as the Phase 1 GPU baseline, or declare Vulkan/Adreno broken
+   on this driver and pivot primary GPU attention to OpenCL/Adreno.
+3. **Unblock OpenCL.** Pick vcpkg or manual Khronos checkout (see
+   Outstanding issues), build `-Preset opencl`, smoke-test.
+4. **Phase 1 formal baselines.** Once a working GPU backend is locked
+   in, run `sweep_baseline.ps1` across all built backends for the
+   Qwen3-0.6B / 1.7B / 8B model set. First real CSVs land in
+   `results/`.
+5. **SME2 / KleidiAI retry.** `-Preset cpu-kleidiai` build, then run a
+   batched-matmul workload (PP-heavy) to trigger or not trigger the
+   prior `STATUS_ILLEGAL_INSTRUCTION`.

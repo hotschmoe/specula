@@ -55,8 +55,10 @@ behavior, and Python tooling.
 
 - [x] Download initial model set (`scripts/download_models.ps1`)
 - [ ] Build llama.cpp native ARM64, per preset:
-  - [ ] `cpu` — reproduces `LOCAL_LLM_NOTES.md` CPU numbers; sanity check the toolchain
-  - [ ] `vulkan-opencl` — Adreno backends for Phase 1/2 GPU baselines
+  - [x] `cpu` — reproduces `LOCAL_LLM_NOTES.md` CPU numbers; sanity check the toolchain
+  - [ ] `vulkan` — Adreno via Vulkan backend (Phase 1 GPU baseline)
+  - [ ] `opencl` — Adreno via OpenCL backend; blocked on OpenCL SDK install
+  - [ ] `vulkan-opencl` — both backends in one binary (once OpenCL is unblocked)
   - [ ] `cpu-kleidiai` — Phase 1 SME2 retry (expected to crash today, see Phase 1)
   - [ ] `hexagon` — out-of-band; needs the Qualcomm toolchain docker image
 - [ ] Verify each built backend runs a trivial generation
@@ -65,7 +67,8 @@ behavior, and Python tooling.
 Build invocation:
 ```powershell
 .\scripts\build_llama_cpp.ps1 -Preset cpu
-.\scripts\build_llama_cpp.ps1 -Preset vulkan-opencl
+.\scripts\build_llama_cpp.ps1 -Preset vulkan          # needs VULKAN_SDK env var (LunarG installer sets it)
+.\scripts\build_llama_cpp.ps1 -Preset opencl          # needs OpenCL headers + OpenCL.lib on disk
 .\scripts\build_llama_cpp.ps1 -Preset cpu-kleidiai    # applies the clang-on-Windows KleidiAI .S patch
 ```
 Each preset builds into its own `llama.cpp\build-<preset>\` directory so

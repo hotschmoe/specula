@@ -50,8 +50,8 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('cpu', 'cpu-kleidiai', 'vulkan-opencl', 'hexagon')]
-    [string]$Preset = 'vulkan-opencl',
+    [ValidateSet('cpu', 'cpu-kleidiai', 'vulkan', 'opencl', 'vulkan-opencl', 'hexagon')]
+    [string]$Preset = 'vulkan',
     [string]$Commit = '',
     [string]$RepoDir = (Join-Path $PSScriptRoot '..\llama.cpp'),
     [int]$Jobs = 12,
@@ -164,7 +164,29 @@ try {
             $presetFlags = @('-DGGML_CPU_KLEIDIAI=ON')
             $patchKleidiai = $true
         }
+        'vulkan' {
+            # Vulkan SDK provides headers, loader, and glslc. Works out of the
+            # box once VULKAN_SDK is set (LunarG installer handles this).
+            $presetFlags = @(
+                '-DGGML_VULKAN=ON',
+                '-DGGML_CPU_KLEIDIAI=OFF'
+            )
+            $patchKleidiai = $false
+        }
+        'opencl' {
+            # Requires OpenCL headers + an import lib (OpenCL.lib) for ARM64
+            # on disk; see scripts/install_opencl_sdk.ps1 (TODO) or use vcpkg.
+            # Runtime loader (OpenCL.dll) ships with Windows. Adreno ICD
+            # discovery is a separate runtime concern.
+            $presetFlags = @(
+                '-DGGML_OPENCL=ON',
+                '-DGGML_OPENCL_USE_ADRENO_KERNELS=ON',
+                '-DGGML_CPU_KLEIDIAI=OFF'
+            )
+            $patchKleidiai = $false
+        }
         'vulkan-opencl' {
+            # Combined preset; needs both SDK states satisfied above.
             $presetFlags = @(
                 '-DGGML_VULKAN=ON',
                 '-DGGML_OPENCL=ON',
