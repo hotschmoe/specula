@@ -1,6 +1,6 @@
 # specula -- current status
 
-Last updated: 2026-04-20 (session 3 -- OpenCL/Adreno pre-build survey)
+Last updated: 2026-04-20 (session 4 -- Phase 2 CPU spec-decode, first sweep)
 
 Living document. Update every few turns. Anyone picking this up cold should
 be able to read this page, skim the README, and resume work.
@@ -58,7 +58,63 @@ Adreno-specific optimizations landed by Qualcomm engineers (lhez,
 max-krasnyansky). Vulkan remains useful as a second GPU path, but
 OpenCL is the vendor-blessed one and should be unblocked soon.
 
-**Phase 1 onward:** not started.
+**Phase 1:** CPU + OpenCL baselines landed in `results/baseline-*.csv`
+(sweep covers 0.6B / 1.7B / 8B at 8/12/18 threads, PP128/512 + TG64/128).
+Reference numbers the rest of this document assumes:
+
+- 8B Q4_K_M CPU @ 18t: PP512 164 t/s, TG128 **25.91 t/s**, TG64 26.48 t/s
+- 0.6B Q8_0 CPU @ 18t: TG128 **149.66 t/s** (draft ceiling)
+- 8B Q4_K_M OpenCL: PP512 much stronger, TG lower than CPU -- CPU wins TG
+
+**Phase 2 -- Stock speculative decoding (started 2026-04-20, session 4):**
+
+First real spec-decode sweep is in the books. Target
+Qwen3-8B-Q4_K_M + draft Qwen3-0.6B-Q8_0 on CPU (18t), greedy (temp=0),
+`--draft-min 0`, 10 humaneval prompts, `-n 256`, swept `--draft-max ∈ {4, 8, 16, 32}`.
+Raw CSV + per-run logs: `results/spec-cpu-Qwen3-8B-Q4_K_M-vs-Qwen3-0.6B-Q8_0-20260420-125354{.csv,/}`.
+
+Mean-of-10 by `--draft-max` vs the **25.91 t/s** 8B CPU TG baseline:
+
+| draft-max | mean accept | mean decode t/s | speedup |
+|-----------|-------------|-----------------|---------|
+| 4         | 74.5%       | 36.85           | **1.42×** |
+| 8         | 58.4%       | 36.02           | 1.39×   |
+| 16        | 43.0%       | 30.43           | 1.17×   |
+| 32        | 27.5%       | 21.23           | **0.82× (slower than no-spec)** |
+
+Takeaways, in priority order for the next round:
+
+1. **k=4 wins on mean; k=32 is actively worse than no-spec.** Break-even on
+   this hardware / prompt mix lands between k=16 and k=32. The draft cost
+   (draft-model forward × k rounds) overwhelms the verification savings
+   once accept% falls below ~30%.
+2. **Per-prompt variance is huge.** `binary_search` (prompt 5) holds 55--91%
+   accept across all k; peak single run is prompt 5 @ k=8 at **49.0 t/s
+   (1.88×)**. `flatten` (prompt 6) collapses from 58% → 13% as k grows and
+   at k=32 decodes at 10.8 t/s (0.41× -- less than half baseline). A single
+   pathological prompt can eat an entire sweep's wall-clock.
+3. **k=4 and k=8 are within 2% of each other on mean decode** (36.85 vs
+   36.02 t/s) despite very different accept rates -- so draft cost at k=8
+   roughly cancels the higher accept count. Worth testing k ∈ {2, 3, 6}
+   once we care about tuning: the optimum may be below 4.
+4. **Encoded (prompt-eval) speed is insensitive to `draft-max`** as
+   expected (~115 t/s mean across all runs) -- it's the target model's
+   one-time prompt ingest.
+
+Open questions these numbers raise (not yet explored):
+
+- Does OpenCL-as-verifier change the calculus? Adreno PP is 2-3× CPU's;
+  if we offload *target verify* to OpenCL while keeping *draft* on CPU,
+  we might win on prompts where small-batch verification is the
+  bottleneck. CPU beat OpenCL on TG in Phase 1, but spec-decode verify
+  is not pure-TG -- it's batched-PP on a draft of size k.
+- 14B target + 0.6B draft: draft/target compute ratio drops ~2×, so
+  break-even k shifts higher. Worth measuring once we've ingested 14B.
+- `--draft-p-min` was left at default 0.75; stricter thresholds should
+  cut `n_drafted` on low-confidence prompts (helping the `flatten`
+  pathology) at the cost of some accepts on the easy prompts.
+
+**Phase 3 onward:** not started.
 
 ## CPU build validated
 
@@ -162,46 +218,50 @@ specula/
 
 ## Immediate next steps (next session)
 
-**OpenCL/Adreno is unblocked and validated.** Session 3
-(2026-04-20) built the preset, built the Khronos SDK (siblings
-`../OpenCL-Headers/`, `../OpenCL-ICD-Loader/`), passed correctness
-A/B, and benched 0.6B at numbers that clear CPU by 2-3× on PP.
-Remaining work is filling the perf matrix at 1.7B + 8B and
-handing off to `sweep_baseline.ps1`.
+**Phase 2 is live.** Session 4 (2026-04-20) produced the first
+spec-decode CSV; CPU-only, 8B-target + 0.6B-draft, humaneval.
+k=4 is the sweet spot at 1.42× mean (peak 1.88× on well-drafted
+prompts). k=32 regresses below baseline. Next work is
+narrowing the k sweep, adding mixed-device placement, and
+probing non-code workloads.
 
-1. ~~**Survey the OpenCL/Adreno landscape before building anything.**~~
-   *Done in session 3 (2026-04-20). Findings captured in
-   `docs/adreno_opencl.md`; the ICD-DLL name, header situation,
-   runtime-DLL location, ICD registry absence, and the X2-90 gen-
-   matcher gap are all documented. Remaining landscape item (not yet
-   done, low priority for the build itself): upstream issue/discussion
-   search for `X2-90 OpenCL` / `Snapdragon X2 Elite OpenCL` to see if
-   anyone else is ahead of us.*
-2. ~~Build + smoke test OpenCL preset.~~ **Done in session 3.**
-   0.6B correctness + perf validated. See `docs/adreno_opencl.md`.
-3. ~~Widen `LLAMA_BUILD_TOOLS`.~~ **Done.** `llama-completion`
-   + `llama-perplexity` now in targets list. Tooling caveat: on
-   HEAD `fd6ae4c…` `llama-completion` still auto-enters
-   conversation mode; scripts either need to close stdin or use
-   `llama-server` over HTTP for hands-off runs.
-4. **Fill out the OpenCL perf matrix.** 0.6B Q8_0 is done. Next:
-   Qwen3-1.7B Q8_0 then Qwen3-8B Q4_K_M through the same bench
-   template, plus longer prompt shapes (`-p 1024,2048`) for
-   Phase-2-relevant shapes.
-5. **Phase 1 formal baselines.** Run `sweep_baseline.ps1` across
-   CPU + OpenCL backends for Qwen3-0.6B / 1.7B / 8B. First real
-   CSVs land in `results/`.
-6. **Optional tuning experiments** (non-blocking, may be worth
-   a session once 1 and 2 are done):
-     - Patch `get_adreno_gpu_gen` to recognize `X2-90` (currently
-       falls to `ADRENO_UNKNOWN`). Rebuild, re-bench, compare.
-     - Opt into `cl_qcom_large_buffer` via
-       `GGML_OPENCL_ADRENO_USE_LARGE_BUFFER=1` if extension is
-       supported; re-bench 8B.
-7. **SME2 / KleidiAI retry.** `-Preset cpu-kleidiai` build, then run
-   a batched-matmul workload (PP-heavy) to trigger or not trigger
-   the prior `STATUS_ILLEGAL_INSTRUCTION`.
-8. **Vulkan — deferred, not abandoned.** With OpenCL locked in as
-   the primary GPU backend there's no urgency, but if a Qualcomm
-   driver update lands, re-run the session-2 correctness matrix
-   (B0-B7) to see if any shader path now returns coherent output.
+### Phase 2 -- near-term
+
+1. **Narrow the k sweep.** k=4 won; probe `--draft-max ∈ {2, 3, 4, 6}`
+   to find the true optimum, same 10-prompt humaneval fixture,
+   same `-n 256`. Aim: shave wall-clock variance and confirm k=4 isn't
+   just the lucky floor.
+2. **Tighten `--draft-p-min`.** Default 0.75 drafts aggressively even on
+   low-confidence streaks (flatten pathology). Try 0.80, 0.85, 0.90 at
+   k=4 and k=8; expect lower `n_drafted` on pathological prompts with
+   minimal accept loss on easy ones.
+3. **Non-code workloads.** Humaneval is high-repetition, high-structure.
+   Add `prompts/structured_json.jsonl` (expected: higher accept, ngram
+   sweet-spot territory) and `prompts/prose_longform.jsonl` (expected:
+   lower accept, where spec-decode's floor matters). Stub files exist
+   in the README-described layout but are empty today.
+4. **Mixed-device placement (novel).** Draft on CPU, target on OpenCL.
+   Phase-1 showed CPU wins TG but OpenCL wins PP512 by 2-3×. Speculative
+   *verify* is batched-PP of size k on the target, which is the regime
+   where OpenCL might win. `llama-speculative --device` and `-ngl` /
+   `-ngld` already support asymmetric placement; needs a build that
+   has both backends linked (the `vulkan-opencl` preset is closest;
+   OpenCL-only would also work if we force draft onto `-ngld 0`).
+5. **Draftless ngram spec.** `--spec-type ngram-*` family. Memory-free;
+   should fly on structured JSON. Quick to add once we have the JSON
+   prompts.
+
+### Backlog (non-Phase-2)
+
+6. **Fill out the OpenCL perf matrix** beyond 0.6B Q8_0. Run
+   `sweep_baseline.ps1` for 1.7B + 8B on OpenCL at `-p 1024, 2048`
+   context shapes.
+7. **Optional tuning:** patch `get_adreno_gpu_gen` to recognize
+   `X2-90` (currently falls to `ADRENO_UNKNOWN`); opt into
+   `cl_qcom_large_buffer` via `GGML_OPENCL_ADRENO_USE_LARGE_BUFFER=1`.
+8. **SME2 / KleidiAI retry.** `-Preset cpu-kleidiai` already builds;
+   see `docs/SME_investigation.md`. Deferred until Phase 2 settles.
+9. **Vulkan.** Deferred, not abandoned. If a Qualcomm driver update
+   lands, re-run the session-2 correctness matrix (B0-B7).
+10. **Upstream-issue search for X2-90 OpenCL** to see if anyone else
+    is ahead of us. Low priority now that the backend works.

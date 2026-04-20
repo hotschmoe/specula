@@ -1,0 +1,3 @@
+﻿def flatten(nested):
+    # Flatten an arbitrarily nested list of lists into a single flat list
+    
