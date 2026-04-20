@@ -1,6 +1,6 @@
 # specula -- current status
 
-Last updated: 2026-04-20 (session 4 -- Phase 2 CPU/mixed/OpenCL spec-decode, 6 sweeps)
+Last updated: 2026-04-20 (session 5 -- Phase 4 scoping pass against lucebox-hub)
 
 Living document. Update every few turns. Anyone picking this up cold should
 be able to read this page, skim the README, and resume work.
@@ -337,23 +337,183 @@ Reference impl to mine: `C:\Users\hotschmoe\Documents\GitHub\lucebox-hub/dflash/
 `docs/reference-projects.md` for file-level guidance on what to read
 first.
 
-High-level plan (detailed checklist in README Phase 4):
+#### Session 5 (2026-04-20) scoping findings
 
-1. **Scoping pass** (no code). Read `dflash_graph.h`, `qwen3_dflash_graph.cpp`,
-   `safetensors_draft.cpp`. Map CUDA→OpenCL effort per kernel.
-   Decide target: a Qwen3-8B pure-attention DFlash drafter + 8B or
-   larger target, to side-step the Qwen3.5 hybrid `gated_delta_net`
-   cost.
-2. Drafter-weight pipeline: GGUF converter vs direct safetensors
-   load. lucebox uses safetensors -- we can too if the converter
-   proves painful.
-3. Minimum-viable DFlash (chain-verify, no DDTree) on CPU first.
-   Compare to session-4 CPU chain-spec numbers (40 t/s at 1.55×).
-   Expected: AL pushes toward 5-6, but still per-round-overhead
-   bound until DDTree lands.
-4. Add DDTree verify. This is the step that attacks the *batch-size*
-   axis where we left 1.6× sitting. Target: match or clear 2× end-to-end.
-5. Port kernels to OpenCL (and later Hexagon for Phase 5).
+Read: `dflash_graph.h`, `qwen3_dflash_graph.cpp` (168 LOC, draft
+graph), `safetensors_draft.cpp` (407 LOC, draft weights),
+`internal.h` (288 LOC, shared state/cache schema),
+`qwen35_target_graph.cpp` (806 LOC, hybrid target),
+`delta_net_chunked.h` (chunked delta-net entry),
+`gguf_target_loader.cpp` (386 LOC, non-libllama GGUF loader),
+`RESULTS.md`.
+
+**Kernel coverage on current ggml-opencl backend**
+(`llama.cpp/ggml/src/ggml-opencl/ggml-opencl.cpp`, HEAD
+`e365e658f…`):
+
+- `GGML_OP_FLASH_ATTN_EXT` -- IMPLEMENTED (`ggml_cl_flash_attn` at
+  line 9265, dispatch at 14033). Supports_op gate at 4166-4200:
+  supported `{dk,dv}` pairs include `{128,128}` which matches our
+  draft head_dim; supported dtypes F32/F32, F16/F16, F32+F16KV.
+  BF16 input not supported so we convert at load, same trick the
+  lucebox CUDA port uses for norms.
+- `GGML_OP_SSM_CONV` -- IMPLEMENTED (4085, 13934). Hybrid
+  delta-net 1D causal conv already runs on OpenCL.
+- `GGML_OP_GATED_DELTA_NET` -- NOT implemented on OpenCL.
+  This is the Qwen3.5 SSM recurrence kernel. Options:
+  (i) use lucebox's `delta_net_chunked.cpp` path, which
+  re-expresses the recurrence in already-supported primitives
+  (237 LOC); (ii) CPU fallback for delta-net layers only; (iii)
+  write an OpenCL kernel ourselves. (i) is the only tractable
+  short-term path -- if its ops are all ggml-opencl-backed, we
+  get hybrid on OpenCL for free.
+- M-RoPE with `rope_sections [11,11,10,0]` -- still need to verify
+  OpenCL supports section-mode `ggml_rope_ext` (Qwen3.5 needs it;
+  pure Qwen3 uses plain NEOX which works).
+
+**Non-kernel blockers**
+- `gguf_target_loader.cpp` is POSIX (mmap / open / fstat / munmap).
+  Same ~30-LOC Windows swap as `safetensors_draft.cpp`
+  (`CreateFileMapping`/`MapViewOfFile`). Do both at once.
+- Target arch string is `qwen35` (not `qwen3`); loader validates
+  this. GGUF we download must match.
+- Token embedding stays on CPU (CUDA port notes CUDA get_rows
+  can't handle k-quants; OpenCL likely same). `CpuEmbedder` in
+  `internal.h` already handles this -- portable as-is.
+- Target graph uses `capture_layers` mode to sink 5 specific
+  layer hiddens into a 4096-slot `target_feat` ring
+  (`qwen35_target_graph.cpp:694` — `CAPTURE_LAYERS[]`). The draft
+  reads this as its "5*hidden" input. Keep as-is; no llama.cpp
+  patching needed since we use the non-libllama loader.
+- `DDTree` adds per-delta-layer `ssm_intermediate` (F16,
+  `[S_v, S_v, H_v, max_verify_tokens]`) and
+  `conv_input_cache`. Hybrid-only overhead. Pure-attention
+  targets pay ZERO per-node memory tax (RESULTS.md, "Memory
+  ceiling notes") — the published DFlash paper runs budgets up
+  to 1024 on pure-attention Qwen3-8B/30B. This is the single
+  biggest argument for eventually doing our own pure-attention
+  drafter (option B below).
+
+**Draft graph port cost (option A, using z-lab 27B drafter):**
+~near zero. Every op (`ggml_mul_mat`, `rms_norm`, `mul`,
+`reshape`, `concat`, `rope_ext` NEOX, `permute`, `cont`,
+`flash_attn_ext`, `silu`, `add`) already on ggml-opencl.
+Weights loader is pure I/O + a hand-rolled safetensors JSON
+parser. BF16-on-disk is fine; norms get converted to F32 at
+load (already in the code).
+
+#### Path decision: A (today) → B (later). Documented below.
+
+lucebox-hub's reference impl is glued to Qwen3.5-27B-hybrid.
+z-lab only publishes DFlash drafter weights for 27B. We pick A
+first to de-risk (reference impl exists, working numbers exist,
+no training needed) and carry B in the backlog.
+
+**Option A — Qwen3.5-27B hybrid target + z-lab 27B DFlash drafter (chosen for now)**
+
+Plan:
+1. Download assets:
+   - `unsloth/Qwen3.5-27B-GGUF` (Q4_K_M, ~16 GB) into `models/`.
+   - `z-lab/Qwen3.5-27B-DFlash` (safetensors, BF16, ~3.5 GB).
+2. Port `safetensors_draft.cpp` + `gguf_target_loader.cpp`
+   mmap→Win32 mapping. ~1 day.
+3. Standalone drafter smoke: port `qwen3_dflash_graph.cpp`
+   against ggml-opencl backend. No target yet, just prove the
+   drafter forward runs and dims match.
+4. Target forward with full-attention layers only (16 of 64,
+   every 4th). Confirm logits plumbing; garbage output is
+   expected because delta-net layers are stubbed.
+5. Delta-net layers via `delta_net_chunked` primitives path.
+   If every op has OpenCL coverage → hybrid on OpenCL directly.
+   Otherwise CPU-partition delta-net layers.
+6. Chain verify (q_len=16) end-to-end. Expected AL 6-7 (lucebox
+   Math500/GSM8K numbers).
+7. DDTree verify. Expected AL 8+, ~3× target.
+8. Perf-tune: f16 intermediate, `gated_delta_net_tree_persist`
+   equivalent, D2D target_feat replacement (Snapdragon shared-
+   LPDDR analogue: avoid cache flush pairs).
+
+Upsides: reference impl exists, weights exist, results are
+published (3.43× HumanEval on 3090). Strong alignment with
+stated production target (see user memory:
+`project_target_model.md`).
+
+Downsides: 27B Q4_K_M + drafter + KV + intermediates fits on
+32 GB LPDDR5X but with less margin than 8B. Hybrid port is more
+unknown than pure-attention. Per-node DDTree memory tax caps
+budget ~22-26.
+
+**Option B — Train our own DFlash drafter for a pure-attention Qwen (revisit later)**
+
+Plan:
+1. Pick target: Qwen3-8B (scaffolding) OR Qwen3.5-8B-dense
+   (closer to production, no hybrid).
+2. Build training infra: 5-layer DFlash drafter per the paper
+   (`docs/reference-projects.md` cites Qwen3-8B/30B-MoE numbers
+   from the original DFlash paper at 4-5× on HumanEval).
+3. Run distillation against target hiddens on a cloud GPU
+   (BF16 training -- not feasible locally on the X2). A few
+   hundred GPU-hours ballpark.
+4. Port the drafter weights + dims into our (by-then-working)
+   DFlash pipeline. Pure-attention target skips the delta-net
+   port entirely. Per-node memory tax is zero -> budgets up to
+   1024 per the paper.
+5. Retest DDTree at large budgets; upper bound on speedup
+   likely higher than 27B-hybrid because verify-batch memory
+   isn't hybrid-capped.
+
+Upsides: pure-attention path removes the deltanet port
+entirely; matches any Qwen3.5-*dense* production target;
+higher budget ceiling. Weights are ours (no z-lab license
+considerations).
+
+Downsides: training cost; no existing reference impl at our
+exact dims; gap between "has a drafter" and "has a *good*
+drafter" (distillation quality drives AL).
+
+**When to pivot A→B:** after Option A lands end-to-end and we
+have a clean hybrid DDTree baseline on Snapdragon. At that
+point we know the per-round overhead floor on our hardware and
+can quantify what training our own drafter buys. Until then,
+option A is cheaper information.
+
+#### Dependency queue (session 5 → session 6)
+
+Before writing any port code:
+
+- [ ] Download `unsloth/Qwen3.5-27B-GGUF` Q4_K_M (~16 GB) into
+      `models/`. Bandwidth budget.
+- [ ] Download `z-lab/Qwen3.5-27B-DFlash` safetensors into
+      `models/` (or a sibling dir; it's not a GGUF).
+- [ ] Skim `delta_net_chunked.cpp` (237 LOC) and list every
+      ggml op it calls; cross-check each against ggml-opencl
+      `supports_op`. This is the gating item for whether
+      hybrid-on-OpenCL is tractable without writing a new
+      kernel.
+- [ ] Confirm `ggml_rope_ext` section-mode support on OpenCL
+      (qwen3.5 M-RoPE). If unsupported, plan a CPU shim for
+      rope only.
+- [ ] Decide on build layout: separate `phase4/` source tree
+      (lucebox-shaped standalone, non-libllama) vs. integrate
+      into the llama.cpp fork. Lean standalone -- inherits
+      lucebox's structure 1:1 and sidesteps llama.cpp
+      graph-capture patching.
+
+#### High-level plan (as a checklist, unchanged structure)
+
+1. **Scoping pass** (no code). *Done this session.* ✓
+2. Drafter-weight pipeline: port `safetensors_draft.cpp`
+   mmap→Win32.
+3. Target-weight pipeline: port `gguf_target_loader.cpp`
+   mmap→Win32 and confirm `arch=qwen35` handling.
+4. Minimum-viable DFlash (chain-verify, no DDTree). Expected AL
+   6-7, comparable to session-4 CPU chain-spec in rate but
+   higher AL.
+5. Add DDTree verify. Target: clear 2× end-to-end.
+6. Port any delta-net ops that aren't already on OpenCL (see
+   `delta_net_chunked.cpp` survey above).
+7. OpenCL perf tuning (f16 intermediate, target_feat copy,
+   tree-persist kernel).
 
 ### Phase 6 -- Standalone lite harness (flagged for way later)
 
