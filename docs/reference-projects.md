@@ -103,6 +103,134 @@ Most relevant sections:
 must match these numbers), phase 1/2 (SME2 retry), and any time we're
 choosing model / quant / KV-cache config for a workload.
 
+## lucebox-hub — RTX 3090 DFlash port, the public reference for phases 3 & 4
+
+**Location:** `C:\Users\hotschmoe\Documents\GitHub\lucebox-hub`
+
+Pulled 2026-04-20 after reading the companion article (archived locally at
+`new_spec_decode_example_to_research.md`). Luce-Org's standalone C++/ggml
+DFlash speculative decoder for Qwen3.5-27B Q4_K_M on a single RTX 3090,
+MIT-licensed.
+
+Headline numbers (HumanEval 10-prompt, Q4_K_M target, single 3090, 24 GB):
+
+- **129.5 tok/s mean at DDTree budget=22** (3.43× over AR baseline 37.78 t/s)
+- **207.6 tok/s peak** demo (5.46×)
+- Average accept length **AL ≈ 8.9** at budget 30 (our CPU best: AL ≈ 2.4 at k=3)
+- 128K context on 24 GB via Q4_0 KV + rolling 4096-slot target_feat ring
+- ~2000 LOC of C++/CUDA on `libggml*.a` only; no libllama
+
+Two subprojects: `megakernel/` (separate) and `dflash/`. The dflash/ tree is
+what we care about for specula phases 3–4. Laid out as:
+
+- `dflash/src/qwen3_dflash_graph.cpp` — **the DFlash drafter graph glue.**
+  This is the template for a Qwen3-family DFlash drafter. Most directly
+  portable file to specula phase 4.
+- `dflash/src/qwen35_target_graph.cpp` — Qwen3.5 hybrid target graph.
+  Only relevant if we go hybrid; specula README sticks to pure-attention
+  Qwen3 for phases 2–4.
+- `dflash/src/delta_net_chunked.{cpp,h}` — Gated DeltaNet kernel wrapper.
+  Skip unless we decide to do Qwen3.5-hybrid after Phase 4.
+- `dflash/src/dflash_graph.h` — the tree + block-diffusion verify schema.
+  **Read this first to understand the DDTree data layout** before looking
+  at the graph code.
+- `dflash/src/safetensors_draft.cpp` — draft-weight loader. z-lab publishes
+  DFlash drafter weights in safetensors, not GGUF; we inherit this.
+- `dflash/src/kv_cache.cpp` — Q4_0 KV cache on ggml-cuda FA. Generally
+  applicable pattern for long-context; the Adreno/Hexagon analogue is
+  still open.
+- `dflash/src/gguf_target_loader.cpp` — how they load a GGUF target without
+  linking libllama. Relevant if we ever build our own standalone runtime.
+- `dflash/RESULTS.md` — full benchmark matrix including budget sweeps
+  (AL plateau at 8.9 across budget 20/30/40) and per-prompt AL data.
+  Use this as the upper bound when reasoning about what a good DFlash
+  port can achieve; gap to our CPU/Adreno numbers is the budget of work
+  we have to do.
+- `dflash/README.md` — the article body (matches
+  `new_spec_decode_example_to_research.md` modulo graphics).
+
+**Platform gap:** CUDA only. Authors explicitly ruled out Metal / Vulkan /
+OpenCL. That is the specula-shaped hole in their coverage — and the reason
+the Snapdragon/Adreno/Hexagon lane is genuinely uncrowded.
+
+**Key transferable perf lessons from their day-by-day log** (full list in
+the article; the short version, with the Snapdragon-X2 implications):
+
+- **f16 intermediate cache halves memory BW** (+5% tok/s). Adreno OpenCL
+  should benefit at least as much, since TG on this hardware is
+  bandwidth-bound (228 GB/s ceiling).
+- **`ggml_gated_delta_net_tree_persist` skips a 9 ms `ggml_cpy`/step (+11%).**
+  Pattern: avoid re-materializing persistent state. Applies whenever we
+  hold SSM/tree state across verify steps.
+- **D2D target_feat copy removed a GPU→CPU→GPU roundtrip (+3.3%).** On
+  RTX 3090 that was a PCIe DMA. Our architectural equivalent is the
+  OpenCL buffer-model cost diagnosed in session 4 (see "Unified memory
+  vs zero-copy" below).
+- **Tree-aware `ggml_ssm_conv_tree`**: sibling nodes gather along parent
+  chain, not DFS order. Same idea applies to tree-verify attention masks
+  on any backend; SGLang has the same pattern in `causal_conv1d_triton`.
+- **Silent `verify_logits_buf` overflow**: sized `vocab * q_len`, but DDTree
+  reads `vocab * (budget + 1)` past budget 15. Watch for this when we
+  port: one-line fix, but the failure mode is memory corruption with no
+  crash.
+
+**When to revisit:**
+
+- Phase 3 (EAGLE-3 viability check): skim `dflash_graph.h` + the chain-vs-
+  tree AL numbers in `RESULTS.md` to calibrate expectations before sinking
+  time into the EAGLE-3 PR.
+- Phase 4 (DFlash port to Adreno/Hexagon): `qwen3_dflash_graph.cpp` +
+  `safetensors_draft.cpp` are the starting point. Their graph calls into
+  ggml directly — so the port effort is mostly "replace CUDA kernels with
+  OpenCL / Hexagon equivalents" rather than "reimplement graph."
+- Phase 5 (NPU drafting): read how they structure the draft-verify
+  handoff. The D2D optimization is what we'd want to beat with
+  shared-LPDDR zero-copy between NPU and GPU.
+- Any discussion of performance-engineering tactics in the project: the
+  day-by-day log in their article is a checklist of specific things to
+  watch for.
+
+## Unified memory vs zero-copy — the buffer-model aside
+
+Relevant because session 4 mixed-device runs showed 0.37× regression on
+k=3 spec decode, and the lucebox paper's top perf win was eliminating a
+GPU→CPU→GPU PCIe round-trip. On Snapdragon X2, CPU + Adreno + Hexagon all
+share the same LPDDR5X (228 GB/s). **The PCIe DMA the paper fixed doesn't
+exist for us — but a different, smaller version of the cost does.**
+
+What's actually happening in ggml-opencl (verified by reading
+`llama.cpp/ggml/src/ggml-opencl/ggml-opencl.cpp`, ~20 call sites):
+
+- All buffers allocated with plain `clCreateBuffer(context,
+  CL_MEM_READ_WRITE, size, NULL, ...)`. No `CL_MEM_USE_HOST_PTR`,
+  no `clSVMAlloc`, no `cl_qcom_ion_host_ptr`.
+- That means the Qualcomm OpenCL driver is free to place the buffer in a
+  cached-on-GPU region. `enqueueWriteBuffer` / `enqueueReadBuffer` then
+  incur cache-flush on source + driver memcpy + cache-invalidate on
+  destination, even though the underlying RAM is physically shared.
+- `cl_qcom_large_buffer` is already detected in the backend
+  (`ggml-opencl.cpp:3177`), but is a different feature (extends max
+  buffer size past 4 GB), gated by `GGML_OPENCL_ADRENO_USE_LARGE_BUFFER=1`.
+
+Paths to recover "true" zero-copy on this hardware:
+
+1. `CL_MEM_USE_HOST_PTR` with aligned host allocation — eliminates the
+   driver memcpy, still pays cache maintenance.
+2. OpenCL 2.0 SVM (`clSVMAlloc`) — single pointer valid on both sides,
+   lowest overhead path. Adreno supports it.
+3. `cl_qcom_ion_host_ptr` (ION-backed buffers) — the vendor-native
+   zero-copy path, what QAIRT uses to share buffers between GPU and DSP.
+
+The per-call kernel-launch overhead on Adreno is probably the bigger
+cost at k=3 verify batches (4-token workloads don't amortize dispatch);
+memory-transfer noise is second-order but not zero. A ground-up runtime
+(trident-style Zig, or a lucebox-style standalone C++ harness) would
+let us pick one of (1)–(3) as an allocation invariant rather than
+fighting llama.cpp's opaque backend dispatch per op.
+
+This is an open optimization lane, not something to do before Phase 4–5
+lands. Flagging it here so the lane is visible.
+
 ## Summary table
 
 | Project       | Owns                                         | Unlocks specula phase |
@@ -110,3 +238,4 @@ choosing model / quant / KV-cache config for a workload.
 | gguf_models   | CPU llama.cpp build recipe, CPU ceiling      | 0, 1                  |
 | trident       | Oryon CPU kernel notes, NPU postmortems      | 1, 4, 5               |
 | voice_project | Working QNN/AI-Hub pipeline to Hexagon       | 5                     |
+| lucebox-hub   | Reference DFlash+DDTree impl, perf playbook  | 3, 4                  |

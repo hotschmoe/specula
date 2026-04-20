@@ -131,21 +131,33 @@ draft Qwen3-0.6B-Q8_0, greedy (temp=0), `--draft-min 0`, `-n 256`,
 The 1.6× ceiling observed here is the *draft-model* spec ceiling on
 this hardware. The negative OpenCL results redirect the research plan:
 
-- **DFlash (Phase 4) is better positioned than EAGLE-3 (Phase 3) for
-  this hardware.** DFlash generates K tokens in parallel in one pass,
-  producing a K-fat verify batch. That directly attacks the OpenCL
-  per-call overhead observed here. EAGLE-3's value is higher accept,
-  which our data shows is *not* the binding constraint.
-- **NPU drafting (Phase 5) becomes more important.** Hexagon and
-  Adreno share LPDDR; an NPU-drafted block can be consumed by Adreno
-  without the CPU↔GPU DMA round-trip that torpedoed mixed-device
-  here. Also, NPU draft in parallel with GPU verify converts the
-  per-round sync into pipelined overlap.
+- **DFlash+DDTree (Phase 4) is the primary lever.** Confirmed by the
+  lucebox-hub RTX 3090 paper (see `new_spec_decode_example_to_research.md`
+  and `docs/reference-projects.md`): AL ≈ 8.9 and 3.43× with block-
+  diffusion draft into tree verify. It attacks both binding axes -- K
+  tokens drafted in one pass AND K-fat verify batches -- exactly matching
+  the two constraints session 4 measured.
+- **EAGLE-3 (Phase 3) becomes a viability probe, not an anchor.** It
+  touches only the accept-rate axis. Cheap to try because the PR exists,
+  but unlikely to beat the overhead ceiling alone. Plan: build the PR
+  on CPU + OpenCL, run one sweep, decision-gate on ≥2×.
+- **NPU drafting (Phase 5) becomes more important.** Hexagon and Adreno
+  share LPDDR; an NPU-drafted block can be consumed by Adreno without
+  the CPU↔GPU DMA round-trip that torpedoed mixed-device here. Also,
+  NPU draft in parallel with GPU verify converts the per-round sync
+  into pipelined overlap. The lucebox paper's top-3 perf wins included
+  exactly that class of optimisation on PCIe (D2D copy, +3.3%).
 - **CPU speculative is the working baseline to contribute upstream.**
   1.55× on code, 1.58× on JSON, stable, clean. llama.cpp's Adreno
   spec story is currently worse than CPU-alone; the data above is
   probably worth a docs/discussion contribution even before new
   techniques land.
+- **Unified-memory / buffer-model optimisation is a latent lane.**
+  ggml-opencl uses plain `clCreateBuffer(CL_MEM_READ_WRITE)` with no
+  zero-copy flags -- Snapdragon X2's shared LPDDR5X is available but
+  not exploited. See `docs/reference-projects.md` ("Unified memory vs
+  zero-copy") for the breakdown. Not blocking any phase yet, but may
+  matter if we build a custom runtime (trident/lucebox-style) later.
 
 ### Input artefacts
 
@@ -298,6 +310,18 @@ mixed-device at 3 k values, OpenCL-all at 2 k values.
    spec-decode story (no win at any k or placement) is non-obvious and
    currently undocumented in llama.cpp discussions. Draft a
    docs/discussion post with the numbers from session 4.
+
+### Phase 3/4 preview (post-Phase-2 wrap)
+
+6. **EAGLE-3 viability probe.** Build llama.cpp PR #18039 for CPU +
+   OpenCL, run one humaneval sweep. Decision gate: ≥2× continues the
+   integration; <2× archives it and hands off to Phase 4. Do not port
+   the full PR before the probe.
+7. **Start DFlash port planning** by reading `lucebox-hub/dflash/src/`
+   (sibling checkout at `C:\Users\hotschmoe\Documents\GitHub\lucebox-hub`).
+   Pin down: scope of a Qwen3-8B pure-attention DFlash drafter,
+   expected CUDA→OpenCL kernel translation effort, DDTree verify graph
+   as a reusable component. No code yet -- this is scoping.
 
 ### Deferred / answered
 

@@ -123,29 +123,67 @@ Workloads sweep over: HumanEval code completion (high-acceptance regime),
 JSON generation (very high acceptance, ngram sweet spot), long prose
 (low-acceptance regime), multi-turn chat (mixed).
 
-### Phase 3 — EAGLE-3 validation
+### Phase 3 — EAGLE-3 validation (priority revised after session 4 + lucebox paper)
+
+Session 4 CPU/OpenCL data shows our 8B+0.6B chain-speculative ceiling is
+~1.6×, overhead-bound not accept-bound. The lucebox-hub DFlash+DDTree port
+(see `docs/reference-projects.md`, `new_spec_decode_example_to_research.md`)
+hits AL ≈ 8.9 and 3.43× on RTX 3090 by stacking *two* axes: a block-
+diffusion drafter (higher accept) AND tree-verify (bigger verify batches
+per round). EAGLE-3 only touches the accept axis, so it won't break our
+ceiling by itself — but it's still cheaper to try first than DFlash, and
+tree-verify in EAGLE-3 is informative for the DFlash port.
 
 - [ ] Check out llama.cpp PR #18039 branch
-- [ ] Build for Adreno/Hexagon
+- [ ] **Quick viability build** for CPU + OpenCL (~1 day). Before
+  committing to a full port, confirm the PR builds on ARM64 / Adreno
+  at all.
 - [ ] Validate `GGML_TENSOR_FLAG_SYNC` semantics on non-CUDA backends
   (this is where the port is most likely to silently break)
-- [ ] Benchmark against Phase 2 baselines
-- [ ] File issues / contribute fixes upstream
+- [ ] If it builds: one sweep on Phase-2's humaneval fixture at the best
+  EAGLE-3 tree-budget. **Decision gate:** if EAGLE-3 clears 2×
+  end-to-end, continue the integration work. If it's stuck near our
+  1.6× ceiling, archive findings and move to DFlash — the accept-only
+  axis won't beat the overhead ceiling.
+- [ ] File issues / contribute fixes upstream (build fixes are
+  contribution-worthy regardless of our perf outcome)
 
-### Phase 4 — DFlash port
+### Phase 4 — DFlash + DDTree port (primary Phase-3+ lever)
 
 DFlash is the current spec-decode SOTA on acceptance rate: block-diffusion
-drafter generates K tokens in parallel, conditioned on target hidden states.
-No llama.cpp implementation exists. Pieces required:
+drafter generates K tokens in parallel in one forward pass. Combined with
+DDTree tree-verify, the lucebox-hub port reaches AL ≈ 8.9 and 3.43× on
+consumer GPU. No llama.cpp implementation exists.
+
+The session-4 data says this is the phase most likely to actually break
+our ceiling — it attacks both the accept-rate axis (K tokens drafted in
+one pass) AND the verify-batch axis (tree, not chain), which exactly
+matches the two binding constraints we measured.
+
+Reference implementation to mine: `lucebox-hub/dflash/src/` (sibling
+checkout, see `docs/reference-projects.md`). ~2000 LOC C++/ggml/CUDA,
+MIT-licensed, structured as graph glue that links libggml but not libllama.
+Porting plan converts kernels (CUDA → OpenCL/Hexagon) but reuses the graph.
+
+Pieces required:
 
 - [ ] New `LLM_ARCH_DFLASH_QWEN` in `convert_hf_to_gguf.py`
 - [ ] GGUF converter for z-lab's drafter weights
-  (`z-lab/Qwen3-8B-DFlash-b16` etc.)
+  (`z-lab/Qwen3-8B-DFlash-b16` etc.). Note: lucebox-hub ships a
+  `safetensors_draft.cpp` loader that skips GGUF entirely — an
+  alternative route if the converter proves painful.
 - [ ] Block-diffusion forward pass (~4 denoising iterations)
 - [ ] Hidden-state tap at configured target layers
   (shared plumbing with EAGLE-3; watch PR #18039)
+- [ ] DDTree verifier (tree attention mask, sibling-aware conv gather,
+  `target_feat` compaction after sibling accept — see lucebox-hub day-by-day
+  log for landmines)
 - [ ] KV cache rollback on rejection — pure-attention Qwen3 is just length
   truncation; Qwen3.5 hybrid is harder (tape-replay à la bstnxbt/dflash-mlx)
+- [ ] `verify_logits_buf` sized `vocab * (budget + 1)`, not `vocab * q_len`
+  — the silent-corruption bug lucebox-hub caught, transcribe it
+- [ ] Optional stretch: Q4_0 KV cache on whichever backend we land on,
+  to match their 128K-on-24GB story on Adreno (long-context use case)
 
 ### Phase 5 — NPU-accelerated drafting (novel)
 
