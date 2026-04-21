@@ -1,0 +1,231 @@
+[2026-04-21T03:05:06.083+00:00] [INFO] Compiling model ID mn1goxe4n
+[2026-04-21T03:05:06.084+00:00] [INFO] [compile-pre-compile] Memory: 3.5GiB / 40.0GiB (9%) | working_set: 647.6MiB | peak: 6.9GiB
+[2026-04-21T03:05:13.915+00:00] [INFO] -=- Converting ONNX graph: decompose GeLU layers -=-
+[2026-04-21T03:05:14.346+00:00] [INFO] Applying ONNX IR shape inference
+[2026-04-21T03:05:16.656+00:00] [INFO] Applying ONNX IR rewriter with rules
+[2026-04-21T03:05:28.475+00:00] [INFO] Ran 36 passes, 6 triggered
+[2026-04-21T03:05:28.476+00:00] [INFO] Passes triggered:
+[2026-04-21T03:05:28.507+00:00] [INFO] +------------------------------------+----------+
+[2026-04-21T03:05:28.507+00:00] [INFO] | Pass Name                          | Triggers |
+[2026-04-21T03:05:28.507+00:00] [INFO] +------------------------------------+----------+
+[2026-04-21T03:05:28.507+00:00] [INFO] | OverrideFoldConstantsPass          |        2 |
+[2026-04-21T03:05:28.507+00:00] [INFO] | RewritePass                        |        1 |
+[2026-04-21T03:05:28.507+00:00] [INFO] | LiftConstantsToInitializersPass    |        1 |
+[2026-04-21T03:05:28.507+00:00] [INFO] | DeduplicateInitializersPass        |        1 |
+[2026-04-21T03:05:28.507+00:00] [INFO] | CommonSubexpressionEliminationPass |        1 |
+[2026-04-21T03:05:28.507+00:00] [INFO] +------------------------------------+----------+
+[2026-04-21T03:05:28.511+00:00] [INFO] Model metrics comparison:
+[2026-04-21T03:05:28.512+00:00] [INFO] +-----------------+--------+--------+-----------+
+[2026-04-21T03:05:28.512+00:00] [INFO] | Metric          | Before |  After |     Delta |
+[2026-04-21T03:05:28.512+00:00] [INFO] +-----------------+--------+--------+-----------+
+[2026-04-21T03:05:28.512+00:00] [INFO] | Op count        |   7667 |   2237 |     [32m-5430[0m |
+[2026-04-21T03:05:28.512+00:00] [INFO] | Model size      | 2.8GiB | 2.8GiB | [32m-525.3KiB[0m |
+[2026-04-21T03:05:28.512+00:00] [INFO] | Add             |    256 |    253 |        [32m-3[0m |
+[2026-04-21T03:05:28.512+00:00] [INFO] | And             |      2 |      1 |        [32m-1[0m |
+[2026-04-21T03:05:28.512+00:00] [INFO] | Cast            |    351 |      2 |      [32m-349[0m |
+[2026-04-21T03:05:28.512+00:00] [INFO] | Concat          |    340 |    113 |      [32m-227[0m |
+[2026-04-21T03:05:28.513+00:00] [INFO] | Constant        |   2759 |      0 |     [32m-2759[0m |
+[2026-04-21T03:05:28.513+00:00] [INFO] | ConstantOfShape |     59 |      0 |       [32m-59[0m |
+[2026-04-21T03:05:28.513+00:00] [INFO] | Cos             |      1 |      1 |        +0 |
+[2026-04-21T03:05:28.513+00:00] [INFO] | Div             |    169 |    113 |       [32m-56[0m |
+[2026-04-21T03:05:28.513+00:00] [INFO] | Equal           |     58 |      0 |       [32m-58[0m |
+[2026-04-21T03:05:28.513+00:00] [INFO] | Expand          |     58 |     57 |        [32m-1[0m |
+[2026-04-21T03:05:28.513+00:00] [INFO] | Flatten         |      1 |      0 |        [32m-1[0m |
+[2026-04-21T03:05:28.513+00:00] [INFO] | Gather          |    372 |      2 |      [32m-370[0m |
+[2026-04-21T03:05:28.513+00:00] [INFO] | IsNaN           |     28 |     28 |        +0 |
+[2026-04-21T03:05:28.513+00:00] [INFO] | LessOrEqual     |      1 |      0 |        [32m-1[0m |
+[2026-04-21T03:05:28.513+00:00] [INFO] | MatMul          |    254 |    254 |        +0 |
+[2026-04-21T03:05:28.513+00:00] [INFO] | Mul             |    567 |    450 |      [32m-117[0m |
+[2026-04-21T03:05:28.513+00:00] [INFO] | Neg             |     56 |     56 |        +0 |
+[2026-04-21T03:05:28.513+00:00] [INFO] | Pow             |    113 |    113 |        +0 |
+[2026-04-21T03:05:28.513+00:00] [INFO] | Range           |      3 |      0 |        [32m-3[0m |
+[2026-04-21T03:05:28.513+00:00] [INFO] | ReduceMean      |    113 |    113 |        +0 |
+[2026-04-21T03:05:28.513+00:00] [INFO] | Reshape         |    228 |    170 |       [32m-58[0m |
+[2026-04-21T03:05:28.513+00:00] [INFO] | Shape           |    429 |      0 |      [32m-429[0m |
+[2026-04-21T03:05:28.514+00:00] [INFO] | Sigmoid         |     28 |     28 |        +0 |
+[2026-04-21T03:05:28.514+00:00] [INFO] | Sin             |      1 |      1 |        +0 |
+[2026-04-21T03:05:28.514+00:00] [INFO] | Slice           |    140 |    112 |       [32m-28[0m |
+[2026-04-21T03:05:28.514+00:00] [INFO] | Softmax         |     28 |     28 |        +0 |
+[2026-04-21T03:05:28.514+00:00] [INFO] | Sqrt            |    113 |    113 |        +0 |
+[2026-04-21T03:05:28.514+00:00] [INFO] | Transpose       |    141 |    141 |        +0 |
+[2026-04-21T03:05:28.514+00:00] [INFO] | Unsqueeze       |    884 |     59 |      [32m-825[0m |
+[2026-04-21T03:05:28.514+00:00] [INFO] | Where           |    114 |     29 |       [32m-85[0m |
+[2026-04-21T03:05:28.514+00:00] [INFO] +-----------------+--------+--------+-----------+
+[2026-04-21T03:06:05.036+00:00] [INFO] Memory: 12.8GiB / 40.0GiB (32%) | working_set: 10.5GiB | peak: 16.2GiB
+[2026-04-21T03:06:42.992+00:00] [INFO] Saving model
+[2026-04-21T03:06:43.368+00:00] [INFO] Uploading asset to https://tetrahub-qprod-userdata.s3.amazonaws.com/models/mn7voy78n_i7BeYtbs1jQO3E9P.onnx.zip?uploadId=rlI1bl_aVGecTKg4Em5q9Cd4PenoL_0fwjPfxCyu9N31DKX.O5u_2.UmVdZASZosGh8SNfxHbnqigXAGtMYcm9N1rukYg99hvDvP4w3FD063nrsUQONXyXUOwANu4LJD&partNumber=1&AWSAccessKeyId=AKIAY25OF7UJU4ZXEREI&Signature=8Oxd9oq1kAg
+[2026-04-21T03:06:52.723+00:00] [INFO] Successfully uploaded asset with response status: 200
+[2026-04-21T03:06:52.724+00:00] [INFO] Uploading asset to https://tetrahub-qprod-userdata.s3.amazonaws.com/models/mn7voy78n_i7BeYtbs1jQO3E9P.onnx.zip?uploadId=rlI1bl_aVGecTKg4Em5q9Cd4PenoL_0fwjPfxCyu9N31DKX.O5u_2.UmVdZASZosGh8SNfxHbnqigXAGtMYcm9N1rukYg99hvDvP4w3FD063nrsUQONXyXUOwANu4LJD&partNumber=2&AWSAccessKeyId=AKIAY25OF7UJU4ZXEREI&Signature=ZmD%2BH9gaD
+[2026-04-21T03:06:57.010+00:00] [INFO] Successfully uploaded asset with response status: 200
+[2026-04-21T03:07:00.028+00:00] [INFO] Uploading asset to https://tetrahub-qprod-userdata.s3-accelerate.amazonaws.com/
+[2026-04-21T03:07:00.131+00:00] [INFO] Successfully uploaded asset with response status: 204
+[2026-04-21T03:07:00.131+00:00] [INFO] Successfully computed visualization graph for mn7voy78n
+[2026-04-21T03:07:00.365+00:00] [INFO] =================================== Run compile_to_qnn_dlc =================================== 
+[2026-04-21T03:07:00.368+00:00] [INFO] Applying HTP-specific optimizations
+[2026-04-21T03:07:05.208+00:00] [INFO] Memory: 15.5GiB / 40.0GiB (39%) | working_set: 12.6GiB | peak: 18.3GiB
+[2026-04-21T03:07:06.862+00:00] [INFO] -=- ONNX to QNN DLC (qairt-converter) -=-
+[2026-04-21T03:07:06.862+00:00] [INFO] Running /tetra/qairt_env/default/2.45.0/bin/python3 /qairt_sdk/default/2.45.0/bin/x86_64-linux-clang/qairt-converter --input_network /tmp/tmp01q8v7l6/tmp44kocxso.onnx --output_path /tmp/tmp01q8v7l6/graph_qggj6o62.dlc --preserve_io_datatype past_key_values.0.key past_key_values.0.value past_key_values.1.key past_key_values.1.value past_key_values.2.key past_key_values.2.value past_key_values.3.key past_key_values.3.value past_key_values.4.key past_key_values.4.value past_key_values.5.key past_key_values.5.value past_key_values.6.key past_key_values.6.value past_key_values.7.key past_key_values.7.value past_key_values.8.key past_key_values.8.value past_key_values.9.key past_key_values.9.value past_key_values.10.key past_key_values.10.value past_key_values.11.key past_key_values.11.value past_key_values.12.key past_key_values.12.value past_key_values.13.key past_key_values.13.value past_key_values.14.key past_key_values.14.value past_key_values.15.key past_key_values.15.value past_key_values.16.key past_key_values.16.value past_key_values.17.key past_key_values.17.value past_key_values.18.key past_key_values.18.value past_key_values.19.key past_key_values.19.value past_key_values.20.key past_key_values.20.value past_key_values.21.key past_key_values.21.value past_key_values.22.key past_key_values.22.value past_key_values.23.key past_key_values.23.value past_key_values.24.key past_key_values.24.value past_key_values.25.key past_key_values.25.value past_key_values.26.key past_key_values.26.value past_key_values.27.key past_key_values.27.value output_0 output_1 output_2 output_3 output_4 output_5 output_6 output_7 output_8 output_9 output_10 output_11 output_12 output_13 output_14 output_15 output_16 output_17 output_18 output_19 output_20 output_21 output_22 output_23 output_24 output_25 output_26 output_27 output_28 output_29 output_30 output_31 output_32 output_33 output_34 output_35 output_36 output_37 output_38 output_39 output_40 output_41 output_42 output_43 output_44 output_45 output_46 output_47 output_48 output_49 output_50 output_51 output_52 output_53 output_54 output_55 output_56 --preserve_io_datatype past_key_values.0.key past_key_values.0.value past_key_values.1.key past_key_values.1.value past_key_values.2.key past_key_values.2.value past_key_values.3.key past_key_values.3.value past_key_values.4.key past_key_values.4.value past_key_values.5.key past_key_values.5.value past_key_values.6.key past_key_values.6.value past_key_values.7.key past_key_values.7.value past_key_values.8.key past_key_values.8.value past_key_values.9.key past_key_values.9.value past_key_values.10.key past_key_values.10.value past_key_values.11.key past_key_values.11.value past_key_values.12.key past_key_values.12.value past_key_values.13.key past_key_values.13.value past_key_values.14.key past_key_values.14.value past_key_values.15.key past_key_values.15.value past_key_values.16.key past_key_values.16.value past_key_values.17.key past_key_values.17.value past_key_values.18.key past_key_values.18.value past_key_values.19.key past_key_values.19.value past_key_values.20.key past_key_values.20.value past_key_values.21.key past_key_values.21.value past_key_values.22.key past_key_values.22.value past_key_values.23.key past_key_values.23.value past_key_values.24.key past_key_values.24.value past_key_values.25.key past_key_values.25.value past_key_values.26.key past_key_values.26.value past_key_values.27.key past_key_values.27.value output_0 output_1 output_2 output_3 output_4 output_5 output_6 output_7 output_8 output_9 output_10 output_11 output_12 output_13 output_14 output_15 output_16 output_17 output_18 output_19 output_20 output_21 output_22 output_23 output_24 output_25 output_26 output_27 output_28 output_29 output_30 output_31 output_32 output_33 output_34 output_35 output_36 output_37 output_38 output_39 output_40 output_41 output_42 output_43 output_44 output_45 output_46 output_47 output_48 output_49 output_50 output_51 output_52 output_53 output_54 output_55 output_56 --preserve_onnx_output_order
+[2026-04-21T03:07:07.586+00:00] [INFO] 2026-04-21 03:07:07,585 - 278 - INFO - INFO_INITIALIZATION_SUCCESS: 
+[2026-04-21T03:07:07.779+00:00] [INFO] 2026-04-21 03:07:07,779 - 283 - WARNING - Unable to register converter supported Operation [Inverse:Version 1] with your Onnx installation. Converter will bail if Model contains this Op.
+[2026-04-21T03:07:07.785+00:00] [INFO] 2026-04-21 03:07:07,785 - 283 - WARNING - Unable to register converter supported Operation [RMSNormalization:Version 23] with your Onnx installation. Converter will bail if Model contains this Op.
+[2026-04-21T03:07:07.792+00:00] [INFO] 2026-04-21 03:07:07,792 - 283 - WARNING - Unable to register converter supported Operation [RotaryEmbedding:Version 23] with your Onnx installation. Converter will bail if Model contains this Op.
+[2026-04-21T03:07:07.963+00:00] [INFO] 2026-04-21 03:07:07,963 - 283 - WARNING - --desired_input_shape and -d are deprecated. Use --source_model_input_shape or -s for achieving this functionality
+[2026-04-21T03:07:07.963+00:00] [INFO] 2026-04-21 03:07:07,963 - 278 - INFO - Input shape info 
+[2026-04-21T03:07:10.586+00:00] [INFO] 2026-04-21 03:07:10,586 - 283 - WARNING - Symbolic shape inference Failed. Exception: Onnxruntime package not found in current environment. Symbolic Shape Inference will be skipped.. Running normal shape inference.
+[2026-04-21T03:07:11.128+00:00] [INFO] 2026-04-21 03:07:11,128 - 283 - WARNING - Onnx model simplification failed due to: No module named 'onnxsim'
+[2026-04-21T03:07:11.128+00:00] [INFO] 2026-04-21 03:07:11,128 - 283 - WARNING - Simplified model validation failed
+[2026-04-21T03:07:11.372+00:00] [INFO] 2026-04-21 03:07:11,371 - 283 - WARNING - Onnx model simplification failed due to: No module named 'onnxsim'
+[2026-04-21T03:07:11.372+00:00] [INFO] 2026-04-21 03:07:11,372 - 283 - WARNING - Simplified model validation failed
+[2026-04-21T03:07:11.676+00:00] [INFO] 2026-04-21 03:07:11,676 - 283 - WARNING - Only numerical type cast is supported. The cast op: /model/Cast_2 will be interpreted at conversion time
+[2026-04-21T03:07:11.684+00:00] [INFO] 2026-04-21 03:07:11,684 - 283 - WARNING - Only numerical type cast is supported. The cast op: /model/rotary_emb/Cast_1 will be interpreted at conversion time
+[2026-04-21T03:07:14.488+00:00] [INFO] 2026-04-21 03:07:14,488 - 283 - WARNING - Unused Input nodes found: []
+[2026-04-21T03:07:31.295+00:00] [INFO] 2026-04-21 03:07:31,295 - 278 - INFO - INFO_INITIALIZATION_SUCCESS: 
+[2026-04-21T03:07:31.839+00:00] [INFO] handleReshapeOp: Squash Reshape Op: /lm_head/MatMul_post_reshape_identity due to IdentityOp. Input shape: IrTensorShape(dims = [1,1,151936] , dy_axes=[]), shape after IrTensorShape(dims = [1,1,151936] , dy_axes=[])
+[2026-04-21T03:07:31.854+00:00] [INFO] reEvalMacsParams: Re-evaluated graph statistics after IrOptimizer optimization passes:
+[2026-04-21T03:07:31.854+00:00] [INFO] reEvalMacsParams: Total MACs: 638362625
+[2026-04-21T03:07:31.854+00:00] [INFO] reEvalMacsParams: Total Params Count: 595984384
+[2026-04-21T03:07:41.262+00:00] [INFO] 2026-04-21 03:07:41,262 - 278 - INFO - INFO_CONVERSION_SUCCESS: Conversion completed successfully
+[2026-04-21T03:08:05.269+00:00] [INFO] Memory: 26.4GiB / 40.0GiB (66%) | working_set: 20.7GiB | peak: 26.4GiB
+[2026-04-21T03:08:09.965+00:00] [INFO] 2026-04-21 03:08:09,965 - 278 - INFO - INFO_WRITE_SUCCESS: 
+[2026-04-21T03:08:10.762+00:00] [INFO] -=- Generating .json file from .dlc model (qairt-dlc-to-json) -=-
+[2026-04-21T03:08:10.763+00:00] [INFO] Running /qairt_sdk/default/2.45.0/bin/x86_64-linux-clang/qairt-dlc-to-json -i /tmp/tmpdui1sa4m.dlc -o /tmp/tmp1w4xqbdr.json
+[2026-04-21T03:08:10.947+00:00] [INFO] Model Json saved at: /tmp/tmp1w4xqbdr.json
+[2026-04-21T03:08:11.121+00:00] [INFO] -=- Generating .json file from .dlc model (qairt-dlc-to-json) -=-
+[2026-04-21T03:08:11.122+00:00] [INFO] Running /qairt_sdk/default/2.45.0/bin/x86_64-linux-clang/qairt-dlc-to-json -i /tmp/tmpdui1sa4m.dlc -o /tmp/tmpxzojgmnt.json
+[2026-04-21T03:08:11.296+00:00] [INFO] Model Json saved at: /tmp/tmpxzojgmnt.json
+[2026-04-21T03:08:11.337+00:00] [INFO] Saving model
+[2026-04-21T03:08:11.771+00:00] [INFO] Uploading asset to https://tetrahub-qprod-userdata.s3.amazonaws.com/models/mn4je63vn_2Ip1pVcTJYlJNchV.dlc?uploadId=rxsIroDLgMFbj5OeA1JRxnlHNVybS9fvCunMQyTuFN46_Fn1gUUtNhoyJhVHZMKuxYBKKkDqwbkAiO.BOvb9YFqIlRVXGprFGe871AOxntZbwyNRA4_HtSFNwb41pZ.5&partNumber=1&AWSAccessKeyId=AKIAY25OF7UJU4ZXEREI&Signature=ieiIf9u3piYbE45m
+[2026-04-21T03:08:21.145+00:00] [INFO] Successfully uploaded asset with response status: 200
+[2026-04-21T03:08:21.146+00:00] [INFO] Uploading asset to https://tetrahub-qprod-userdata.s3.amazonaws.com/models/mn4je63vn_2Ip1pVcTJYlJNchV.dlc?uploadId=rxsIroDLgMFbj5OeA1JRxnlHNVybS9fvCunMQyTuFN46_Fn1gUUtNhoyJhVHZMKuxYBKKkDqwbkAiO.BOvb9YFqIlRVXGprFGe871AOxntZbwyNRA4_HtSFNwb41pZ.5&partNumber=2&AWSAccessKeyId=AKIAY25OF7UJU4ZXEREI&Signature=xBJ9tRI%2FiZzonp
+[2026-04-21T03:08:30.477+00:00] [INFO] Successfully uploaded asset with response status: 200
+[2026-04-21T03:08:30.478+00:00] [INFO] Uploading asset to https://tetrahub-qprod-userdata.s3.amazonaws.com/models/mn4je63vn_2Ip1pVcTJYlJNchV.dlc?uploadId=rxsIroDLgMFbj5OeA1JRxnlHNVybS9fvCunMQyTuFN46_Fn1gUUtNhoyJhVHZMKuxYBKKkDqwbkAiO.BOvb9YFqIlRVXGprFGe871AOxntZbwyNRA4_HtSFNwb41pZ.5&partNumber=3&AWSAccessKeyId=AKIAY25OF7UJU4ZXEREI&Signature=5MzZfNq%2BzA7TRB
+[2026-04-21T03:08:37.984+00:00] [INFO] Successfully uploaded asset with response status: 200
+[2026-04-21T03:08:38.304+00:00] [INFO] -=- Generating .json file from .dlc model (qairt-dlc-to-json) -=-
+[2026-04-21T03:08:38.304+00:00] [INFO] Running /qairt_sdk/default/2.45.0/bin/x86_64-linux-clang/qairt-dlc-to-json -i /tmp/tmpdui1sa4m.dlc -o /tmp/tmpf99ewt4_.json
+[2026-04-21T03:08:38.481+00:00] [INFO] Model Json saved at: /tmp/tmpf99ewt4_.json
+[2026-04-21T03:08:38.770+00:00] [INFO] Uploading asset to https://tetrahub-qprod-userdata.s3-accelerate.amazonaws.com/
+[2026-04-21T03:08:38.924+00:00] [INFO] Successfully uploaded asset with response status: 204
+[2026-04-21T03:08:38.924+00:00] [INFO] Successfully computed visualization graph for mn4je63vn
+[2026-04-21T03:08:38.924+00:00] [INFO] Graph name: graph_qggj6o62
+[2026-04-21T03:08:38.926+00:00] [INFO] -=- QNN DLC models to QNN Context Binary (qnn-context-binary-generator) -=-
+[2026-04-21T03:08:38.926+00:00] [INFO] Contents of HTP Settings: {'context': {'weight_sharing_enabled': False}, 'devices': [{'device_id': 0, 'dsp_arch': 'v81', 'soc_model': 88}], 'graphs': [{'fp16_relaxed_precision': 1, 'vtcm_mb': 0, 'O': 3.0, 'graph_names': ['graph_qggj6o62']}]}
+[2026-04-21T03:08:38.926+00:00] [INFO] Contents of HTP Config file used: {'context_configs': {'enable_graphs': ['graph_qggj6o62']}, 'graph_configs': [{'graph_name': 'graph_qggj6o62'}], 'backend_extensions': {'shared_library_path': 'libQnnHtpNetRunExtensions.so', 'config_file_path': '/tmp/tmpnsmq6w3p/htp_setting.json'}}
+[2026-04-21T03:08:38.926+00:00] [INFO] Running /qairt_sdk/default/2.45.0/bin/x86_64-linux-clang/qnn-context-binary-generator --backend /qairt_sdk/default/2.45.0/lib/x86_64-linux-clang/libQnnHtp.so --dlc_path /tmp/tmpdui1sa4m.dlc --output_dir /tmp/tmpnsmq6w3p --binary_file qnn_model --config_file /tmp/tmpnsmq6w3p/htp_context.json --profiling_level detailed --profiling_option optrace
+[2026-04-21T03:08:38.928+00:00] [INFO] qnn-context-binary-generator pid:68
+[2026-04-21T03:08:39.329+00:00] [INFO]  <W> Initializing HtpProvider
+[2026-04-21T03:08:39.330+00:00] [INFO]    400.6ms 
+[2026-04-21T03:08:39.330+00:00] [INFO] [ ERROR ]  <E> Unsupported input/output datatypes requested for the HTP Op 'Gather' in the node '/model/Gather_5'. There is a mismatch for the combination of inputs and outputs.
+[2026-04-21T03:08:39.330+00:00] [INFO]    400.6ms 
+[2026-04-21T03:08:39.330+00:00] [INFO] [ ERROR ]  <E> Requested I/O datatype set:
+[2026-04-21T03:08:39.330+00:00] [INFO]    in[0]:QNN_DATATYPE_BOOL_8
+[2026-04-21T03:08:39.330+00:00] [INFO]    in[1]:QNN_DATATYPE_INT_32
+[2026-04-21T03:08:39.330+00:00] [INFO]    out[0]:QNN_DATATYPE_BOOL_8
+[2026-04-21T03:08:39.330+00:00] [INFO]    400.6ms 
+[2026-04-21T03:08:39.330+00:00] [INFO] [ ERROR ]  <E> Supported I/O datatype sets for the configuration: BF16
+[2026-04-21T03:08:39.330+00:00] [INFO]    1:
+[2026-04-21T03:08:39.330+00:00] [INFO]    in[0]:QNN_DATATYPE_BFLOAT_16
+[2026-04-21T03:08:39.330+00:00] [INFO]    in[1]:QNN_DATATYPE_UINT_32
+[2026-04-21T03:08:39.331+00:00] [INFO]    out[0]:QNN_DATATYPE_BFLOAT_16
+[2026-04-21T03:08:39.331+00:00] [INFO]    2:
+[2026-04-21T03:08:39.331+00:00] [INFO]    in[0]:QNN_DATATYPE_BFLOAT_16
+[2026-04-21T03:08:39.331+00:00] [INFO]    in[1]:QNN_DATATYPE_INT_32
+[2026-04-21T03:08:39.331+00:00] [INFO]    out[0]:QNN_DATATYPE_BFLOAT_16
+[2026-04-21T03:08:39.331+00:00] [INFO]    400.6ms 
+[2026-04-21T03:08:39.331+00:00] [INFO] [ ERROR ]  <E> Supported I/O datatype sets for the configuration: FP16
+[2026-04-21T03:08:39.331+00:00] [INFO]    1:
+[2026-04-21T03:08:39.331+00:00] [INFO]    in[0]:QNN_DATATYPE_FLOAT_16
+[2026-04-21T03:08:39.331+00:00] [INFO]    in[1]:QNN_DATATYPE_UINT_32
+[2026-04-21T03:08:39.331+00:00] [INFO]    out[0]:QNN_DATATYPE_FLOAT_16
+[2026-04-21T03:08:39.331+00:00] [INFO]    2:
+[2026-04-21T03:08:39.332+00:00] [INFO]    in[0]:QNN_DATATYPE_FLOAT_16
+[2026-04-21T03:08:39.332+00:00] [INFO]    in[1]:QNN_DATATYPE_INT_32
+[2026-04-21T03:08:39.332+00:00] [INFO]    out[0]:QNN_DATATYPE_FLOAT_16
+[2026-04-21T03:08:39.332+00:00] [INFO]    3:
+[2026-04-21T03:08:39.332+00:00] [INFO]    in[0]:QNN_DATATYPE_FLOAT_32
+[2026-04-21T03:08:39.332+00:00] [INFO]    in[1]:QNN_DATATYPE_UINT_32
+[2026-04-21T03:08:39.332+00:00] [INFO]    out[0]:QNN_DATATYPE_FLOAT_32
+[2026-04-21T03:08:39.332+00:00] [INFO]    4:
+[2026-04-21T03:08:39.332+00:00] [INFO]    in[0]:QNN_DATATYPE_FLOAT_32
+[2026-04-21T03:08:39.332+00:00] [INFO]    in[1]:QNN_DATATYPE_INT_32
+[2026-04-21T03:08:39.332+00:00] [INFO]    out[0]:QNN_DATATYPE_FLOAT_32
+[2026-04-21T03:08:39.332+00:00] [INFO]    400.6ms 
+[2026-04-21T03:08:39.333+00:00] [INFO] [ ERROR ]  <E> Supported I/O datatype sets for the configuration: INT16
+[2026-04-21T03:08:39.333+00:00] [INFO]    1:
+[2026-04-21T03:08:39.333+00:00] [INFO]    in[0]:QNN_DATATYPE_UFIXED_POINT_16
+[2026-04-21T03:08:39.333+00:00] [INFO]    in[1]:QNN_DATATYPE_UINT_32
+[2026-04-21T03:08:39.333+00:00] [INFO]    out[0]:QNN_DATATYPE_UFIXED_POINT_16
+[2026-04-21T03:08:39.333+00:00] [INFO]    2:
+[2026-04-21T03:08:39.333+00:00] [INFO]    in[0]:QNN_DATATYPE_UFIXED_POINT_16
+[2026-04-21T03:08:39.333+00:00] [INFO]    in[1]:QNN_DATATYPE_INT_32
+[2026-04-21T03:08:39.333+00:00] [INFO]    out[0]:QNN_DATATYPE_UFIXED_POINT_16
+[2026-04-21T03:08:39.333+00:00] [INFO]    3:
+[2026-04-21T03:08:39.333+00:00] [INFO]    in[0]:QNN_DATATYPE_SFIXED_POINT_16
+[2026-04-21T03:08:39.333+00:00] [INFO]    in[1]:QNN_DATATYPE_UINT_32
+[2026-04-21T03:08:39.334+00:00] [INFO]    out[0]:QNN_DATATYPE_SFIXED_POINT_16
+[2026-04-21T03:08:39.334+00:00] [INFO]    4:
+[2026-04-21T03:08:39.334+00:00] [INFO]    in[0]:QNN_DATATYPE_SFIXED_POINT_16
+[2026-04-21T03:08:39.334+00:00] [INFO]    in[1]:QNN_DATATYPE_INT_32
+[2026-04-21T03:08:39.334+00:00] [INFO]    out[0]:QNN_DATATYPE_SFIXED_POINT_16
+[2026-04-21T03:08:39.334+00:00] [INFO]    400.6ms 
+[2026-04-21T03:08:39.334+00:00] [INFO] [ ERROR ]  <E> Supported I/O datatype sets for the configuration: INT8
+[2026-04-21T03:08:39.334+00:00] [INFO]    1:
+[2026-04-21T03:08:39.334+00:00] [INFO]    in[0]:QNN_DATATYPE_UFIXED_POINT_8
+[2026-04-21T03:08:39.334+00:00] [INFO]    in[1]:QNN_DATATYPE_UINT_32
+[2026-04-21T03:08:39.334+00:00] [INFO]    out[0]:QNN_DATATYPE_UFIXED_POINT_8
+[2026-04-21T03:08:39.334+00:00] [INFO]    2:
+[2026-04-21T03:08:39.335+00:00] [INFO]    in[0]:QNN_DATATYPE_UFIXED_POINT_8
+[2026-04-21T03:08:39.335+00:00] [INFO]    in[1]:QNN_DATATYPE_INT_32
+[2026-04-21T03:08:39.335+00:00] [INFO]    out[0]:QNN_DATATYPE_UFIXED_POINT_8
+[2026-04-21T03:08:39.335+00:00] [INFO]    3:
+[2026-04-21T03:08:39.335+00:00] [INFO]    in[0]:QNN_DATATYPE_SFIXED_POINT_8
+[2026-04-21T03:08:39.335+00:00] [INFO]    in[1]:QNN_DATATYPE_UINT_32
+[2026-04-21T03:08:39.335+00:00] [INFO]    out[0]:QNN_DATATYPE_SFIXED_POINT_8
+[2026-04-21T03:08:39.335+00:00] [INFO]    4:
+[2026-04-21T03:08:39.335+00:00] [INFO]    in[0]:QNN_DATATYPE_SFIXED_POINT_8
+[2026-04-21T03:08:39.335+00:00] [INFO]    in[1]:QNN_DATATYPE_INT_32
+[2026-04-21T03:08:39.335+00:00] [INFO]    out[0]:QNN_DATATYPE_UFIXED_POINT_8
+[2026-04-21T03:08:39.335+00:00] [INFO]    5:
+[2026-04-21T03:08:39.336+00:00] [INFO]    in[0]:QNN_DATATYPE_SFIXED_POINT_8
+[2026-04-21T03:08:39.336+00:00] [INFO]    in[1]:QNN_DATATYPE_INT_32
+[2026-04-21T03:08:39.336+00:00] [INFO]    out[0]:QNN_DATATYPE_SFIXED_POINT_8
+[2026-04-21T03:08:39.336+00:00] [INFO]    400.6ms 
+[2026-04-21T03:08:39.336+00:00] [INFO] [ ERROR ]  <E> Supported I/O datatype sets for the configuration: OTHERS
+[2026-04-21T03:08:39.336+00:00] [INFO]    1:
+[2026-04-21T03:08:39.336+00:00] [INFO]    in[0]:QNN_DATATYPE_UINT_32
+[2026-04-21T03:08:39.336+00:00] [INFO]    in[1]:QNN_DATATYPE_UINT_32
+[2026-04-21T03:08:39.336+00:00] [INFO]    out[0]:QNN_DATATYPE_UINT_32
+[2026-04-21T03:08:39.336+00:00] [INFO]    2:
+[2026-04-21T03:08:39.336+00:00] [INFO]    in[0]:QNN_DATATYPE_UINT_32
+[2026-04-21T03:08:39.336+00:00] [INFO]    in[1]:QNN_DATATYPE_INT_32
+[2026-04-21T03:08:39.337+00:00] [INFO]    out[0]:QNN_DATATYPE_UINT_32
+[2026-04-21T03:08:39.337+00:00] [INFO]    3:
+[2026-04-21T03:08:39.337+00:00] [INFO]    in[0]:QNN_DATATYPE_INT_32
+[2026-04-21T03:08:39.337+00:00] [INFO]    in[1]:QNN_DATATYPE_UINT_32
+[2026-04-21T03:08:39.337+00:00] [INFO]    out[0]:QNN_DATATYPE_INT_32
+[2026-04-21T03:08:39.337+00:00] [INFO]    4:
+[2026-04-21T03:08:39.337+00:00] [INFO]    in[0]:QNN_DATATYPE_INT_32
+[2026-04-21T03:08:39.337+00:00] [INFO]    in[1]:QNN_DATATYPE_INT_32
+[2026-04-21T03:08:39.337+00:00] [INFO]    out[0]:QNN_DATATYPE_INT_32
+[2026-04-21T03:08:39.337+00:00] [INFO]    400.6ms 
+[2026-04-21T03:08:39.337+00:00] [INFO] [ ERROR ]  <E> Please refer to the 'HTP Backend Op Definition Supplement' section of QNN SDK for more details
+[2026-04-21T03:08:39.337+00:00] [INFO]    400.6ms 
+[2026-04-21T03:08:39.338+00:00] [INFO] [ ERROR ]  <E> QnnBackend_validateOpConfig failed 3110
+[2026-04-21T03:08:39.338+00:00] [INFO]    400.6ms 
+[2026-04-21T03:08:39.338+00:00] [INFO] [ ERROR ]  <E> Failed to validate op /model/Gather_5 with error 0xc26
+[2026-04-21T03:08:39.338+00:00] [INFO]    378.7ms 
+[2026-04-21T03:08:39.338+00:00] [INFO] [ ERROR ] Exception encountered: Validate OpConfig failed: QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE: Op configuration failed validation
+[2026-04-21T03:08:39.338+00:00] [INFO]    378.7ms 
+[2026-04-21T03:08:39.338+00:00] [INFO] [ ERROR ] Failed to successfully compose graph
+[2026-04-21T03:08:39.338+00:00] [INFO]    378.7ms 
+[2026-04-21T03:08:39.338+00:00] [INFO] [ ERROR ] Graph composer failed, no graphs were created
+[2026-04-21T03:08:39.338+00:00] [INFO]    400.6ms 
+[2026-04-21T03:08:39.338+00:00] [INFO] [ ERROR ] Failed in QnnSystemDlc_composeGraphs() with error code 1002
+[2026-04-21T03:08:39.338+00:00] [INFO]    400.7ms 
+[2026-04-21T03:08:39.339+00:00] [INFO] [ ERROR ] Received nullptr for graphsInput.
+[2026-04-21T03:08:39.339+00:00] [INFO]    400.7ms 
+[2026-04-21T03:08:39.339+00:00] [INFO] [ ERROR ] Failed to copy graph infos while composing graphs from dlc.
+[2026-04-21T03:08:39.339+00:00] [INFO]    400.7ms 
+[2026-04-21T03:08:39.339+00:00] [INFO] [ ERROR ] ComposeGraphs Failed with error = 1
+[2026-04-21T03:08:39.339+00:00] [INFO] Graph Compose failure
+[2026-04-21T03:08:39.625+00:00] [WARNING] Conversion to context binary failed with exit code 14
+[2026-04-21T03:08:39.625+00:00] [INFO] Attempting to enqueue job jperqvmog

@@ -30,12 +30,15 @@ import onnx
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# Source = the optimum export produced on the x86 machine
-# (docs/phase5_export_on_x86.md). Was previously the onnx-community
-# export but that hit com.microsoft fused-op rejection at AI Hub.
-SOURCE_ONNX = REPO_ROOT / "models" / "qwen3-0.6b-optimum" / "model.onnx"
-SOURCE_DATA = REPO_ROOT / "models" / "qwen3-0.6b-optimum" / "model.onnx_data"
-STAGING = REPO_ROOT / "models" / "qwen3-0.6b-optimum-ai-hub"
+# Source = ORT-BASIC-optimized version of the optimum --no-post-process
+# export. The raw optimum output ran aground on HTP compile at
+# /model/Gather_5 (dynamic attention-mask subgraph). ORT's basic graph
+# optimizer constant-folds the mask-construction Range/Shape chain
+# without fusing ops back into com.microsoft. Produced by
+# scripts/ort_optimize_onnx.py.
+SOURCE_ONNX = REPO_ROOT / "models" / "qwen3-0.6b-patched" / "model.onnx"
+SOURCE_DATA = REPO_ROOT / "models" / "qwen3-0.6b-patched" / "model.onnx_data"
+STAGING = REPO_ROOT / "models" / "qwen3-0.6b-patched-ai-hub"
 STAGED_ONNX = STAGING / "model.onnx"
 STAGED_DATA = STAGING / "model.data"
 

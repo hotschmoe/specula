@@ -33,20 +33,34 @@ import onnxruntime as ort
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# Source = the optimum export produced on the x86 machine (all ops in
-# default onnx domain, opset 18). config.json co-ships with the ONNX.
-SOURCE_DIR = REPO_ROOT / "models" / "qwen3-0.6b-optimum"
+# Source = ORT-BASIC-optimized optimum export. config.json is copied in
+# alongside the optimized ONNX so this stays self-contained.
+SOURCE_DIR = REPO_ROOT / "models" / "qwen3-0.6b-patched"
 CONFIG_JSON = SOURCE_DIR / "config.json"
 # AI Hub upload targets the staging dir produced by prep_onnx_for_ai_hub.py
-# (qai-hub requires .onnx/.data extensions; optimum ships .onnx_data).
-STAGING_DIR = REPO_ROOT / "models" / "qwen3-0.6b-optimum-ai-hub"
+# (qai-hub requires .onnx/.data extensions).
+STAGING_DIR = REPO_ROOT / "models" / "qwen3-0.6b-patched-ai-hub"
 MODEL_ONNX = STAGING_DIR / "model.onnx"
 MODEL_DATA = STAGING_DIR / "model.data"
 
 CONTEXT_MAX = 512
 DEVICE = "Snapdragon X2 Elite CRD"
 JOB_NAME = f"qwen3-0.6b-draft-v81-ctx{CONTEXT_MAX}-fp16"
-COMPILE_OPTIONS = "--target_runtime qnn_context_binary --compute_unit npu"
+# Compile options learned across attempts 3-5. Keep them comment-tagged
+# so future sessions know what each flag buys:
+#   --target_runtime qnn_context_binary  emit a preloaded HTP binary
+#   --compute_unit npu                   Hexagon v81 only
+#   --truncate_64bit_io                  attempts 4 error: int64 input
+#                                        dtypes not accepted on HTP IO
+#   --quantize_full_type float16         attempt 5 error: HTP Gather op
+#                                        rejected FP32 dtype. Force the
+#                                        whole graph to FP16 at compile.
+COMPILE_OPTIONS = (
+    "--target_runtime qnn_context_binary "
+    "--compute_unit npu "
+    "--truncate_64bit_io "
+    "--quantize_full_type float16"
+)
 OUTPUT_BIN = REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.bin"
 
 
@@ -194,7 +208,7 @@ def check_mode() -> int:
     return 0
 
 
-def submit_mode() -> int:
+def submit_mode(reuse_upload: str | None = None) -> int:
     import qai_hub as hub
 
     if not MODEL_ONNX.exists():
@@ -205,17 +219,21 @@ def submit_mode() -> int:
         cfg = json.load(f)
     specs = build_input_specs(cfg)
 
-    # ONNX with external data: upload the DIRECTORY, not the single .onnx
-    # file. qai-hub picks up both model.onnx and model.onnx_data this way.
-    # The earlier --submit attempt failed with "missing its external
-    # weights" when we passed only the .onnx path.
-    upload_path = MODEL_ONNX.parent
-    upload_bytes = sum(p.stat().st_size for p in upload_path.iterdir() if p.is_file())
-    print(f"uploading {upload_path} ({upload_bytes / (1024**3):.2f} GB) to AI Hub ...")
-    t0 = time.perf_counter()
-    model_handle = hub.upload_model(str(upload_path))
-    t_upload = time.perf_counter() - t0
-    print(f"uploaded in {t_upload:.1f} s, model_id={model_handle.model_id}")
+    if reuse_upload:
+        print(f"reusing uploaded model_id={reuse_upload} (skipping ~15 min upload)")
+        model_handle = hub.get_model(reuse_upload)
+    else:
+        # ONNX with external data: upload the DIRECTORY, not the single
+        # .onnx file. qai-hub picks up both files this way. The first
+        # --submit attempt failed with 'missing external weights' when
+        # we passed only the .onnx path.
+        upload_path = MODEL_ONNX.parent
+        upload_bytes = sum(p.stat().st_size for p in upload_path.iterdir() if p.is_file())
+        print(f"uploading {upload_path} ({upload_bytes / (1024**3):.2f} GB) to AI Hub ...")
+        t0 = time.perf_counter()
+        model_handle = hub.upload_model(str(upload_path))
+        t_upload = time.perf_counter() - t0
+        print(f"uploaded in {t_upload:.1f} s, model_id={model_handle.model_id}")
 
     print(f"\nsubmitting compile job '{JOB_NAME}' ...")
     job = hub.submit_compile_job(
@@ -263,12 +281,18 @@ def main() -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--check", action="store_true", help="validate + print plan, no upload")
     group.add_argument("--submit", action="store_true", help="upload + compile + download")
+    parser.add_argument(
+        "--reuse-upload",
+        metavar="MODEL_ID",
+        default=None,
+        help="skip upload, reuse an already-uploaded AI Hub model_id (e.g. mn1goxe4n)",
+    )
     args = parser.parse_args()
     try:
         if args.check:
             return check_mode()
         if args.submit:
-            return submit_mode()
+            return submit_mode(reuse_upload=args.reuse_upload)
     except Exception:
         traceback.print_exc()
         return 2
