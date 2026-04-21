@@ -49,8 +49,8 @@ MODEL_DATA = STAGING_DIR / "model.data"
 CONTEXT_MAX = 512
 DEVICE = "Snapdragon X2 Elite CRD"
 JOB_NAME = f"qwen3-0.6b-draft-v81-ctx{CONTEXT_MAX}-fp16"
-# Compile options learned across attempts 3-5. Keep them comment-tagged
-# so future sessions know what each flag buys:
+# Compile options learned across attempts 3-5 + session 9. Keep them
+# comment-tagged so future sessions know what each flag buys:
 #   --target_runtime qnn_context_binary  emit a preloaded HTP binary
 #   --compute_unit npu                   Hexagon v81 only
 #   --truncate_64bit_io                  attempts 4 error: int64 input
@@ -58,11 +58,20 @@ JOB_NAME = f"qwen3-0.6b-draft-v81-ctx{CONTEXT_MAX}-fp16"
 #   --quantize_full_type float16         attempt 5 error: HTP Gather op
 #                                        rejected FP32 dtype. Force the
 #                                        whole graph to FP16 at compile.
+#   --qairt_version 2.42                 session-9 finding: AI Hub
+#                                        defaults to QAIRT 2.45, but the
+#                                        only ORT-QNN version that loads
+#                                        2.45 binaries on this hardware
+#                                        (2.1.0) has loader bugs. Pin to
+#                                        2.42 so the binary matches
+#                                        onnxruntime-qnn 1.24.4's bundle.
+#                                        See docs/npu_ort_qnn_version_match.md
 COMPILE_OPTIONS = (
     "--target_runtime qnn_context_binary "
     "--compute_unit npu "
     "--truncate_64bit_io "
-    "--quantize_full_type float16"
+    "--quantize_full_type float16 "
+    "--qairt_version 2.42"
 )
 OUTPUT_BIN = REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.bin"
 

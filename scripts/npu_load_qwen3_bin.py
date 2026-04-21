@@ -49,37 +49,60 @@ CONTEXT_MAX = 512
 
 
 def describe_inputs(cfg: dict) -> list[tuple[str, list[int], int]]:
-    """Return (name, shape, elem_type) for each input in compile order."""
+    """Return (name, shape, elem_type) for each input.
+
+    Names + dtypes verified against `results/bin_inspect.json` (qnn-context-
+    binary-utility output): the qairt-converter normalises dotted names to
+    underscored ones, and `--preserve_io_datatype` keeps past_key_values
+    at FLOAT_32 even when `--quantize_full_type float16` is set for the
+    interior of the graph. `--truncate_64bit_io` does cast INT64 IO to INT32.
+    """
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]
     head_dim = cfg.get("head_dim", cfg["hidden_size"] // cfg["num_attention_heads"])
     past_len = CONTEXT_MAX - 1
 
-    # After --truncate_64bit_io, INT64 IO becomes INT32 on the compiled binary.
-    # After --quantize_full_type float16, FLOAT IO becomes FLOAT16.
-    # We tentatively assume that here; if shape/type inspection disagrees
-    # we'll adjust once we can see the session's actual signature.
     inputs: list[tuple[str, list[int], int]] = []
     inputs.append(("input_ids", [1, 1], TensorProto.INT32))
     inputs.append(("position_ids", [1, 1], TensorProto.INT32))
     for i in range(n_layers):
-        inputs.append((f"past_key_values.{i}.key", [1, n_kv, past_len, head_dim], TensorProto.FLOAT16))
-        inputs.append((f"past_key_values.{i}.value", [1, n_kv, past_len, head_dim], TensorProto.FLOAT16))
+        inputs.append((f"past_key_values_{i}_key", [1, n_kv, past_len, head_dim], TensorProto.FLOAT))
+        inputs.append((f"past_key_values_{i}_value", [1, n_kv, past_len, head_dim], TensorProto.FLOAT))
     return inputs
 
 
 def describe_outputs(cfg: dict) -> list[tuple[str, list[int], int]]:
+    """Return (name, shape, elem_type) per output.
+
+    The qairt-converter renames all outputs to `output_0..output_N` in
+    declaration order from the source ONNX:
+      output_0  = logits           [1, 1, vocab]
+      output_1  = present.0.key    [1, n_kv, ctx, head_dim]
+      output_2  = present.0.value
+      output_3  = present.1.key
+      ...
+      output_56 = present.27.value
+    """
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]
     head_dim = cfg.get("head_dim", cfg["hidden_size"] // cfg["num_attention_heads"])
     vocab = cfg["vocab_size"]
     total_len = CONTEXT_MAX
+
     outputs: list[tuple[str, list[int], int]] = []
-    outputs.append(("logits", [1, 1, vocab], TensorProto.FLOAT16))
-    for i in range(n_layers):
-        outputs.append((f"present.{i}.key", [1, n_kv, total_len, head_dim], TensorProto.FLOAT16))
-        outputs.append((f"present.{i}.value", [1, n_kv, total_len, head_dim], TensorProto.FLOAT16))
+    outputs.append(("output_0", [1, 1, vocab], TensorProto.FLOAT))
+    idx = 1
+    for _ in range(n_layers):
+        outputs.append((f"output_{idx}", [1, n_kv, total_len, head_dim], TensorProto.FLOAT))
+        idx += 1
+        outputs.append((f"output_{idx}", [1, n_kv, total_len, head_dim], TensorProto.FLOAT))
+        idx += 1
     return outputs
+
+
+# Logits live on the first compiled output ('output_0'). Capture this so
+# downstream analysis code stays robust to the qairt naming convention.
+LOGITS_OUTPUT_NAME = "output_0"
 
 
 def build_ep_context_wrapper(cfg: dict, bin_path: Path, out_path: Path) -> None:
@@ -236,7 +259,7 @@ def main() -> int:
     t1 = time.perf_counter_ns()
     ms = (t1 - t0) / 1e6
     names = [o.name for o in sess.get_outputs()]
-    logits_idx = names.index("logits")
+    logits_idx = names.index(LOGITS_OUTPUT_NAME)
     logits = outputs[logits_idx]
     print(f"  run latency       : {ms:.2f} ms")
     print(f"  logits shape      : {logits.shape}")

@@ -1,6 +1,6 @@
 # specula -- current status
 
-Last updated: 2026-04-21 (session 9 -- step 4 closed; step 5 in flight, hit ORT-QNN ↔ QAIRT version-match wall)
+Last updated: 2026-04-21 (session 9 -- steps 4 + 5 both closed: NPU runs Qwen3-0.6B, 110 ms/decode-step at ctx 512)
 
 Living document. Update every few turns. Anyone picking this up cold should
 be able to read this page, skim the README, and resume work.
@@ -314,32 +314,68 @@ binaries need a different ORT-QNN load path (either via
 `qnn_context_binary_file` provider option or via an ONNX-EPContext
 wrapper that AI Hub emits alongside). Small extension expected.
 
-**Step 5 mid-session status (2026-04-21):** the `.bin` itself is
-healthy — `qnn-context-binary-utility.exe` (QAIRT 2.45 native tool)
-loads and dumps it cleanly to `results/bin_inspect.json`. ORT-QNN
-loading hit a version-mismatch wall:
+**Step 5 CLOSED (2026-04-21).** First forward pass running on the
+Hexagon NPU:
 
-- AI Hub compiled with QAIRT **2.45.40**.
-- `onnxruntime-qnn 1.24.4` (originally pinned) bundles QAIRT **2.42**
-  → `LoadCachedQnnContextFromBuffer` errors with code 5000.
-- Bumped to `onnxruntime-qnn 2.1.0` (bundles 2.45.40, ships Genie.dll).
-  This required learning the new plugin-EP API
-  (`SessionOptions.add_provider_for_devices` + `register_execution_provider_library`
-  — the legacy `providers=[("QNN...",opts)]` silently falls back to CPU
-  in 2.x). The plugin EP works for the tiny matmul smoke test, but the
-  context-binary loader crashes the interpreter on this Hexagon driver
-  (file-mapping retry path AND `embed_mode=1` path both segfault with no
-  Python traceback).
-- **Working path picked:** revert to `onnxruntime-qnn 1.24.4` (legacy EP,
-  proven on tiny smoke test) + recompile `.bin` via AI Hub with
-  `--qairt_version 2.42` so the binary matches what 1.24.4 reads.
-  Reuses `model_id=mng5oj90m`, ~7 min compile.
+```
+session providers   : ['QNNExecutionProvider', 'CPUExecutionProvider']
+inputs (58) / outputs (57) — match the binary signature exactly
+run latency       : 109.81 ms   (decode step, empty KV, ctx 512)
+logits shape      : (1, 1, 151936)
+logits finite frac: 1.0000      (no NaN/Inf)
+logits min/max    : -4.500 / 3.059
+=== STATUS: ok ===
+```
 
-Full diagnostic in `docs/npu_ort_qnn_version_match.md`. Cross-linked
-from `docs/npu_scoping.md` §3.8.
+Per scoping doc §7 step 5 exit criterion ("one forward pass completes
+without error") — done. 110 ms/step is in-line with NPU expectations
+(slower than CPU's ~9 ms/tok for Qwen3-0.6B Q8_0; the value lands at
+step 7 when drafts pipeline alongside CPU verify). Commit `<TBD>`.
 
-Next: resubmit AI Hub compile with `--qairt_version 2.42`, then re-run
-`scripts/npu_load_qwen3_bin.py`.
+**Two walls hit + cleared on the way:**
+
+1. **ORT-QNN ↔ QAIRT version mismatch.** AI Hub default was QAIRT 2.45;
+   `onnxruntime-qnn 1.24.4` bundles 2.42 → `LoadCachedQnnContextFromBuffer`
+   error 5000. Bumping to `onnxruntime-qnn 2.1.0` (bundles 2.45.40,
+   ships Genie.dll) cleared the version match but its context-binary
+   loader has unrecoverable bugs on the X2E94100 driver (both
+   file-mapping retry path AND embed_mode=1 path segfault with no
+   Python traceback — only the plain-ONNX path works in 2.x). Working
+   fix: stay on 1.24.4 + recompile via AI Hub with `--qairt_version 2.42`.
+   Recompile (job `jp34dq03g`, also 400s) reused the upload from
+   `mng5oj90m`. Full writeup in `docs/npu_ort_qnn_version_match.md`,
+   cross-linked from `docs/npu_scoping.md` §3.8.
+
+2. **EPContext wrapper IO names + dtypes had to match the compiled binary.**
+   QAIRT's converter normalises dotted names to underscored
+   (`past_key_values_0_key`, not `past_key_values.0.key`) and renames
+   all outputs to `output_0..output_N` in declaration order. Also,
+   `--preserve_io_datatype` keeps past_key_values at FP32 even when
+   `--quantize_full_type float16` is set for the graph interior. Real
+   names + dtypes captured from `qnn-context-binary-utility.exe`
+   inspection (`results/bin_inspect.json`); wrapper builder in
+   `scripts/npu_load_qwen3_bin.py` updated to match.
+
+**Updated 10-step tracker:**
+
+```
+[DONE]    1. Environment snapshot                 (commit 7230210)
+[DONE]    2. ORT-QNN sidecar skeleton             (commit 282e84a)
+[DONE]    3. Qwen3-0.6B ONNX sourced + CPU-valid  (commit 106c756)
+[DONE]    4. AI Hub compile -> Hexagon .bin       (commit 9e1d99e)
+[DONE]    5. Load .bin via NPUSession, shape-check (session 9 ★)
+          6. Correctness vs CPU, single greedy prompt <-- next
+          7. Pipe first drafted token through llama.cpp verify
+          8. External-drafter bridge for llama.cpp spec decode
+          9. First NPU-spec number on 10-prompt humaneval
+         10. Sweep k values, write up, close phase
+```
+
+Step 6 needs the model to actually see a coherent KV state, which
+requires running prefill on something (probably ORT-CPU using the
+nomask ONNX, since the NPU graph is decode-only). Then compare NPU
+greedy decode vs HF/llama.cpp greedy decode on the same prompt for
+the first 16-32 tokens.
 
 ## Immediate next steps (next session)
 

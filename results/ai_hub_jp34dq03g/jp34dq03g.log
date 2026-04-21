@@ -1,0 +1,114 @@
+[2026-04-21T07:27:59.448+00:00] [INFO] Compiling model ID mng5oj90m
+[2026-04-21T07:27:59.448+00:00] [INFO] [compile-pre-compile] Memory: 3.5GiB / 40.0GiB (9%) | working_set: 645.2MiB | peak: 6.9GiB
+[2026-04-21T07:28:07.629+00:00] [INFO] -=- Converting ONNX graph: decompose GeLU layers -=-
+[2026-04-21T07:28:07.963+00:00] [INFO] Applying ONNX IR shape inference
+[2026-04-21T07:28:08.020+00:00] [INFO] Memory: 6.3GiB / 40.0GiB (16%) | working_set: 6.2GiB | peak: 16.2GiB
+[2026-04-21T07:28:09.681+00:00] [INFO] Applying ONNX IR rewriter with rules
+[2026-04-21T07:28:11.735+00:00] [INFO] Ran 16 passes, 1 triggered
+[2026-04-21T07:28:11.735+00:00] [INFO] Passes triggered:
+[2026-04-21T07:28:11.758+00:00] [INFO] +-----------------------------+----------+
+[2026-04-21T07:28:11.758+00:00] [INFO] | Pass Name                   | Triggers |
+[2026-04-21T07:28:11.758+00:00] [INFO] +-----------------------------+----------+
+[2026-04-21T07:28:11.758+00:00] [INFO] | DeduplicateInitializersPass |        1 |
+[2026-04-21T07:28:11.758+00:00] [INFO] +-----------------------------+----------+
+[2026-04-21T07:28:11.760+00:00] [INFO] Model metrics comparison:
+[2026-04-21T07:28:11.761+00:00] [INFO] +------------+--------+--------+----------+
+[2026-04-21T07:28:11.761+00:00] [INFO] | Metric     | Before |  After |    Delta |
+[2026-04-21T07:28:11.761+00:00] [INFO] +------------+--------+--------+----------+
+[2026-04-21T07:28:11.761+00:00] [INFO] | Op count   |   2033 |   2033 |       +0 |
+[2026-04-21T07:28:11.761+00:00] [INFO] | Model size | 2.8GiB | 2.8GiB | [32m-13.5KiB[0m |
+[2026-04-21T07:28:11.761+00:00] [INFO] | Add        |    225 |    225 |       +0 |
+[2026-04-21T07:28:11.761+00:00] [INFO] | Cast       |      1 |      1 |       +0 |
+[2026-04-21T07:28:11.761+00:00] [INFO] | Concat     |    113 |    113 |       +0 |
+[2026-04-21T07:28:11.761+00:00] [INFO] | Cos        |      1 |      1 |       +0 |
+[2026-04-21T07:28:11.761+00:00] [INFO] | Div        |    113 |    113 |       +0 |
+[2026-04-21T07:28:11.761+00:00] [INFO] | Expand     |     56 |     56 |       +0 |
+[2026-04-21T07:28:11.761+00:00] [INFO] | Gather     |      1 |      1 |       +0 |
+[2026-04-21T07:28:11.761+00:00] [INFO] | MatMul     |    254 |    254 |       +0 |
+[2026-04-21T07:28:11.761+00:00] [INFO] | Mul        |    337 |    337 |       +0 |
+[2026-04-21T07:28:11.761+00:00] [INFO] | Neg        |     56 |     56 |       +0 |
+[2026-04-21T07:28:11.761+00:00] [INFO] | Pow        |    113 |    113 |       +0 |
+[2026-04-21T07:28:11.761+00:00] [INFO] | ReduceMean |    113 |    113 |       +0 |
+[2026-04-21T07:28:11.761+00:00] [INFO] | Reshape    |    168 |    168 |       +0 |
+[2026-04-21T07:28:11.761+00:00] [INFO] | Sigmoid    |     28 |     28 |       +0 |
+[2026-04-21T07:28:11.761+00:00] [INFO] | Sin        |      1 |      1 |       +0 |
+[2026-04-21T07:28:11.761+00:00] [INFO] | Slice      |    112 |    112 |       +0 |
+[2026-04-21T07:28:11.762+00:00] [INFO] | Softmax    |     28 |     28 |       +0 |
+[2026-04-21T07:28:11.762+00:00] [INFO] | Sqrt       |    113 |    113 |       +0 |
+[2026-04-21T07:28:11.762+00:00] [INFO] | Transpose  |    141 |    141 |       +0 |
+[2026-04-21T07:28:11.762+00:00] [INFO] | Unsqueeze  |     59 |     59 |       +0 |
+[2026-04-21T07:28:11.762+00:00] [INFO] +------------+--------+--------+----------+
+[2026-04-21T07:29:08.083+00:00] [INFO] Memory: 13.3GiB / 40.0GiB (33%) | working_set: 11.6GiB | peak: 16.2GiB
+[2026-04-21T07:29:18.884+00:00] [INFO] Saving model
+[2026-04-21T07:29:19.265+00:00] [INFO] Uploading asset to https://tetrahub-qprod-userdata.s3.amazonaws.com/models/mnwrwodkm_ixjzOPlPVrkj5xHG.onnx.zip?uploadId=GdYA77m5gHJ6maTPguLSih_Kj6YoMn7hfV1I86fXCgz3ZyxBzNdwidz3y8qBNjC2tc8yi7oYU7iRcs2qpWRFcoX.8fcDv6feH_QfYd1qegZ781L6FkPxSDqCU69pCq87&partNumber=1&AWSAccessKeyId=AKIAY25OF7UJU4ZXEREI&Signature=oAp9%2FThvM
+[2026-04-21T07:29:28.589+00:00] [INFO] Successfully uploaded asset with response status: 200
+[2026-04-21T07:29:28.589+00:00] [INFO] Uploading asset to https://tetrahub-qprod-userdata.s3.amazonaws.com/models/mnwrwodkm_ixjzOPlPVrkj5xHG.onnx.zip?uploadId=GdYA77m5gHJ6maTPguLSih_Kj6YoMn7hfV1I86fXCgz3ZyxBzNdwidz3y8qBNjC2tc8yi7oYU7iRcs2qpWRFcoX.8fcDv6feH_QfYd1qegZ781L6FkPxSDqCU69pCq87&partNumber=2&AWSAccessKeyId=AKIAY25OF7UJU4ZXEREI&Signature=epYzP08bElX
+[2026-04-21T07:29:43.453+00:00] [INFO] Successfully uploaded asset with response status: 200
+[2026-04-21T07:29:46.551+00:00] [INFO] Uploading asset to https://tetrahub-qprod-userdata.s3-accelerate.amazonaws.com/
+[2026-04-21T07:29:46.682+00:00] [INFO] Successfully uploaded asset with response status: 204
+[2026-04-21T07:29:46.682+00:00] [INFO] Successfully computed visualization graph for mnwrwodkm
+[2026-04-21T07:29:46.908+00:00] [INFO] =================================== Run compile_to_qnn_dlc =================================== 
+[2026-04-21T07:29:46.911+00:00] [INFO] Applying HTP-specific optimizations
+[2026-04-21T07:29:53.536+00:00] [INFO] -=- ONNX to QNN DLC (qairt-converter) -=-
+[2026-04-21T07:29:53.536+00:00] [INFO] Running /tetra/qairt_env/default/2.42.0/bin/python3 /qairt_sdk/default/2.42.0/bin/x86_64-linux-clang/qairt-converter --input_network /tmp/tmpui_tf7b4/tmpyldojd5d.onnx --output_path /tmp/tmpui_tf7b4/graph_q8kiof5k.dlc --preserve_io_datatype past_key_values.0.key past_key_values.0.value past_key_values.1.key past_key_values.1.value past_key_values.2.key past_key_values.2.value past_key_values.3.key past_key_values.3.value past_key_values.4.key past_key_values.4.value past_key_values.5.key past_key_values.5.value past_key_values.6.key past_key_values.6.value past_key_values.7.key past_key_values.7.value past_key_values.8.key past_key_values.8.value past_key_values.9.key past_key_values.9.value past_key_values.10.key past_key_values.10.value past_key_values.11.key past_key_values.11.value past_key_values.12.key past_key_values.12.value past_key_values.13.key past_key_values.13.value past_key_values.14.key past_key_values.14.value past_key_values.15.key past_key_values.15.value past_key_values.16.key past_key_values.16.value past_key_values.17.key past_key_values.17.value past_key_values.18.key past_key_values.18.value past_key_values.19.key past_key_values.19.value past_key_values.20.key past_key_values.20.value past_key_values.21.key past_key_values.21.value past_key_values.22.key past_key_values.22.value past_key_values.23.key past_key_values.23.value past_key_values.24.key past_key_values.24.value past_key_values.25.key past_key_values.25.value past_key_values.26.key past_key_values.26.value past_key_values.27.key past_key_values.27.value output_0 output_1 output_2 output_3 output_4 output_5 output_6 output_7 output_8 output_9 output_10 output_11 output_12 output_13 output_14 output_15 output_16 output_17 output_18 output_19 output_20 output_21 output_22 output_23 output_24 output_25 output_26 output_27 output_28 output_29 output_30 output_31 output_32 output_33 output_34 output_35 output_36 output_37 output_38 output_39 output_40 output_41 output_42 output_43 output_44 output_45 output_46 output_47 output_48 output_49 output_50 output_51 output_52 output_53 output_54 output_55 output_56 --preserve_io_datatype past_key_values.0.key past_key_values.0.value past_key_values.1.key past_key_values.1.value past_key_values.2.key past_key_values.2.value past_key_values.3.key past_key_values.3.value past_key_values.4.key past_key_values.4.value past_key_values.5.key past_key_values.5.value past_key_values.6.key past_key_values.6.value past_key_values.7.key past_key_values.7.value past_key_values.8.key past_key_values.8.value past_key_values.9.key past_key_values.9.value past_key_values.10.key past_key_values.10.value past_key_values.11.key past_key_values.11.value past_key_values.12.key past_key_values.12.value past_key_values.13.key past_key_values.13.value past_key_values.14.key past_key_values.14.value past_key_values.15.key past_key_values.15.value past_key_values.16.key past_key_values.16.value past_key_values.17.key past_key_values.17.value past_key_values.18.key past_key_values.18.value past_key_values.19.key past_key_values.19.value past_key_values.20.key past_key_values.20.value past_key_values.21.key past_key_values.21.value past_key_values.22.key past_key_values.22.value past_key_values.23.key past_key_values.23.value past_key_values.24.key past_key_values.24.value past_key_values.25.key past_key_values.25.value past_key_values.26.key past_key_values.26.value past_key_values.27.key past_key_values.27.value output_0 output_1 output_2 output_3 output_4 output_5 output_6 output_7 output_8 output_9 output_10 output_11 output_12 output_13 output_14 output_15 output_16 output_17 output_18 output_19 output_20 output_21 output_22 output_23 output_24 output_25 output_26 output_27 output_28 output_29 output_30 output_31 output_32 output_33 output_34 output_35 output_36 output_37 output_38 output_39 output_40 output_41 output_42 output_43 output_44 output_45 output_46 output_47 output_48 output_49 output_50 output_51 output_52 output_53 output_54 output_55 output_56 --float_bitwidth 16 --preserve_onnx_output_order
+[2026-04-21T07:29:54.139+00:00] [INFO] 2026-04-21 07:29:54,138 - 278 - INFO - INFO_INITIALIZATION_SUCCESS: 
+[2026-04-21T07:29:54.300+00:00] [INFO] 2026-04-21 07:29:54,300 - 283 - WARNING - Unable to register converter supported Operation [Inverse:Version 1] with your Onnx installation. Converter will bail if Model contains this Op.
+[2026-04-21T07:29:54.447+00:00] [INFO] 2026-04-21 07:29:54,446 - 283 - WARNING - --desired_input_shape and -d are deprecated. Use --source_model_input_shape or -s for achieving this functionality
+[2026-04-21T07:29:54.447+00:00] [INFO] 2026-04-21 07:29:54,447 - 278 - INFO - Input shape info 
+[2026-04-21T07:29:59.993+00:00] [INFO] 2026-04-21 07:29:59,993 - 283 - WARNING - Symbolic shape inference Failed. Exception: Onnxruntime package not found in current environment. Symbolic Shape Inference will be skipped.. Running normal shape inference.
+[2026-04-21T07:30:00.466+00:00] [INFO] 2026-04-21 07:30:00,466 - 283 - WARNING - Onnx model simplification failed due to: No module named 'onnxsim'
+[2026-04-21T07:30:00.466+00:00] [INFO] 2026-04-21 07:30:00,466 - 283 - WARNING - Simplified model validation failed
+[2026-04-21T07:30:00.688+00:00] [INFO] 2026-04-21 07:30:00,688 - 283 - WARNING - Onnx model simplification failed due to: No module named 'onnxsim'
+[2026-04-21T07:30:00.689+00:00] [INFO] 2026-04-21 07:30:00,688 - 283 - WARNING - Simplified model validation failed
+[2026-04-21T07:30:00.990+00:00] [INFO] 2026-04-21 07:30:00,990 - 283 - WARNING - Only numerical type cast is supported. The cast op: /model/rotary_emb/Cast_1 will be interpreted at conversion time
+[2026-04-21T07:30:02.711+00:00] [INFO] 2026-04-21 07:30:02,711 - 283 - WARNING - Unused Input nodes found: []
+[2026-04-21T07:30:08.143+00:00] [INFO] Memory: 23.4GiB / 40.0GiB (59%) | working_set: 20.5GiB | peak: 23.4GiB
+[2026-04-21T07:30:17.291+00:00] [INFO] 2026-04-21 07:30:17,290 - 283 - WARNING - Unused Input nodes found: []
+[2026-04-21T07:30:17.296+00:00] [INFO] 2026-04-21 07:30:17,296 - 278 - INFO - INFO_INITIALIZATION_SUCCESS: 
+[2026-04-21T07:30:21.996+00:00] [INFO] 2026-04-21 07:30:21,996 - 278 - INFO - INFO_CONVERSION_SUCCESS: Conversion completed successfully
+[2026-04-21T07:30:36.129+00:00] [INFO] 2026-04-21 07:30:36,129 - 278 - INFO - INFO_WRITE_SUCCESS: 
+[2026-04-21T07:30:36.893+00:00] [INFO] -=- Generating .json file from .dlc model (qairt-dlc-to-json) -=-
+[2026-04-21T07:30:36.894+00:00] [INFO] Running /qairt_sdk/default/2.42.0/bin/x86_64-linux-clang/qairt-dlc-to-json -i /tmp/tmpqnc7z8k4.dlc -o /tmp/tmpr9j8bpnc.json
+[2026-04-21T07:30:37.096+00:00] [INFO] Model Json saved at: /tmp/tmpr9j8bpnc.json
+[2026-04-21T07:30:37.235+00:00] [INFO] -=- Generating .json file from .dlc model (qairt-dlc-to-json) -=-
+[2026-04-21T07:30:37.236+00:00] [INFO] Running /qairt_sdk/default/2.42.0/bin/x86_64-linux-clang/qairt-dlc-to-json -i /tmp/tmpqnc7z8k4.dlc -o /tmp/tmps05bm1o9.json
+[2026-04-21T07:30:37.406+00:00] [INFO] Model Json saved at: /tmp/tmps05bm1o9.json
+[2026-04-21T07:30:37.444+00:00] [INFO] Saving model
+[2026-04-21T07:30:37.807+00:00] [INFO] Uploading asset to https://tetrahub-qprod-userdata.s3.amazonaws.com/models/mnzpze86q_8J5ARQUhMHRNLITo.dlc?uploadId=muoddWxG54JKH7WCWw4TG5o2t4aQWJoxvrWdyHyjcXcYH1OtBc06oPXA1nsp6vvG.Sny2Vt6rP82BdmoZ6W2H72lkIa_P._4RWtghRxhJu6Alj9qtp71UQWP5dme19gz&partNumber=1&AWSAccessKeyId=AKIAY25OF7UJU4ZXEREI&Signature=j5MCAbbyz1%2FTAx
+[2026-04-21T07:30:47.151+00:00] [INFO] Successfully uploaded asset with response status: 200
+[2026-04-21T07:30:47.151+00:00] [INFO] Uploading asset to https://tetrahub-qprod-userdata.s3.amazonaws.com/models/mnzpze86q_8J5ARQUhMHRNLITo.dlc?uploadId=muoddWxG54JKH7WCWw4TG5o2t4aQWJoxvrWdyHyjcXcYH1OtBc06oPXA1nsp6vvG.Sny2Vt6rP82BdmoZ6W2H72lkIa_P._4RWtghRxhJu6Alj9qtp71UQWP5dme19gz&partNumber=2&AWSAccessKeyId=AKIAY25OF7UJU4ZXEREI&Signature=afTzZ3XOOdLczw6i
+[2026-04-21T07:30:50.936+00:00] [INFO] Successfully uploaded asset with response status: 200
+[2026-04-21T07:30:51.209+00:00] [INFO] -=- Generating .json file from .dlc model (qairt-dlc-to-json) -=-
+[2026-04-21T07:30:51.209+00:00] [INFO] Running /qairt_sdk/default/2.42.0/bin/x86_64-linux-clang/qairt-dlc-to-json -i /tmp/tmpqnc7z8k4.dlc -o /tmp/tmp9rb9a86u.json
+[2026-04-21T07:30:51.384+00:00] [INFO] Model Json saved at: /tmp/tmp9rb9a86u.json
+[2026-04-21T07:30:52.044+00:00] [INFO] Uploading asset to https://tetrahub-qprod-userdata.s3-accelerate.amazonaws.com/
+[2026-04-21T07:30:52.154+00:00] [INFO] Successfully uploaded asset with response status: 204
+[2026-04-21T07:30:52.155+00:00] [INFO] Successfully computed visualization graph for mnzpze86q
+[2026-04-21T07:30:52.156+00:00] [INFO] Graph name: graph_q8kiof5k
+[2026-04-21T07:30:52.157+00:00] [INFO] -=- QNN DLC models to QNN Context Binary (qnn-context-binary-generator) -=-
+[2026-04-21T07:30:52.157+00:00] [INFO] Contents of HTP Settings: {'context': {'weight_sharing_enabled': False}, 'devices': [{'device_id': 0, 'dsp_arch': 'v81', 'soc_model': 88}], 'graphs': [{'fp16_relaxed_precision': 1, 'vtcm_mb': 0, 'O': 3.0, 'graph_names': ['graph_q8kiof5k']}]}
+[2026-04-21T07:30:52.157+00:00] [INFO] Contents of HTP Config file used: {'context_configs': {'enable_graphs': ['graph_q8kiof5k']}, 'graph_configs': [{'graph_name': 'graph_q8kiof5k'}], 'backend_extensions': {'shared_library_path': 'libQnnHtpNetRunExtensions.so', 'config_file_path': '/tmp/tmptopb6iq5/htp_setting.json'}}
+[2026-04-21T07:30:52.157+00:00] [INFO] Running /qairt_sdk/default/2.42.0/bin/x86_64-linux-clang/qnn-context-binary-generator --backend /qairt_sdk/default/2.42.0/lib/x86_64-linux-clang/libQnnHtp.so --dlc_path /tmp/tmpqnc7z8k4.dlc --output_dir /tmp/tmptopb6iq5 --binary_file qnn_model --config_file /tmp/tmptopb6iq5/htp_context.json --profiling_level detailed --profiling_option optrace
+[2026-04-21T07:30:52.159+00:00] [INFO] qnn-context-binary-generator pid:67
+[2026-04-21T07:31:08.203+00:00] [INFO] Memory: 12.1GiB / 40.0GiB (30%) | working_set: 10.6GiB | peak: 26.4GiB
+[2026-04-21T07:31:38.388+00:00] [INFO]  <W> Initializing HtpProvider
+[2026-04-21T07:32:08.253+00:00] [INFO] Memory: 16.1GiB / 40.0GiB (40%) | working_set: 14.6GiB | peak: 26.4GiB
+[2026-04-21T07:32:51.760+00:00] [INFO] ====== DDR bandwidth summary ======
+[2026-04-21T07:32:51.761+00:00] [INFO] spill_bytes=57229312
+[2026-04-21T07:32:51.761+00:00] [INFO] fill_bytes=57229312
+[2026-04-21T07:32:51.761+00:00] [INFO] write_total_bytes=175278080
+[2026-04-21T07:32:51.761+00:00] [INFO] read_total_bytes=1366456320
+[2026-04-21T07:32:56.301+00:00] [INFO] -=- Getting JSON file for context binary model (qnn-context-binary-utility) -=-
+[2026-04-21T07:32:56.302+00:00] [INFO] Running /qairt_sdk/default/2.42.0/bin/x86_64-linux-clang/qnn-context-binary-utility --context_binary /tmp/tmperljw_iw/model.bin --json_file /tmp/tmpuzqbdw8g.json
+[2026-04-21T07:32:57.104+00:00] [INFO] Saving model
+[2026-04-21T07:32:57.472+00:00] [INFO] Uploading asset to https://tetrahub-qprod-userdata.s3.amazonaws.com/models/mq8gjo1zm_e8o4FXQikZ6M11fm.bin?uploadId=hpk7wyPOpIuoKqdpxY2rmcnlDnpk8QPGXQIkluQxbTgY5UQ7sXPwxtuKeHLGOEr0SRaxEfUlMSDWOUZLculSkfAR4OOuaXMlknuwQNtqoT_91JR3u_mVBuJA1im.BIyc&partNumber=1&AWSAccessKeyId=AKIAY25OF7UJU4ZXEREI&Signature=jUiMkQJD0vtqHfHe
+[2026-04-21T07:33:06.809+00:00] [INFO] Successfully uploaded asset with response status: 200
+[2026-04-21T07:33:06.810+00:00] [INFO] Uploading asset to https://tetrahub-qprod-userdata.s3.amazonaws.com/models/mq8gjo1zm_e8o4FXQikZ6M11fm.bin?uploadId=hpk7wyPOpIuoKqdpxY2rmcnlDnpk8QPGXQIkluQxbTgY5UQ7sXPwxtuKeHLGOEr0SRaxEfUlMSDWOUZLculSkfAR4OOuaXMlknuwQNtqoT_91JR3u_mVBuJA1im.BIyc&partNumber=2&AWSAccessKeyId=AKIAY25OF7UJU4ZXEREI&Signature=KDoi5zSAukkscbM8
+[2026-04-21T07:33:08.313+00:00] [INFO] Memory: 10.7GiB / 40.0GiB (27%) | working_set: 10.3GiB | peak: 26.4GiB
+[2026-04-21T07:33:10.640+00:00] [INFO] Successfully uploaded asset with response status: 200
+[2026-04-21T07:33:10.913+00:00] [INFO] Uploading qnn schematic: default
+[2026-04-21T07:33:18.719+00:00] [INFO] Uploading asset to https://tetrahub-qprod-userdata.s3-accelerate.amazonaws.com/
+[2026-04-21T07:33:18.844+00:00] [INFO] Successfully uploaded asset with response status: 204
+[2026-04-21T07:33:18.845+00:00] [INFO] Successfully computed visualization graph for mq8gjo1zm
+[2026-04-21T07:33:18.997+00:00] [INFO] -=- Compilation completed -=-
+[2026-04-21T07:33:18.997+00:00] [INFO] [compile-post-compile] Memory: 9.2GiB / 40.0GiB (23%) | working_set: 9.1GiB | peak: 26.4GiB
