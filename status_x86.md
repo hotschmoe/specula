@@ -103,4 +103,39 @@ Captured here so they make it into the final report:
 
 ## Notes and deviations from the doc
 
-_(none yet — update as encountered)_
+- **Doc § "After 2a + 2b" histogram is stale.** Doc claims post-stage
+  node count "around 2,129" and Cast→BOOL=2. On a fresh optimum 2.1.0
+  export those numbers are actually **7,611 nodes and 3 Cast→BOOL**.
+  The doc's 2,129 is almost certainly a confused carry-over from the
+  quarantined onnxsim output in `qwen3-0.6b-nomask/`. 2a+2b are
+  trivial protobuf edits — they only remove 28 `Where` + 28 `IsNaN`
+  = 56 nodes. 7667 → 7611 is the correct math.
+- **Extra Cast→BOOL node** beyond the doc's 2-count. Not a problem
+  — recon will find it and classify it. Could be another node in the
+  causal-mask builder the doc didn't inventory.
+- **Probe regime chosen: past=511 zeros + BOS at position 511** rather
+  than the doc's "zero-KV + BOS at position 0". Reason: staged graph
+  pins attention_mask to length 512, so a past=0 probe puts source
+  and staged into different mask-length regimes and the two are
+  expected to diverge. past=511 matches the HTP decode regime and
+  keeps source vs staged in the same shape space. Verified cos=1.0
+  on this probe — which is the same bar the doc wanted.
+
+## Progress log additions
+
+### 2026-04-21 — session 1 continued
+
+- optimum export landed: `models/qwen3-0.6b-optimum/` (3.0 GB data,
+  7667 nodes, opset 18, 0 com.microsoft — matches doc expectation
+  exactly).
+- `scripts/rewrite_qwen3_htp.py` written — single entry point with
+  `--mode {stage, fold-patha, fold-pathbmask}`.
+- Stage mode ran cleanly: 7667 → 7611 nodes (28 `Where(IsNaN, …)` +
+  28 `IsNaN` elided), attention_mask promoted to `[1,512]` initializer
+  all-ones. 3 Cast→BOOL remain (doc said 2; see deviation note).
+- `scripts/probe_cos_vs_source.py` written — reusable probe for
+  every candidate we emit.
+- Probed staged vs optimum source on CPU-ORT:
+  **cos=1.0, max_abs_diff=0.0, argmax match, top-5 5/5. PASS.**
+  Report: `results/phase5_step6_probe_staged.json`. 2a+2b is proven
+  safe; moving on to BOOL-region recon.
