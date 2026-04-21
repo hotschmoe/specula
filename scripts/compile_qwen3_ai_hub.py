@@ -9,10 +9,13 @@ Two-mode script:
 
 Shape decisions (first-cut, CONTEXT_MAX=512, decode-only):
     input_ids               [1, 1]            int64
-    attention_mask          [1, 512]          int64
     position_ids            [1, 1]            int64
     past_key_values.N.key   [1, 8, 511, 128]  float32     (N = 0..27)
     past_key_values.N.value [1, 8, 511, 128]  float32
+
+Note: the nomask ONNX no longer exposes `attention_mask` as an input —
+the aggressive BOOL-removal pass on x86 (step 4g) pre-baked the causal
+mask into the graph for decode-only use. Total inputs = 2 + 28*2 = 58.
 
 Prefill-on-CPU stays on the host; NPU only does single-token draft
 steps. See docs/npu_scoping.md section 6.4.
@@ -33,13 +36,13 @@ import onnxruntime as ort
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# Source = ORT-BASIC-optimized optimum export. config.json is copied in
-# alongside the optimized ONNX so this stays self-contained.
-SOURCE_DIR = REPO_ROOT / "models" / "qwen3-0.6b-patched"
+# Source = x86-produced "nomask" ONNX (step 4g): onnxsim + aggressive
+# attention-mask removal, zero BOOL tensors. config.json travels with it.
+SOURCE_DIR = REPO_ROOT / "models" / "qwen3-0.6b-nomask"
 CONFIG_JSON = SOURCE_DIR / "config.json"
 # AI Hub upload targets the staging dir produced by prep_onnx_for_ai_hub.py
 # (qai-hub requires .onnx/.data extensions).
-STAGING_DIR = REPO_ROOT / "models" / "qwen3-0.6b-patched-ai-hub"
+STAGING_DIR = REPO_ROOT / "models" / "qwen3-0.6b-nomask-ai-hub"
 MODEL_ONNX = STAGING_DIR / "model.onnx"
 MODEL_DATA = STAGING_DIR / "model.data"
 
@@ -74,11 +77,9 @@ def build_input_specs(cfg: dict) -> dict:
     head_dim = cfg.get("head_dim", cfg["hidden_size"] // cfg["num_attention_heads"])
 
     past_len = CONTEXT_MAX - 1  # decode step adds 1 new token to reach CONTEXT_MAX
-    total_len = CONTEXT_MAX
 
     specs: dict[str, tuple] = {
         "input_ids": ((1, 1), "int64"),
-        "attention_mask": ((1, total_len), "int64"),
         "position_ids": ((1, 1), "int64"),
     }
     for i in range(n_layers):
@@ -124,7 +125,7 @@ def validate_specs_vs_onnx(specs: dict) -> list:
 def summarize_specs(specs: dict) -> None:
     """Compact summary: first few, then KV cache envelope."""
     print(f"\n--- input_specs summary ({len(specs)} entries) ---")
-    for key in ("input_ids", "attention_mask", "position_ids"):
+    for key in ("input_ids", "position_ids"):
         shape, dtype = specs[key]
         print(f"  {key:40s} {shape}  {dtype}")
 

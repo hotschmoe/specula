@@ -1,6 +1,6 @@
 # specula -- current status
 
-Last updated: 2026-04-20 (session 5 -- Phase 4 + Phase 5 scoping passes; Phase 5 integrates prior-art review)
+Last updated: 2026-04-21 (session 9 -- Phase 5 step 4 closed: HTP context binary on disk)
 
 Living document. Update every few turns. Anyone picking this up cold should
 be able to read this page, skim the README, and resume work.
@@ -275,6 +275,44 @@ specula/
 └── llama.cpp/                  # sibling checkout, gitignored
     └── build-cpu/              # built; binaries in bin/, DLLs copied
 ```
+
+## Phase 5 status (session 9, 2026-04-21)
+
+**Step 4 CLOSED.** `models/qwen3_0_6b_draft_v81_ctx512.bin` (1438 MB)
+is on disk. AI Hub job `jgzx6xlz5` compiled cleanly on the first
+attempt off the x86-produced `nomask` ONNX: CREATED → OPTIMIZING_MODEL
+→ **SUCCESS at t=400s**. This cleared the 440-465s CTX-BIN wall that
+killed the prior 8 attempts — the x86-side `nomask` variant
+(onnxsim + aggressive mask-subgraph removal, commit `adbbbd4`)
+eliminated `attention_mask`, `Where`, and `IsNaN` entirely, so HTP
+had no BOOL tensors to reject. See `qlcom_compile_status.md` for the
+full retro.
+
+Current local state:
+- `models/qwen3-0.6b-nomask/` — x86 handoff input (3 GB onnx + data)
+- `models/qwen3-0.6b-nomask-ai-hub/` — staged for upload (2.87 GB)
+- `models/qwen3_0_6b_draft_v81_ctx512.bin` — compiled HTP context
+  binary, signed via AI Hub's QAIRT stack. Target for step 5.
+
+Steps 5-10 (per `docs/npu_scoping.md` §7) still ahead:
+
+```
+[DONE]    1. Environment snapshot                 (commit 7230210)
+[DONE]    2. ORT-QNN sidecar skeleton             (commit 282e84a)
+[DONE]    3. Qwen3-0.6B ONNX sourced + CPU-valid  (commit 106c756)
+[DONE]    4. AI Hub compile -> Hexagon .bin       (session 9 ★)
+          5. Load .bin via NPUSession, shape-check <-- next
+          6. Correctness vs CPU, single greedy prompt
+          7. Pipe first drafted token through llama.cpp verify
+          8. External-drafter bridge for llama.cpp spec decode
+          9. First NPU-spec number on 10-prompt humaneval
+         10. Sweep k values, write up, close phase
+```
+
+Step 5 risk: `NPUSession` currently loads `.onnx` files. Context
+binaries need a different ORT-QNN load path (either via
+`qnn_context_binary_file` provider option or via an ONNX-EPContext
+wrapper that AI Hub emits alongside). Small extension expected.
 
 ## Immediate next steps (next session)
 

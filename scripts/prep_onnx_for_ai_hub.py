@@ -30,15 +30,16 @@ import onnx
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# Source = ORT-BASIC-optimized version of the optimum --no-post-process
-# export. The raw optimum output ran aground on HTP compile at
-# /model/Gather_5 (dynamic attention-mask subgraph). ORT's basic graph
-# optimizer constant-folds the mask-construction Range/Shape chain
-# without fusing ops back into com.microsoft. Produced by
-# scripts/ort_optimize_onnx.py.
-SOURCE_ONNX = REPO_ROOT / "models" / "qwen3-0.6b-patched" / "model.onnx"
-SOURCE_DATA = REPO_ROOT / "models" / "qwen3-0.6b-patched" / "model.onnx_data"
-STAGING = REPO_ROOT / "models" / "qwen3-0.6b-patched-ai-hub"
+# Source = x86-produced "nomask" ONNX: onnxsim + aggressive attention-
+# mask replacement (step 4g). Zero BOOL tensors, zero Where/IsNaN,
+# input signature drops `attention_mask` entirely — causal mask is
+# pre-baked for decode-only (seq_len=1, past=511, total=512).
+# Earlier dead-end chain (patched -> patched-ai-hub, built off the
+# Gather_5 surgical-Cast hack) is retained on disk for audit; swap
+# SOURCE_* paths back if reverting.
+SOURCE_ONNX = REPO_ROOT / "models" / "qwen3-0.6b-nomask" / "model.onnx"
+SOURCE_DATA = REPO_ROOT / "models" / "qwen3-0.6b-nomask" / "model.onnx_data"
+STAGING = REPO_ROOT / "models" / "qwen3-0.6b-nomask-ai-hub"
 STAGED_ONNX = STAGING / "model.onnx"
 STAGED_DATA = STAGING / "model.data"
 

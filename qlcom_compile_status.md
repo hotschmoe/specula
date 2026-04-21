@@ -1,5 +1,17 @@
 # Qualcomm AI Hub compile — handoff status
 
+> **STATUS: CLOSED 2026-04-21 (session 9).** Step 4 is done. Context
+> binary `models/qwen3_0_6b_draft_v81_ctx512.bin` (1438 MB) compiled
+> cleanly on first attempt off the x86-produced `nomask` ONNX. Job
+> `jgzx6xlz5` went CREATED → OPTIMIZING_MODEL → **SUCCESS at t=400s**,
+> sailing past the 440-465s CTX-BIN wall that killed the prior 8
+> attempts. The fix that unstuck it: x86-side `nomask` variant removed
+> `attention_mask` + `Where` + `IsNaN` nodes entirely (zero BOOL
+> tensors), so HTP had nothing to reject.
+>
+> This document is retained as post-mortem. For current state, see
+> `current_status.md` Phase 5 and `docs/npu_scoping.md` §7 step 5.
+
 Written 2026-04-20 at the end of session 8. One document to read cold
 and be productive in 10 minutes on Phase 5 step 4 (getting a working
 Hexagon v81 QNN context binary for Qwen3-0.6B).
