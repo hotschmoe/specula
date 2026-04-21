@@ -1,24 +1,15 @@
-"""Produce QAIRT-compatible Qwen3-0.6B ONNX on an x86_64 machine.
+"""DEPRECATED: this path does not actually decompose ORT fused ops.
 
-**Run this on a non-WoA machine (Linux x86_64 or Windows x86_64), NOT
-the Snapdragon X2E target.** It uses Microsoft's
-`onnxruntime_genai.models.builder` which handles decomposition of
-ORT-internal fused ops (SimplifiedLayerNormalization, RotaryEmbedding,
-GroupQueryAttention, etc.) into the standard-domain primitives that
-QAIRT's QNN converter accepts.
+Kept for reference. Tested against onnxruntime-genai 0.13.1 (current PyPI
+latest, 2026-04-20): the `execution_provider="qnn"` flag is silently
+accepted but there is no `qnn` entry in the builder's `ep_attrs` dict
+(only cpu/cuda/dml/webgpu/trt-rtx), and `grep -ri qnn` across the
+installed package returns zero matches. The produced ONNX still contains
+`com.microsoft::RotaryEmbedding`, `SkipSimplifiedLayerNormalization`,
+and `MultiHeadAttention` — the exact ops QAIRT's QNN converter rejects.
+The call then crashes at `make_genai_config` with `KeyError: 'qnn'`.
 
-Why not run this on the X2E directly: torch has no cp312 win_arm64
-wheel, and the builder needs torch to trace the HF PyTorch checkpoint.
-
-See docs/phase5_export_on_x86.md for the end-to-end procedure
-(prerequisites, transfer back to the target, re-run of compile).
-
-Run:
-    python scripts/export_qwen3_qnn.py [--precision fp16|int4] [--output PATH]
-
-Defaults:
-    precision = fp16   (HTP supports fp16 natively; smaller = int4)
-    output    = models/qwen3-0.6b-qnn-source/
+Use the optimum path instead — see docs/phase5_export_on_x86.md.
 """
 
 import argparse
@@ -89,6 +80,7 @@ def main() -> int:
         precision=args.precision,
         execution_provider=EXECUTION_PROVIDER,
         cache_dir=str(args.cache),
+        hf_token="false",  # Qwen3-0.6B is public; skip local-token lookup
     )
     print(f"\nexport complete in {time.perf_counter() - t0:.1f} s")
 
