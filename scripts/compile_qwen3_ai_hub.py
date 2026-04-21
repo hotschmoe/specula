@@ -7,22 +7,33 @@ Two-mode script:
     --submit  upload the model + submit a compile job + wait for result
               + download the .bin.
 
-Shape decisions (first-cut, CONTEXT_MAX=512, decode-only):
+Two source variants supported (session 11 handoff from x86):
+
+    --path patha       58 inputs (input_ids, position_ids, 56 past_kv).
+                       attention_mask promoted to initializer; BOOL casts
+                       folded out. BOOL tensors remain downstream.
+                       Hypothesis: HTP rejects Cast-to-BOOL, not BOOL
+                       tensors in general.
+    --path pathbmask   59 inputs (input_ids, position_ids, attention_bias,
+                       56 past_kv). Entire BOOL mask subgraph deleted;
+                       additive FP32 bias spliced into 28 Add_2 nodes.
+                       Zero BOOL tensors anywhere. Matches Qualcomm zoo
+                       Qwen3-4B production pattern.
+
+Shape decisions (both paths, CONTEXT_MAX=512, decode-only):
     input_ids               [1, 1]            int64
     position_ids            [1, 1]            int64
-    past_key_values.N.key   [1, 8, 511, 128]  float32     (N = 0..27)
+    attention_bias          [1, 1, 1, 512]    float32   (pathbmask only)
+    past_key_values.N.key   [1, 8, 511, 128]  float32   (N = 0..27)
     past_key_values.N.value [1, 8, 511, 128]  float32
-
-Note: the nomask ONNX no longer exposes `attention_mask` as an input —
-the aggressive BOOL-removal pass on x86 (step 4g) pre-baked the causal
-mask into the graph for decode-only use. Total inputs = 2 + 28*2 = 58.
 
 Prefill-on-CPU stays on the host; NPU only does single-token draft
 steps. See docs/npu_scoping.md section 6.4.
 
 Run:
-    .venv\\Scripts\\python.exe scripts\\compile_qwen3_ai_hub.py --check
-    .venv\\Scripts\\python.exe scripts\\compile_qwen3_ai_hub.py --submit
+    .venv\\Scripts\\python.exe scripts\\compile_qwen3_ai_hub.py --path patha --check
+    .venv\\Scripts\\python.exe scripts\\compile_qwen3_ai_hub.py --path patha --submit
+    .venv\\Scripts\\python.exe scripts\\compile_qwen3_ai_hub.py --path pathbmask --submit
 """
 
 import argparse
@@ -36,19 +47,9 @@ import onnxruntime as ort
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# Source = x86-produced "nomask" ONNX (step 4g): onnxsim + aggressive
-# attention-mask removal, zero BOOL tensors. config.json travels with it.
-SOURCE_DIR = REPO_ROOT / "models" / "qwen3-0.6b-nomask"
-CONFIG_JSON = SOURCE_DIR / "config.json"
-# AI Hub upload targets the staging dir produced by prep_onnx_for_ai_hub.py
-# (qai-hub requires .onnx/.data extensions).
-STAGING_DIR = REPO_ROOT / "models" / "qwen3-0.6b-nomask-ai-hub"
-MODEL_ONNX = STAGING_DIR / "model.onnx"
-MODEL_DATA = STAGING_DIR / "model.data"
 
 CONTEXT_MAX = 512
 DEVICE = "Snapdragon X2 Elite CRD"
-JOB_NAME = f"qwen3-0.6b-draft-v81-ctx{CONTEXT_MAX}-fp16"
 # Compile options learned across attempts 3-5 + session 9. Keep them
 # comment-tagged so future sessions know what each flag buys:
 #   --target_runtime qnn_context_binary  emit a preloaded HTP binary
@@ -73,10 +74,32 @@ COMPILE_OPTIONS = (
     "--quantize_full_type float16 "
     "--qairt_version 2.42"
 )
-OUTPUT_BIN = REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.bin"
 
 
-def build_input_specs(cfg: dict) -> dict:
+# path_key -> config for this path's source + output naming.
+PATHS: dict[str, dict] = {
+    "patha": {
+        "source_dir": REPO_ROOT / "models" / "qwen3-0.6b-patha",
+        "staging_dir": REPO_ROOT / "models" / "qwen3-0.6b-patha-ai-hub",
+        "output_bin": REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.patha.bin",
+        "job_name": f"qwen3-0.6b-draft-v81-ctx{CONTEXT_MAX}-patha-fp16",
+        "extra_input_specs": {},
+    },
+    "pathbmask": {
+        "source_dir": REPO_ROOT / "models" / "qwen3-0.6b-pathbmask",
+        "staging_dir": REPO_ROOT / "models" / "qwen3-0.6b-pathbmask-ai-hub",
+        "output_bin": REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.pathbmask.bin",
+        "job_name": f"qwen3-0.6b-draft-v81-ctx{CONTEXT_MAX}-pathbmask-fp16",
+        # Path B-mask's additive attention bias. All-zeros at runtime for
+        # the decode-only regime (past=511 + seq_q=1 = fully-valid window).
+        "extra_input_specs": {
+            "attention_bias": ((1, 1, 1, CONTEXT_MAX), "float32"),
+        },
+    },
+}
+
+
+def build_input_specs(cfg: dict, extra_input_specs: dict) -> dict:
     """Static shapes + dtypes for every ONNX input, keyed by input name.
 
     Follows the qai_hub convention: {name: ((shape...), "dtype_str")}.
@@ -91,6 +114,7 @@ def build_input_specs(cfg: dict) -> dict:
         "input_ids": ((1, 1), "int64"),
         "position_ids": ((1, 1), "int64"),
     }
+    specs.update(extra_input_specs)
     for i in range(n_layers):
         shape = (1, n_kv, past_len, head_dim)
         specs[f"past_key_values.{i}.key"] = (shape, "float32")
@@ -98,12 +122,9 @@ def build_input_specs(cfg: dict) -> dict:
     return specs
 
 
-def validate_specs_vs_onnx(specs: dict) -> list:
+def validate_specs_vs_onnx(specs: dict, model_onnx: Path) -> list:
     """Load the ONNX header, compare input names to specs. Return any issues."""
-    sess = ort.InferenceSession(
-        str(MODEL_ONNX),
-        providers=["CPUExecutionProvider"],
-    )
+    sess = ort.InferenceSession(str(model_onnx), providers=["CPUExecutionProvider"])
     onnx_inputs = {x.name: x for x in sess.get_inputs()}
     issues = []
     spec_names = set(specs.keys())
@@ -117,7 +138,6 @@ def validate_specs_vs_onnx(specs: dict) -> list:
         issues.append(f"specs names not in onnx: {sorted(extra_in_spec)[:3]} ... "
                       f"({len(extra_in_spec)} total)")
 
-    # Dtype alignment for overlapping names.
     dtype_map = {
         "tensor(int64)": "int64",
         "tensor(float)": "float32",
@@ -134,7 +154,9 @@ def validate_specs_vs_onnx(specs: dict) -> list:
 def summarize_specs(specs: dict) -> None:
     """Compact summary: first few, then KV cache envelope."""
     print(f"\n--- input_specs summary ({len(specs)} entries) ---")
-    for key in ("input_ids", "position_ids"):
+    for key in list(specs.keys()):
+        if key.startswith("past_key_values."):
+            continue
         shape, dtype = specs[key]
         print(f"  {key:40s} {shape}  {dtype}")
 
@@ -149,33 +171,39 @@ def summarize_specs(specs: dict) -> None:
         print(f"    layers={n_layers}, entries={len(kv_keys)}, total past-KV IO = {total_kv_mb:.1f} MB/call")
 
 
-def check_mode() -> int:
+def check_mode(path_cfg: dict) -> int:
     print("=== step 4 dry-run: AI Hub compile plan ===\n")
 
-    if not MODEL_ONNX.exists():
-        print(f"ERROR: staged ONNX not found at {MODEL_ONNX}")
-        print("  run scripts/prep_onnx_for_ai_hub.py first")
+    source_dir = path_cfg["source_dir"]
+    staging_dir = path_cfg["staging_dir"]
+    model_onnx = staging_dir / "model.onnx"
+    model_data = staging_dir / "model.data"
+    config_json = source_dir / "config.json"
+
+    if not model_onnx.exists():
+        print(f"ERROR: staged ONNX not found at {model_onnx}")
+        print("  run scripts/prep_onnx_for_ai_hub.py --path ... first")
         return 2
-    if not MODEL_DATA.exists():
-        print(f"ERROR: staged external-data missing at {MODEL_DATA}")
+    if not model_data.exists():
+        print(f"ERROR: staged external-data missing at {model_data}")
         return 2
 
-    model_mb = MODEL_ONNX.stat().st_size / (1024 * 1024)
-    data_mb = MODEL_DATA.stat().st_size / (1024 * 1024)
-    print(f"staged ONNX graph   : {MODEL_ONNX} ({model_mb:.1f} MB)")
-    print(f"staged ONNX weights : {MODEL_DATA.name} ({data_mb:.1f} MB)")
+    model_mb = model_onnx.stat().st_size / (1024 * 1024)
+    data_mb = model_data.stat().st_size / (1024 * 1024)
+    print(f"staged ONNX graph   : {model_onnx} ({model_mb:.1f} MB)")
+    print(f"staged ONNX weights : {model_data.name} ({data_mb:.1f} MB)")
     print(f"total upload size   : {(model_mb + data_mb) / 1024:.2f} GB")
 
-    with CONFIG_JSON.open() as f:
+    with config_json.open() as f:
         cfg = json.load(f)
     print(f"model_type          : {cfg.get('model_type')}")
     print(f"num_hidden_layers   : {cfg['num_hidden_layers']}")
 
-    specs = build_input_specs(cfg)
+    specs = build_input_specs(cfg, path_cfg["extra_input_specs"])
     summarize_specs(specs)
 
     print("\n--- validating specs against ONNX header ---")
-    issues = validate_specs_vs_onnx(specs)
+    issues = validate_specs_vs_onnx(specs, model_onnx)
     if issues:
         print("issues found:")
         for i in issues:
@@ -197,47 +225,44 @@ def check_mode() -> int:
     print(f"device '{DEVICE}' available (os={device_match[0].os})")
 
     print("\n--- compile invocation that would run on --submit ---")
-    print(f"  hub.upload_model(path={MODEL_ONNX})")
+    print(f"  hub.upload_model(path={model_onnx.parent})")
     print(f"  hub.submit_compile_job(")
     print(f"      model=<uploaded>,")
-    print(f"      name='{JOB_NAME}',")
+    print(f"      name='{path_cfg['job_name']}',")
     print(f"      device=hub.Device('{DEVICE}'),")
     print(f"      input_specs=<{len(specs)} entries>,")
     print(f"      options='{COMPILE_OPTIONS}',")
     print(f"  )")
     print(f"  job.wait()")
-    print(f"  job.get_target_model().download('{OUTPUT_BIN.name}')")
-
-    print("\n--- expected outcomes (first attempt) ---")
-    print("  compile time   : ~5-20 min for a 28-layer 0.6B model at ctx 512")
-    print("  binary size    : ~500-800 MB for FP16 HTP context binary")
-    print("  failure modes  : QAIRT converter op-lowering (scoping doc 3.4),")
-    print("                   input-name mismatch, dynamic-dim leftover")
+    print(f"  job.get_target_model().download('{path_cfg['output_bin'].name}')")
 
     print("\n=== STATUS: dry-run ok; re-run with --submit to actually compile ===")
     return 0
 
 
-def submit_mode(reuse_upload: str | None = None) -> int:
+def submit_mode(path_cfg: dict, reuse_upload: str | None = None) -> int:
     import qai_hub as hub
 
-    if not MODEL_ONNX.exists():
-        print(f"ERROR: ONNX not found at {MODEL_ONNX}")
+    source_dir = path_cfg["source_dir"]
+    staging_dir = path_cfg["staging_dir"]
+    model_onnx = staging_dir / "model.onnx"
+    config_json = source_dir / "config.json"
+    output_bin = path_cfg["output_bin"]
+    job_name = path_cfg["job_name"]
+
+    if not model_onnx.exists():
+        print(f"ERROR: ONNX not found at {model_onnx}")
         return 2
 
-    with CONFIG_JSON.open() as f:
+    with config_json.open() as f:
         cfg = json.load(f)
-    specs = build_input_specs(cfg)
+    specs = build_input_specs(cfg, path_cfg["extra_input_specs"])
 
     if reuse_upload:
         print(f"reusing uploaded model_id={reuse_upload} (skipping ~15 min upload)")
         model_handle = hub.get_model(reuse_upload)
     else:
-        # ONNX with external data: upload the DIRECTORY, not the single
-        # .onnx file. qai-hub picks up both files this way. The first
-        # --submit attempt failed with 'missing external weights' when
-        # we passed only the .onnx path.
-        upload_path = MODEL_ONNX.parent
+        upload_path = model_onnx.parent
         upload_bytes = sum(p.stat().st_size for p in upload_path.iterdir() if p.is_file())
         print(f"uploading {upload_path} ({upload_bytes / (1024**3):.2f} GB) to AI Hub ...")
         t0 = time.perf_counter()
@@ -245,10 +270,10 @@ def submit_mode(reuse_upload: str | None = None) -> int:
         t_upload = time.perf_counter() - t0
         print(f"uploaded in {t_upload:.1f} s, model_id={model_handle.model_id}")
 
-    print(f"\nsubmitting compile job '{JOB_NAME}' ...")
+    print(f"\nsubmitting compile job '{job_name}' ...")
     job = hub.submit_compile_job(
         model=model_handle,
-        name=JOB_NAME,
+        name=job_name,
         device=hub.Device(DEVICE),
         input_specs=specs,
         options=COMPILE_OPTIONS,
@@ -278,16 +303,17 @@ def submit_mode(reuse_upload: str | None = None) -> int:
 
     print(f"\ncompile succeeded in ~{elapsed}s total")
     target_model = job.get_target_model()
-    OUTPUT_BIN.parent.mkdir(parents=True, exist_ok=True)
-    print(f"downloading to : {OUTPUT_BIN}")
-    target_model.download(str(OUTPUT_BIN))
-    print(f"downloaded {OUTPUT_BIN.stat().st_size / (1024*1024):.1f} MB")
+    output_bin.parent.mkdir(parents=True, exist_ok=True)
+    print(f"downloading to : {output_bin}")
+    target_model.download(str(output_bin))
+    print(f"downloaded {output_bin.stat().st_size / (1024*1024):.1f} MB")
     print(f"\n=== STATUS: ok ===")
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--path", choices=sorted(PATHS), required=True)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--check", action="store_true", help="validate + print plan, no upload")
     group.add_argument("--submit", action="store_true", help="upload + compile + download")
@@ -298,11 +324,12 @@ def main() -> int:
         help="skip upload, reuse an already-uploaded AI Hub model_id (e.g. mn1goxe4n)",
     )
     args = parser.parse_args()
+    path_cfg = PATHS[args.path]
     try:
         if args.check:
-            return check_mode()
+            return check_mode(path_cfg)
         if args.submit:
-            return submit_mode(reuse_upload=args.reuse_upload)
+            return submit_mode(path_cfg, reuse_upload=args.reuse_upload)
     except Exception:
         traceback.print_exc()
         return 2

@@ -1,26 +1,42 @@
-"""Phase 5 step 4a - stage the Qwen3 ONNX for qai-hub upload.
+"""Phase 5 step 4a - stage a Qwen3 ONNX for qai-hub upload.
 
 qai-hub requires model directories to contain only .onnx / .data /
-.encodings / .bin files. onnx-community's export names its external-data
+.encodings / .bin files. The optimum export names its external-data
 file `model.onnx_data`, which qai-hub rejects. Fix is a two-step:
 
     (1) patch every TensorProto.external_data entry that points at
         `model.onnx_data` to point at `model.data` instead.
-    (2) hardlink the original weights file to the new name so no
-        data is duplicated (or fall back to a copy on filesystems
-        without hardlink support).
+    (2) copy the original weights file under the new name. (We used
+        to hardlink for zero-duplication, but ORT 1.24+ refuses to
+        read external-data files with >1 hard links.)
 
-Output directory: models/qwen3-0.6b-ai-hub/ with:
-    model.onnx  (the patched graph)
-    model.data  (hardlink to original model.onnx_data, 1993 MB shared)
+A third transform pins every graph input's declared shape to the
+static dims AI Hub expects. Session 11 failed both Path A and Path
+B-mask because the optimum export keeps batch + sequence dims as
+symbolic `-1`; AI Hub's compiler pipeline has a pass
+(`_op_identity.py:30`) that calls `np.broadcast_shapes` on dims and
+chokes on SymbolicDim. See `docs/phase5_step6_compile_retro.md`.
+The pin is a pure protobuf edit on `ValueInfoProto` and preserves
+graph numerics bit-for-bit (cos=1.0 per session 10 bisection).
 
-Idempotent: overwrites model.onnx and re-links model.data on re-run.
+Multiple source variants are supported via --path; each comes from
+`docs/phase5_step6_export_report.md` (x86 handoff):
+
+    patha      BOOL casts folded out (ConstantOfShape replaces Gather_5),
+               BOOL tensors remain downstream. Drops attention_mask input.
+    pathbmask  entire BOOL mask subgraph deleted + new FP32 attention_bias
+               input spliced into 28 Add_2 nodes. Zero BOOL tensors.
+
+The session 7-9 `nomask` variant is quarantined (onnxsim corruption) and
+not selectable here.
 
 Run:
-    .venv\\Scripts\\python.exe scripts\\prep_onnx_for_ai_hub.py
+    .venv\\Scripts\\python.exe scripts\\prep_onnx_for_ai_hub.py --path patha
+    .venv\\Scripts\\python.exe scripts\\prep_onnx_for_ai_hub.py --path pathbmask
 """
 
-import os
+import argparse
+import json
 import shutil
 import sys
 import time
@@ -30,18 +46,14 @@ import onnx
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# Source = x86-produced "nomask" ONNX: onnxsim + aggressive attention-
-# mask replacement (step 4g). Zero BOOL tensors, zero Where/IsNaN,
-# input signature drops `attention_mask` entirely — causal mask is
-# pre-baked for decode-only (seq_len=1, past=511, total=512).
-# Earlier dead-end chain (patched -> patched-ai-hub, built off the
-# Gather_5 surgical-Cast hack) is retained on disk for audit; swap
-# SOURCE_* paths back if reverting.
-SOURCE_ONNX = REPO_ROOT / "models" / "qwen3-0.6b-nomask" / "model.onnx"
-SOURCE_DATA = REPO_ROOT / "models" / "qwen3-0.6b-nomask" / "model.onnx_data"
-STAGING = REPO_ROOT / "models" / "qwen3-0.6b-nomask-ai-hub"
-STAGED_ONNX = STAGING / "model.onnx"
-STAGED_DATA = STAGING / "model.data"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from compile_qwen3_ai_hub import PATHS as COMPILE_PATHS, build_input_specs  # noqa: E402
+
+# path_key -> (source_dir_name, staging_dir_name)
+PATHS = {
+    "patha": ("qwen3-0.6b-patha", "qwen3-0.6b-patha-ai-hub"),
+    "pathbmask": ("qwen3-0.6b-pathbmask", "qwen3-0.6b-pathbmask-ai-hub"),
+}
 
 OLD_LOCATION = "model.onnx_data"
 NEW_LOCATION = "model.data"
@@ -74,11 +86,9 @@ def patch_external_data_refs(model: onnx.ModelProto) -> tuple[int, int]:
     node_patched = 0
     for node in model.graph.node:
         for attr in node.attribute:
-            # Single tensor attribute (e.g. Constant's `value`).
             if attr.type == onnx.AttributeProto.TENSOR and attr.t.external_data:
                 if _patch_tensor(attr.t):
                     node_patched += 1
-            # Repeated-tensor attributes are rare but handle them too.
             if attr.type == onnx.AttributeProto.TENSORS:
                 for t in attr.tensors:
                     if t.external_data and _patch_tensor(t):
@@ -87,36 +97,68 @@ def patch_external_data_refs(model: onnx.ModelProto) -> tuple[int, int]:
 
 
 def materialize(src: Path, dst: Path) -> str:
-    """Copy src -> dst, replacing any existing dst.
-
-    Originally used os.link() for zero-disk-duplication, but ORT 1.24+
-    ships an onnx C++ loader with a 'hardlink attack' check that refuses
-    to read any external-data file that has >1 hard links. Since we both
-    (a) validate the staged ONNX locally with ORT-CPU and (b) want
-    qai-hub to see a clean single-reference file, we just copy. 3 GB of
-    disk is cheap and this is the least-surprising behaviour.
-    """
     if dst.exists():
         dst.unlink()
     shutil.copy2(src, dst)
     return "copy"
 
 
-def main() -> int:
-    if not SOURCE_ONNX.exists():
-        print(f"ERROR: source ONNX missing at {SOURCE_ONNX}")
-        print("  run scripts/download_qwen3_onnx.py first")
+def pin_input_shapes(model: onnx.ModelProto, specs: dict) -> tuple[int, int]:
+    """Rewrite each matching graph input's TensorShapeProto to static dims.
+
+    For each input listed in `specs`, overwrite its `dim` entries so every
+    `dim_value` is the concrete integer from the spec. Inputs not in
+    `specs` are left alone (spec-vs-ONNX parity is enforced at compile
+    `--check` time).
+
+    Returns (pinned_count, already_static_count).
+    """
+    pinned = 0
+    already_static = 0
+    for inp in model.graph.input:
+        spec = specs.get(inp.name)
+        if spec is None:
+            continue
+        target_shape, _dtype = spec
+        t_shape = inp.type.tensor_type.shape
+        current = tuple(
+            (d.dim_value if d.HasField("dim_value") else d.dim_param)
+            for d in t_shape.dim
+        )
+        if current == tuple(int(x) for x in target_shape):
+            already_static += 1
+            continue
+        del t_shape.dim[:]
+        for dim_value in target_shape:
+            t_shape.dim.add().dim_value = int(dim_value)
+        pinned += 1
+    return pinned, already_static
+
+
+def stage(path_key: str) -> int:
+    source_dir_name, staging_dir_name = PATHS[path_key]
+    source_dir = REPO_ROOT / "models" / source_dir_name
+    staging = REPO_ROOT / "models" / staging_dir_name
+    source_onnx = source_dir / "model.onnx"
+    source_data = source_dir / "model.onnx_data"
+    staged_onnx = staging / "model.onnx"
+    staged_data = staging / "model.data"
+
+    if not source_onnx.exists():
+        print(f"ERROR: source ONNX missing at {source_onnx}")
         return 2
-    if not SOURCE_DATA.exists():
-        print(f"ERROR: external-data file missing at {SOURCE_DATA}")
+    if not source_data.exists():
+        print(f"ERROR: external-data file missing at {source_data}")
         return 2
 
-    STAGING.mkdir(parents=True, exist_ok=True)
-    print(f"staging dir         : {STAGING}")
+    staging.mkdir(parents=True, exist_ok=True)
+    print(f"path key            : {path_key}")
+    print(f"source dir          : {source_dir}")
+    print(f"staging dir         : {staging}")
 
-    print(f"loading graph-only (no weights into memory) from {SOURCE_ONNX.name} ...")
+    print(f"loading graph-only (no weights into memory) from {source_onnx.name} ...")
     t0 = time.perf_counter()
-    model = onnx.load(str(SOURCE_ONNX), load_external_data=False)
+    model = onnx.load(str(source_onnx), load_external_data=False)
     print(f"  loaded in {time.perf_counter() - t0:.2f} s, {len(model.graph.initializer)} initializers")
 
     init_patched, node_patched = patch_external_data_refs(model)
@@ -126,30 +168,42 @@ def main() -> int:
     print(f"  node attribute tensors     : {node_patched}")
     if total == 0:
         print("WARNING: no external_data references found to patch.")
-        print("  if weights file exists separately, qai-hub may still reject.")
 
-    print(f"saving patched graph to {STAGED_ONNX.name} (graph-only, no data rewrite) ...")
-    t0 = time.perf_counter()
-    # save_as_external_data=False means "don't re-consolidate" here, since
-    # the graph already has external_data refs and the actual weights
-    # live in a separate file we're about to link up.
-    onnx.save(model, str(STAGED_ONNX), save_as_external_data=False)
-    print(f"  saved in {time.perf_counter() - t0:.2f} s, {STAGED_ONNX.stat().st_size / (1024*1024):.1f} MB")
+    with (source_dir / "config.json").open() as f:
+        cfg = json.load(f)
+    compile_extra = COMPILE_PATHS[path_key]["extra_input_specs"]
+    specs = build_input_specs(cfg, compile_extra)
+    pinned, already_static = pin_input_shapes(model, specs)
+    print(f"pinned {pinned} graph input shapes to static dims "
+          f"({already_static} already static, "
+          f"{len(specs) - pinned - already_static} not declared on graph)")
 
-    print(f"copying weights {SOURCE_DATA.name} -> {STAGED_DATA.name} ...")
+    print(f"saving patched graph to {staged_onnx.name} (graph-only, no data rewrite) ...")
     t0 = time.perf_counter()
-    mode = materialize(SOURCE_DATA, STAGED_DATA)
+    onnx.save(model, str(staged_onnx), save_as_external_data=False)
+    print(f"  saved in {time.perf_counter() - t0:.2f} s, {staged_onnx.stat().st_size / (1024*1024):.1f} MB")
+
+    print(f"copying weights {source_data.name} -> {staged_data.name} ...")
+    t0 = time.perf_counter()
+    mode = materialize(source_data, staged_data)
     elapsed = time.perf_counter() - t0
-    data_mb = STAGED_DATA.stat().st_size / (1024 * 1024)
+    data_mb = staged_data.stat().st_size / (1024 * 1024)
     print(f"  {mode} complete in {elapsed:.2f} s, {data_mb:.1f} MB")
 
     print("\nstaging directory contents:")
-    for p in sorted(STAGING.iterdir()):
+    for p in sorted(staging.iterdir()):
         size_mb = p.stat().st_size / (1024 * 1024) if p.is_file() else 0
         print(f"  {p.name:20s} {size_mb:8.1f} MB")
 
-    print(f"\n=== STATUS: ok; AI Hub upload can target {STAGING} ===")
+    print(f"\n=== STATUS: ok; AI Hub upload can target {staging} ===")
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--path", choices=sorted(PATHS), required=True)
+    args = parser.parse_args()
+    return stage(args.path)
 
 
 if __name__ == "__main__":

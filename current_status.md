@@ -1,8 +1,10 @@
 # specula -- current status
 
-Last updated: 2026-04-21 (session 10 -- step 6 diagnosis: NPU binary
-runs but is semantically WRONG; nomask ONNX itself is broken.
-Step 4 needs a redo. Qualcomm Qwen3-4B reference surveyed.)
+Last updated: 2026-04-21 (session 11 -- x86 delivered Path A +
+Path B-mask ONNX variants, cos=1.0 verified. First AI Hub compile
+cycle FAILED for both; workbench logs show AI Hub folds BOOL
+cleanly but chokes on dynamic shapes. Fix landed in
+prep_onnx_for_ai_hub.py, resubmit in progress.)
 
 Living document. Update every few turns. Anyone picking this up cold should
 be able to read this page, skim the README, and resume work.
@@ -505,22 +507,66 @@ wrong).
 
 
 
+### Session 11 (2026-04-21): first compile cycle on patha + pathbmask
+
+X86 team delivered two CPU-ORT-verified ONNX variants (both
+cos=1.0 vs optimum source, zero BOOL casts on both, zero BOOL
+tensors on pathbmask). Staging + AI Hub compile scripts
+parameterized by `--path {patha,pathbmask}`.
+
+Both first-cycle compiles **failed**; both for the same root
+cause — **dynamic shapes in the uploaded ONNX**. Full retro in
+`docs/phase5_step6_compile_retro.md`. Load-bearing findings:
+
+1. **AI Hub's OverrideFoldConstantsPass folds BOOL subgraphs
+   cleanly** when the shapes around them are concrete. Path A's
+   compile log shows Cast 348→1, ConstantOfShape 60→0, Equal
+   58→0, Where 86→0, Range 3→0 in a single pass. **The x86
+   team's "BOOL rejection" hypothesis was wrong** — surgical
+   BOOL removal was nice-to-have, not required.
+2. **AI Hub's compiler has a pass that doesn't handle SymbolicDim**
+   (`_op_identity.py:30` calls `np.broadcast_shapes` on dims).
+   Our ONNX declares `input_ids: (-1, -1)`, past_kv: `(-1, 8, -1, 128)`,
+   etc. — the rewriter blows up on the first symbolic dim it sees
+   after the fold pass.
+3. **Session 9's nomask compile only worked because onnxsim had
+   pinned shapes statically**. The x86 team replaced onnxsim
+   (correctly — it corrupted numerics) with pure protobuf surgical
+   folds, but those preserved dynamic shapes.
+
+Fix: a 30-LOC pure protobuf edit in `prep_onnx_for_ai_hub.py` that
+pins every graph input's `TensorShapeProto` dims to the static
+values from `compile_qwen3_ai_hub.build_input_specs`. Idempotent,
+no numerical impact (session 10 bisection established that
+protobuf-only edits preserve cos=1.0).
+
+Jobs (both artifacts):
+
+| path      | upload id  | job id     | status  | failure kind               |
+|-----------|------------|------------|---------|----------------------------|
+| patha     | mnzpwoe6q  | jp83n13kg  | FAILED  | SymbolicDim in rewriter    |
+| pathbmask | mqe19804m  | jp01w619g  | FAILED  | pre-compile shape mismatch |
+
+Local compile logs: `results/phase5_step6_compile_{patha,pathbmask}.log`.
+Workbench logs: `results/ai_hub_logs/{jp83n13kg,jp01w619g}.log/`.
+
+**Next:** resubmit both serially with the pinned ONNX. Serial avoids
+halving upload bandwidth on this link (~25 min/path single-stream
+vs ~50 min parallel). Predicted outcome: both compile (the fold pass
+already handled the BOOL region for Path A; pinning resolves the
+SymbolicDim bug for both).
+
 ## Immediate next steps (next session)
 
-**Blocker for step 7+: step 4 redo on x86.** The nomask ONNX
-pipeline corrupts the graph. Until a corrected ONNX lands and
-AI Hub emits a binary that passes the `npu_vs_cpu_correctness.py`
+**Blocker for step 7+: step 4 binary that passes correctness.**
+Until an AI Hub .bin passes the `npu_vs_cpu_correctness.py`
 probe (cos ≥ 0.99 on zero-KV control, cos ≥ 0.95 on prefilled-KV
 single step, ≥ 50% match-rate on 16-step sliding-window greedy),
 step 6 stays half-closed and step 7 (llama.cpp verify wiring)
 can't start. The CPU side of step 6 is ready and verified — only
 the NPU side is blocked.
 
-Handoff to the x86 machine: updated `docs/phase5_export_on_x86.md`
-carries the revised simplification plan (skip onnxsim, targeted
-surgical fold). Owner there re-runs the pipeline, transfers the
-new `model.onnx` + `model.onnx_data` back, and we re-stage +
-recompile via AI Hub (`compile_qwen3_ai_hub.py --submit`).
+Session 11 resubmit with pinned shapes is the current bet.
 
 **Strategy (session 5, 2026-04-20): close out Qwen3, then graduate
 fully to Qwen3.5 for all further work.**

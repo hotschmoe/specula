@@ -1,7 +1,7 @@
 """Phase 5 step 5 - load compiled HTP context binary, shape-check, smoke.
 
-Goal: prove the `.bin` produced by AI Hub loads on the X2E's Hexagon
-v81 via ORT-QNN, the IO signature matches the 58/57 we compiled for,
+Goal: prove a `.bin` produced by AI Hub loads on the X2E's Hexagon
+v81 via ORT-QNN, the IO signature matches what was compiled for,
 and a single forward pass completes without DMA/signing errors.
 Correctness vs CPU is step 6; this is structural only.
 
@@ -9,6 +9,11 @@ The .bin AI Hub downloaded is a RAW QNN context binary (header bytes
 `00 00 00 02 00 00 00 03 ...`), not an ONNX-EPContext wrapper. We
 hand-build a tiny ONNX whose single node is an EPContext referencing
 the .bin, then load that.
+
+Two source variants supported (matches scripts/compile_qwen3_ai_hub.py):
+
+    --path patha       58 inputs: input_ids + position_ids + 56 past_kv.
+    --path pathbmask   59 inputs: above + attention_bias (FP32 additive).
 
 ORT-QNN version dance (see docs/npu_ort_qnn_version_match.md):
 
@@ -21,9 +26,11 @@ ORT-QNN version dance (see docs/npu_ort_qnn_version_match.md):
     to 2.45 and `LoadCachedQnnContextFromBuffer` errors with code 5000.
 
 Run:
-    .venv\\Scripts\\python.exe scripts\\npu_load_qwen3_bin.py
+    .venv\\Scripts\\python.exe scripts\\npu_load_qwen3_bin.py --path patha
+    .venv\\Scripts\\python.exe scripts\\npu_load_qwen3_bin.py --path pathbmask
 """
 
+import argparse
 import json
 import sys
 import time
@@ -37,25 +44,41 @@ from onnx import TensorProto, helper
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-BIN_PATH = REPO_ROOT / "models" / "qwen3_0_6b_draft_v81_ctx512.bin"
-SOURCE_ONNX_DIR = REPO_ROOT / "models" / "qwen3-0.6b-nomask"
-CONFIG_JSON = SOURCE_ONNX_DIR / "config.json"
-# Wrapper ONNX (route B) lives next to the .bin so path resolution is trivial.
-WRAPPER_ONNX = REPO_ROOT / "models" / "qwen3_0_6b_draft_v81_ctx512.wrapper.onnx"
 
 SOC_MODEL = "88"
 HTP_ARCH = "81"
 CONTEXT_MAX = 512
 
+# Logits live on the first compiled output ('output_0'). Capture this so
+# downstream analysis code stays robust to the qairt naming convention.
+LOGITS_OUTPUT_NAME = "output_0"
 
-def describe_inputs(cfg: dict) -> list[tuple[str, list[int], int]]:
+
+def _bin_path(path_key: str) -> Path:
+    return REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.{path_key}.bin"
+
+
+def _wrapper_path(path_key: str) -> Path:
+    return REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.{path_key}.wrapper.onnx"
+
+
+def _config_json(path_key: str) -> Path:
+    source_dir = REPO_ROOT / "models" / f"qwen3-0.6b-{path_key}"
+    return source_dir / "config.json"
+
+
+def describe_inputs(cfg: dict, path_key: str) -> list[tuple[str, list[int], int]]:
     """Return (name, shape, elem_type) for each input.
 
-    Names + dtypes verified against `results/bin_inspect.json` (qnn-context-
-    binary-utility output): the qairt-converter normalises dotted names to
-    underscored ones, and `--preserve_io_datatype` keeps past_key_values
-    at FLOAT_32 even when `--quantize_full_type float16` is set for the
-    interior of the graph. `--truncate_64bit_io` does cast INT64 IO to INT32.
+    Names + dtypes verified against the compile-time input_specs in
+    scripts/compile_qwen3_ai_hub.py:
+      * the qairt-converter normalises dotted names to underscored;
+      * `--preserve_io_datatype` keeps past_key_values at FLOAT_32 even
+        when `--quantize_full_type float16` is set for the interior;
+      * `--truncate_64bit_io` casts INT64 IO to INT32.
+
+    Path B-mask additionally has `attention_bias` (FP32, additive)
+    as an input.
     """
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]
@@ -65,6 +88,8 @@ def describe_inputs(cfg: dict) -> list[tuple[str, list[int], int]]:
     inputs: list[tuple[str, list[int], int]] = []
     inputs.append(("input_ids", [1, 1], TensorProto.INT32))
     inputs.append(("position_ids", [1, 1], TensorProto.INT32))
+    if path_key == "pathbmask":
+        inputs.append(("attention_bias", [1, 1, 1, CONTEXT_MAX], TensorProto.FLOAT))
     for i in range(n_layers):
         inputs.append((f"past_key_values_{i}_key", [1, n_kv, past_len, head_dim], TensorProto.FLOAT))
         inputs.append((f"past_key_values_{i}_value", [1, n_kv, past_len, head_dim], TensorProto.FLOAT))
@@ -79,7 +104,6 @@ def describe_outputs(cfg: dict) -> list[tuple[str, list[int], int]]:
       output_0  = logits           [1, 1, vocab]
       output_1  = present.0.key    [1, n_kv, ctx, head_dim]
       output_2  = present.0.value
-      output_3  = present.1.key
       ...
       output_56 = present.27.value
     """
@@ -100,12 +124,7 @@ def describe_outputs(cfg: dict) -> list[tuple[str, list[int], int]]:
     return outputs
 
 
-# Logits live on the first compiled output ('output_0'). Capture this so
-# downstream analysis code stays robust to the qairt naming convention.
-LOGITS_OUTPUT_NAME = "output_0"
-
-
-def build_ep_context_wrapper(cfg: dict, bin_path: Path, out_path: Path) -> None:
+def build_ep_context_wrapper(cfg: dict, bin_path: Path, out_path: Path, path_key: str) -> None:
     """Write a small ONNX whose single node is an EPContext referencing the .bin.
 
     The EPContext op is ORT-QNN's documented mechanism for wrapping a
@@ -113,12 +132,15 @@ def build_ep_context_wrapper(cfg: dict, bin_path: Path, out_path: Path) -> None:
     can ingest it. embed_mode=0 means the binary lives in a sidecar file
     next to the wrapper ONNX; ep_cache_context is the binary's filename
     relative to the wrapper.
-
-    On ORT-QNN 1.24.4 + a 2.42-compiled binary this works; on 2.1.0 +
-    a 2.45-compiled binary the loader has bugs (see module docstring).
     """
-    inputs_decl = [helper.make_tensor_value_info(n, dt, shape) for n, shape, dt in describe_inputs(cfg)]
-    outputs_decl = [helper.make_tensor_value_info(n, dt, shape) for n, shape, dt in describe_outputs(cfg)]
+    inputs_decl = [
+        helper.make_tensor_value_info(n, dt, shape)
+        for n, shape, dt in describe_inputs(cfg, path_key)
+    ]
+    outputs_decl = [
+        helper.make_tensor_value_info(n, dt, shape)
+        for n, shape, dt in describe_outputs(cfg)
+    ]
 
     node = helper.make_node(
         "EPContext",
@@ -132,7 +154,7 @@ def build_ep_context_wrapper(cfg: dict, bin_path: Path, out_path: Path) -> None:
     )
     graph = helper.make_graph(
         nodes=[node],
-        name="qwen3_0_6b_draft_v81_ctx512_wrapper",
+        name=f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}_{path_key}_wrapper",
         inputs=inputs_decl,
         outputs=outputs_decl,
     )
@@ -175,10 +197,10 @@ def summarize_io(sess: ort.InferenceSession) -> dict:
     inputs = sess.get_inputs()
     outputs = sess.get_outputs()
     print(f"  inputs ({len(inputs)}):")
-    for x in inputs[:4]:
+    for x in inputs[:5]:
         print(f"    {x.name:38s} {str(x.shape):24s} {x.type}")
-    if len(inputs) > 4:
-        print(f"    ... ({len(inputs) - 4} more)")
+    if len(inputs) > 5:
+        print(f"    ... ({len(inputs) - 5} more)")
     print(f"  outputs ({len(outputs)}):")
     for x in outputs[:3]:
         print(f"    {x.name:38s} {str(x.shape):24s} {x.type}")
@@ -202,11 +224,8 @@ def build_zero_feed(sess: ort.InferenceSession) -> dict:
             raise RuntimeError(f"unknown onnx dtype {x.type} for input {x.name}")
         shape = tuple(d if isinstance(d, int) else 1 for d in x.shape)
         if x.name == "input_ids":
-            # Feed a plausible BOS-ish id (1). Zero might trip embedding bounds
-            # on some models; 1 is safe for Qwen vocab.
             feed[x.name] = np.ones(shape, dtype=np_dtype)
         elif x.name == "position_ids":
-            # Position past_len so the decode step covers slot 511.
             feed[x.name] = np.full(shape, CONTEXT_MAX - 1, dtype=np_dtype)
         else:
             feed[x.name] = np.zeros(shape, dtype=np_dtype)
@@ -217,27 +236,36 @@ def main() -> int:
     import functools
     global print
     print = functools.partial(print, flush=True)
-    print("=== step 5 - load compiled HTP context binary ===\n")
-    if not BIN_PATH.exists():
-        print(f"ERROR: {BIN_PATH} missing")
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--path", choices=("patha", "pathbmask"), required=True)
+    args = parser.parse_args()
+
+    bin_path = _bin_path(args.path)
+    wrapper_onnx = _wrapper_path(args.path)
+    config_json = _config_json(args.path)
+
+    print(f"=== step 5 - load compiled HTP context binary ({args.path}) ===\n")
+    if not bin_path.exists():
+        print(f"ERROR: {bin_path} missing")
         return 2
-    if not CONFIG_JSON.exists():
-        print(f"ERROR: {CONFIG_JSON} missing (need shapes for the EPContext wrapper)")
+    if not config_json.exists():
+        print(f"ERROR: {config_json} missing (need shapes for the EPContext wrapper)")
         return 2
-    with CONFIG_JSON.open() as f:
+    with config_json.open() as f:
         cfg = json.load(f)
-    print(f"bin size            : {BIN_PATH.stat().st_size / (1024*1024):.1f} MB")
+    print(f"bin size            : {bin_path.stat().st_size / (1024*1024):.1f} MB")
     print(f"model layers/kv_heads/head_dim : "
           f"{cfg['num_hidden_layers']}/{cfg['num_key_value_heads']}/"
           f"{cfg.get('head_dim', cfg['hidden_size'] // cfg['num_attention_heads'])}")
 
     print("\n--- build EPContext wrapper ONNX ---")
-    build_ep_context_wrapper(cfg, BIN_PATH, WRAPPER_ONNX)
-    print(f"  wrote {WRAPPER_ONNX.name} ({WRAPPER_ONNX.stat().st_size} bytes)")
+    build_ep_context_wrapper(cfg, bin_path, wrapper_onnx, args.path)
+    print(f"  wrote {wrapper_onnx.name} ({wrapper_onnx.stat().st_size} bytes)")
 
     print("\n--- load wrapper via legacy QNN EP (ORT 1.24.4) ---")
     try:
-        sess = load_wrapper(WRAPPER_ONNX)
+        sess = load_wrapper(wrapper_onnx)
     except Exception:
         print("\nload FAILED:")
         traceback.print_exc()

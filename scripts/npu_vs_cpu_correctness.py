@@ -41,11 +41,13 @@ Numerical expectations (informational, not strict tolerances):
     English is the bar for this step.
 
 Run:
-    .venv\\Scripts\\python.exe scripts\\npu_vs_cpu_correctness.py
+    .venv\\Scripts\\python.exe scripts\\npu_vs_cpu_correctness.py --path patha
+    .venv\\Scripts\\python.exe scripts\\npu_vs_cpu_correctness.py --path pathbmask
 """
 
 from __future__ import annotations
 
+import argparse
 import functools
 import json
 import sys
@@ -82,8 +84,14 @@ CPU_ONNX = CPU_ONNX_DIR / "model.onnx"
 TOKENIZER_JSON = CPU_ONNX_DIR / "tokenizer.json"
 CONFIG_JSON = CPU_ONNX_DIR / "config.json"
 
-NPU_BIN = REPO_ROOT / "models" / "qwen3_0_6b_draft_v81_ctx512.bin"
-NPU_WRAPPER = REPO_ROOT / "models" / "qwen3_0_6b_draft_v81_ctx512.wrapper.onnx"
+
+def _npu_bin(path_key: str) -> Path:
+    return REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.{path_key}.bin"
+
+
+def _npu_wrapper(path_key: str) -> Path:
+    return REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.{path_key}.wrapper.onnx"
+
 
 PROMPT = "The Snapdragon X2 Elite Extreme is"
 N_GREEDY_STEPS = 16  # multi-step comparison length
@@ -104,10 +112,12 @@ def load_cpu_session(onnx_path: Path) -> ort.InferenceSession:
     )
 
 
-def load_npu_session(cfg: dict) -> ort.InferenceSession:
-    if not NPU_WRAPPER.exists():
-        build_ep_context_wrapper(cfg, NPU_BIN, NPU_WRAPPER)
-    return load_wrapper(NPU_WRAPPER)
+def load_npu_session(cfg: dict, path_key: str) -> ort.InferenceSession:
+    bin_path = _npu_bin(path_key)
+    wrapper_path = _npu_wrapper(path_key)
+    if not wrapper_path.exists():
+        build_ep_context_wrapper(cfg, bin_path, wrapper_path, path_key)
+    return load_wrapper(wrapper_path)
 
 
 def cpu_build_feed(
@@ -171,12 +181,22 @@ def npu_build_feed(
     input_id: int,
     position: int,
     npu_past: dict[str, np.ndarray],
+    path_key: str,
 ) -> dict[str, np.ndarray]:
-    """NPU: INT32 ids/positions [1,1]; past_kv FP32 [1,8,511,128]."""
+    """NPU: INT32 ids/positions [1,1]; past_kv FP32 [1,8,511,128].
+
+    Path B-mask additionally requires an `attention_bias` FP32 input of
+    shape [1,1,1,512]. For the decode-only regime (fully-valid window)
+    the bias is all zeros; the causal / padding cases would use a
+    lower-triangular 0.0 / -65504.0 matrix but that's not needed for
+    the current sd.npu draft path.
+    """
     feed: dict[str, np.ndarray] = {
         "input_ids": np.array([[input_id]], dtype=np.int32),
         "position_ids": np.array([[position]], dtype=np.int32),
     }
+    if path_key == "pathbmask":
+        feed["attention_bias"] = np.zeros((1, 1, 1, CONTEXT_MAX), dtype=np.float32)
     feed.update(npu_past)
     return feed
 
@@ -315,6 +335,7 @@ def single_step(
     cpu_past: dict[str, np.ndarray],
     input_id: int,
     position: int,
+    path_key: str,
 ) -> tuple[np.ndarray, np.ndarray, list[np.ndarray], list[np.ndarray]]:
     """Run one decode step on both backends. Return (cpu_logits, npu_logits,
     cpu_outputs, npu_outputs) for callers that need the present KV too."""
@@ -337,7 +358,7 @@ def single_step(
 
     npu_out_names = [o.name for o in npu_sess.get_outputs()]
     npu_past = npu_past_from_cpu(cpu_past, n_layers)
-    npu_feed = npu_build_feed(input_id, position, npu_past)
+    npu_feed = npu_build_feed(input_id, position, npu_past, path_key)
     npu_outputs = npu_sess.run(None, npu_feed)
     npu_logits = npu_outputs[npu_out_names.index(LOGITS_OUTPUT_NAME)][0, -1]
 
@@ -353,6 +374,7 @@ def multi_step_sliding(
     anchor_next_id: int,
     anchor_position: int,
     n_steps: int,
+    path_key: str,
 ) -> dict:
     """From (past_511, next_id, position) run N greedy steps on each backend
     in lock-step with sliding-window KV. Each backend drives its own KV so
@@ -392,7 +414,7 @@ def multi_step_sliding(
         cpu_next = int(np.argmax(cpu_out[cpu_name_to_idx["logits"]][0, -1]))
 
         # NPU step.
-        npu_feed = npu_build_feed(npu_in, position, npu_past)
+        npu_feed = npu_build_feed(npu_in, position, npu_past, path_key)
         npu_out = npu_sess.run(None, npu_feed)
         npu_past = npu_present_to_past(npu_out, npu_out_names, n_layers)
         npu_next = int(
@@ -423,6 +445,7 @@ def zero_kv_diagnostic(
     tok: Tokenizer,
     bos_id: int,
     position: int,
+    path_key: str,
 ) -> None:
     """Control test: feed BOS + all-zero past_kv to both backends and compare.
 
@@ -446,7 +469,7 @@ def zero_kv_diagnostic(
         for k in ("key", "value")
     }
     cpu_logits, npu_logits, _, _ = single_step(
-        cpu_sess, npu_sess, cfg, cpu_past, bos_id, position
+        cpu_sess, npu_sess, cfg, cpu_past, bos_id, position, path_key
     )
     stats = compare_logits(cpu_logits, npu_logits)
     print(
@@ -464,13 +487,21 @@ def zero_kv_diagnostic(
 def main() -> int:
     global print
     print = functools.partial(print, flush=True)
-    print("=== step 6 - CPU vs NPU correctness ===\n")
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--path", choices=("patha", "pathbmask"), required=True)
+    args = parser.parse_args()
+    path_key = args.path
+
+    print(f"=== step 6 - CPU vs NPU correctness ({path_key}) ===\n")
+
+    npu_bin = _npu_bin(path_key)
 
     if not CPU_ONNX.exists():
         print(f"ERROR: {CPU_ONNX} missing (run download_qwen3_onnx.py)")
         return 2
-    if not NPU_BIN.exists():
-        print(f"ERROR: {NPU_BIN} missing (need AI Hub step 4 output)")
+    if not npu_bin.exists():
+        print(f"ERROR: {npu_bin} missing (need AI Hub step 4 output)")
         return 2
 
     with CONFIG_JSON.open() as f:
@@ -484,7 +515,7 @@ def main() -> int:
 
     print("\n--- loading NPU binary (FP16 interior, fixed past_len=511) ---")
     t0 = time.perf_counter()
-    npu_sess = load_npu_session(cfg)
+    npu_sess = load_npu_session(cfg, path_key)
     print(f"  loaded in {time.perf_counter() - t0:.1f} s")
     providers = npu_sess.get_providers()
     if not providers or providers[0] != "QNNExecutionProvider":
@@ -493,11 +524,11 @@ def main() -> int:
 
     print("\n--- zero-KV diagnostic (isolate graph vs KV-handoff failures) ---")
     bos_id = cfg.get("bos_token_id", 151643)
-    zero_kv_diagnostic(cpu_sess, npu_sess, cfg, tok, bos_id=bos_id, position=0)
-    zero_kv_diagnostic(cpu_sess, npu_sess, cfg, tok, bos_id=bos_id, position=511)
+    zero_kv_diagnostic(cpu_sess, npu_sess, cfg, tok, bos_id=bos_id, position=0, path_key=path_key)
+    zero_kv_diagnostic(cpu_sess, npu_sess, cfg, tok, bos_id=bos_id, position=511, path_key=path_key)
     # Also try a non-BOS token -- catches cases where BOS is a special
     # path in one graph but not the other.
-    zero_kv_diagnostic(cpu_sess, npu_sess, cfg, tok, bos_id=785, position=0)
+    zero_kv_diagnostic(cpu_sess, npu_sess, cfg, tok, bos_id=785, position=0, path_key=path_key)
 
     print("\n--- CPU prefill + decode to past_len=511 ---")
     anchor_past, anchor_next_id, generated = run_cpu_prefill_then_decode_to_511(
@@ -511,7 +542,7 @@ def main() -> int:
 
     print("\n--- single-step logit comparison at position 511 ---")
     cpu_logits, npu_logits, _, _ = single_step(
-        cpu_sess, npu_sess, cfg, anchor_past, anchor_next_id, anchor_position
+        cpu_sess, npu_sess, cfg, anchor_past, anchor_next_id, anchor_position, path_key
     )
     single = compare_logits(cpu_logits, npu_logits)
     print(f"  cpu argmax      : {single['cpu_argmax']}  -> {_safe_repr(tok.decode([single['cpu_argmax']]))}")
@@ -533,6 +564,7 @@ def main() -> int:
         anchor_next_id,
         anchor_position,
         n_steps=N_GREEDY_STEPS,
+        path_key=path_key,
     )
     print(f"  CPU stream ids  : {multi['cpu_stream']}")
     print(f"  NPU stream ids  : {multi['npu_stream']}")
