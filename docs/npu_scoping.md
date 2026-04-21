@@ -334,6 +334,22 @@ that GPU paths on X2 have ongoing driver issues and the NPU might
 inherit analogous weirdness. Flag as "surprise budget" rather than
 a specific failure.
 
+### 3.8 ORT-QNN ↔ AI Hub QAIRT version mismatch (error 5000 on context load)
+
+Hit on step 5, session 9: context binary compiled cleanly by AI Hub
+(QAIRT 2.45.40) but `InferenceSession` threw
+`LoadCachedQnnContextFromBuffer Failed to create context from binary.
+Error code: 5000`. Root cause: `onnxruntime-qnn 1.24.4` bundles
+QAIRT **2.42.0**; the serialized QNN context format is version-gated,
+so a 2.45-compiled binary won't load on a 2.42 runtime.
+
+Fix: upgrade to `onnxruntime-qnn>=2.1.0` (bundles 2.45.40 and ships
+`Genie.dll` as a bonus). Full gotcha writeup + diagnostic recipe in
+`docs/npu_ort_qnn_version_match.md`.
+
+Keep this pair in sync on every recompile. A 60-second version probe
+beats a 20-minute compile that produces an unloadable binary.
+
 ## 4. Toolchain pinning
 
 | Component               | Pin                                                    | Source                                         |

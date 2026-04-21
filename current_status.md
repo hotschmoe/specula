@@ -1,6 +1,6 @@
 # specula -- current status
 
-Last updated: 2026-04-21 (session 9 -- Phase 5 step 4 closed: HTP context binary on disk)
+Last updated: 2026-04-21 (session 9 -- step 4 closed; step 5 in flight, hit ORT-QNN ↔ QAIRT version-match wall)
 
 Living document. Update every few turns. Anyone picking this up cold should
 be able to read this page, skim the README, and resume work.
@@ -313,6 +313,33 @@ Step 5 risk: `NPUSession` currently loads `.onnx` files. Context
 binaries need a different ORT-QNN load path (either via
 `qnn_context_binary_file` provider option or via an ONNX-EPContext
 wrapper that AI Hub emits alongside). Small extension expected.
+
+**Step 5 mid-session status (2026-04-21):** the `.bin` itself is
+healthy — `qnn-context-binary-utility.exe` (QAIRT 2.45 native tool)
+loads and dumps it cleanly to `results/bin_inspect.json`. ORT-QNN
+loading hit a version-mismatch wall:
+
+- AI Hub compiled with QAIRT **2.45.40**.
+- `onnxruntime-qnn 1.24.4` (originally pinned) bundles QAIRT **2.42**
+  → `LoadCachedQnnContextFromBuffer` errors with code 5000.
+- Bumped to `onnxruntime-qnn 2.1.0` (bundles 2.45.40, ships Genie.dll).
+  This required learning the new plugin-EP API
+  (`SessionOptions.add_provider_for_devices` + `register_execution_provider_library`
+  — the legacy `providers=[("QNN...",opts)]` silently falls back to CPU
+  in 2.x). The plugin EP works for the tiny matmul smoke test, but the
+  context-binary loader crashes the interpreter on this Hexagon driver
+  (file-mapping retry path AND `embed_mode=1` path both segfault with no
+  Python traceback).
+- **Working path picked:** revert to `onnxruntime-qnn 1.24.4` (legacy EP,
+  proven on tiny smoke test) + recompile `.bin` via AI Hub with
+  `--qairt_version 2.42` so the binary matches what 1.24.4 reads.
+  Reuses `model_id=mng5oj90m`, ~7 min compile.
+
+Full diagnostic in `docs/npu_ort_qnn_version_match.md`. Cross-linked
+from `docs/npu_scoping.md` §3.8.
+
+Next: resubmit AI Hub compile with `--qairt_version 2.42`, then re-run
+`scripts/npu_load_qwen3_bin.py`.
 
 ## Immediate next steps (next session)
 

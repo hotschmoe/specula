@@ -35,6 +35,14 @@ reference = [
 # ORT-QNN bundles a signed QAIRT stack, which is the only path that loads on
 # retail Windows on ARM without Secure Boot tricks.
 npu = [
+    # 2.1.0 bundles QAIRT 2.45 (matches AI Hub default) but its
+    # context-binary loader has unrecoverable bugs on the X2E94100
+    # driver shipped with this machine — both the file-mapping retry
+    # path and embed_mode=1 path crash the interpreter with no
+    # traceback. See docs/npu_ort_qnn_version_match.md.
+    # Workable path: stay on 1.24.4 (legacy built-in EP, QAIRT 2.42)
+    # and pin AI Hub compiles to `--qairt_version 2.42` so the binary
+    # matches what 1.24.4 can read.
     "onnxruntime-qnn==1.24.4",
     "qai-hub>=0.48",
     "onnx>=1.17",
