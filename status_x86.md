@@ -207,4 +207,36 @@ delete the Where/BOOL chain.
 - Consolidated findings for the aarch64 team in
   `docs/phase5_step6_export_report.md`. That document is the handoff;
   this file remains the on-x86 operator logbook.
-- **Next:** transfer to `Z:\exposed\junk\` per the user's request.
+- Transferred to `Z:\exposed\junk\phase5_step6\` for the aarch64
+  team to pick up. MD5 verified end-to-end on both `model.onnx_data`
+  sidecars:
+    - patha: `214f4237ecaa0db8de26b6f440f88b40`
+    - pathbmask: `86658b4d5b573d07db4fc2db1d4a31a7`
+  Transfer bundle contents:
+    - `qwen3-0.6b-patha/` (full artifact: ONNX + weights + sidecars)
+    - `qwen3-0.6b-pathbmask/` (full artifact: ONNX + weights + sidecars)
+    - `phase5_step6_export_report.md` (the handoff document — this
+      is what they should read first)
+    - `status_x86_snapshot.md` (a copy of this file at transfer time)
+    - `phase5_step6_probe_{staged,patha,pathbmask}.json` (CPU-ORT
+      cos probe evidence)
+    - `phase5_step6_bool_region.json` + `_dump.txt` (recon output;
+      useful for understanding the rewrite choices)
+
+## Session 1 complete
+
+All 9 tasks closed. Pipeline produced both target artifacts with
+cos=1.0 bit-identical to the optimum source and transferred cleanly
+to the NAS. Two independent HTP compile attempts are now possible
+with guaranteed-correct ONNX inputs — if either .bin comes back
+silently wrong on the aarch64 decode harness, the fault is in
+HTP/QNN numerical fidelity, not in our ONNX rewrites.
+
+Last git state on master:
+```
+62a622a phase5 step 6: both folds shipped, cos=1.0 both paths
+0187103 phase5 step 6: recon the BOOL-tainted region on staged ONNX
+ca53d3e phase5 step 6: safe rewrites (2a+2b) + cos probe, verified cos=1.0
+467d485 phase5 step 6 x86: scaffold venv + handoff log
+7f0838b phase 5 step 6 DIAGNOSIS: nomask ONNX is broken, step 4 needs redo
+```
