@@ -33,12 +33,13 @@ import onnxruntime as ort
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# ORT-CPU validation + config still come from the source onnx-community dir.
-SOURCE_DIR = REPO_ROOT / "models" / "qwen3-0.6b-onnx"
+# Source = the optimum export produced on the x86 machine (all ops in
+# default onnx domain, opset 18). config.json co-ships with the ONNX.
+SOURCE_DIR = REPO_ROOT / "models" / "qwen3-0.6b-optimum"
 CONFIG_JSON = SOURCE_DIR / "config.json"
 # AI Hub upload targets the staging dir produced by prep_onnx_for_ai_hub.py
-# (qai-hub requires .onnx/.data extensions; onnx-community ships .onnx_data).
-STAGING_DIR = REPO_ROOT / "models" / "qwen3-0.6b-ai-hub"
+# (qai-hub requires .onnx/.data extensions; optimum ships .onnx_data).
+STAGING_DIR = REPO_ROOT / "models" / "qwen3-0.6b-optimum-ai-hub"
 MODEL_ONNX = STAGING_DIR / "model.onnx"
 MODEL_DATA = STAGING_DIR / "model.data"
 

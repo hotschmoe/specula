@@ -30,9 +30,12 @@ import onnx
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SOURCE_ONNX = REPO_ROOT / "models" / "qwen3-0.6b-onnx" / "onnx" / "model.onnx"
-SOURCE_DATA = REPO_ROOT / "models" / "qwen3-0.6b-onnx" / "onnx" / "model.onnx_data"
-STAGING = REPO_ROOT / "models" / "qwen3-0.6b-ai-hub"
+# Source = the optimum export produced on the x86 machine
+# (docs/phase5_export_on_x86.md). Was previously the onnx-community
+# export but that hit com.microsoft fused-op rejection at AI Hub.
+SOURCE_ONNX = REPO_ROOT / "models" / "qwen3-0.6b-optimum" / "model.onnx"
+SOURCE_DATA = REPO_ROOT / "models" / "qwen3-0.6b-optimum" / "model.onnx_data"
+STAGING = REPO_ROOT / "models" / "qwen3-0.6b-optimum-ai-hub"
 STAGED_ONNX = STAGING / "model.onnx"
 STAGED_DATA = STAGING / "model.data"
 
@@ -40,33 +43,59 @@ OLD_LOCATION = "model.onnx_data"
 NEW_LOCATION = "model.data"
 
 
-def patch_external_data_refs(model: onnx.ModelProto) -> int:
-    """Rewrite every `location` external_data entry in initializers.
+def _patch_tensor(tensor: onnx.TensorProto) -> bool:
+    for entry in tensor.external_data:
+        if entry.key == "location" and entry.value == OLD_LOCATION:
+            entry.value = NEW_LOCATION
+            return True
+    return False
 
-    Returns the number of TensorProto entries modified.
+
+def patch_external_data_refs(model: onnx.ModelProto) -> tuple[int, int]:
+    """Rewrite every `location` external_data entry in the model.
+
+    Covers two places external tensors can live:
+    - graph.initializer (the common case)
+    - node.attribute.t for Constant / Constant-like ops with tensor
+      attributes (optimum's --no-post-process export keeps a lot of
+      constants here instead of promoting them to initializers).
+
+    Returns (initializer_patches, node_attribute_patches).
     """
-    patched = 0
+    init_patched = 0
     for tensor in model.graph.initializer:
-        if not tensor.external_data:
-            continue
-        for entry in tensor.external_data:
-            if entry.key == "location" and entry.value == OLD_LOCATION:
-                entry.value = NEW_LOCATION
-                patched += 1
-                break
-    return patched
+        if _patch_tensor(tensor):
+            init_patched += 1
+
+    node_patched = 0
+    for node in model.graph.node:
+        for attr in node.attribute:
+            # Single tensor attribute (e.g. Constant's `value`).
+            if attr.type == onnx.AttributeProto.TENSOR and attr.t.external_data:
+                if _patch_tensor(attr.t):
+                    node_patched += 1
+            # Repeated-tensor attributes are rare but handle them too.
+            if attr.type == onnx.AttributeProto.TENSORS:
+                for t in attr.tensors:
+                    if t.external_data and _patch_tensor(t):
+                        node_patched += 1
+    return init_patched, node_patched
 
 
-def try_hardlink(src: Path, dst: Path) -> str:
-    """Hardlink if possible, else copy. Returns 'hardlink' or 'copy'."""
+def materialize(src: Path, dst: Path) -> str:
+    """Copy src -> dst, replacing any existing dst.
+
+    Originally used os.link() for zero-disk-duplication, but ORT 1.24+
+    ships an onnx C++ loader with a 'hardlink attack' check that refuses
+    to read any external-data file that has >1 hard links. Since we both
+    (a) validate the staged ONNX locally with ORT-CPU and (b) want
+    qai-hub to see a clean single-reference file, we just copy. 3 GB of
+    disk is cheap and this is the least-surprising behaviour.
+    """
     if dst.exists():
         dst.unlink()
-    try:
-        os.link(src, dst)
-        return "hardlink"
-    except OSError:
-        shutil.copy2(src, dst)
-        return "copy"
+    shutil.copy2(src, dst)
+    return "copy"
 
 
 def main() -> int:
@@ -86,12 +115,14 @@ def main() -> int:
     model = onnx.load(str(SOURCE_ONNX), load_external_data=False)
     print(f"  loaded in {time.perf_counter() - t0:.2f} s, {len(model.graph.initializer)} initializers")
 
-    patched = patch_external_data_refs(model)
-    print(f"patched {patched} external_data references: '{OLD_LOCATION}' -> '{NEW_LOCATION}'")
-    if patched == 0:
+    init_patched, node_patched = patch_external_data_refs(model)
+    total = init_patched + node_patched
+    print(f"patched {total} external_data references: '{OLD_LOCATION}' -> '{NEW_LOCATION}'")
+    print(f"  initializer tensors        : {init_patched}")
+    print(f"  node attribute tensors     : {node_patched}")
+    if total == 0:
         print("WARNING: no external_data references found to patch.")
-        print("  this is unexpected for an onnx-community model with external weights;")
-        print("  qai-hub will still reject if data file is missing.")
+        print("  if weights file exists separately, qai-hub may still reject.")
 
     print(f"saving patched graph to {STAGED_ONNX.name} (graph-only, no data rewrite) ...")
     t0 = time.perf_counter()
@@ -101,9 +132,9 @@ def main() -> int:
     onnx.save(model, str(STAGED_ONNX), save_as_external_data=False)
     print(f"  saved in {time.perf_counter() - t0:.2f} s, {STAGED_ONNX.stat().st_size / (1024*1024):.1f} MB")
 
-    print(f"linking weights {SOURCE_DATA.name} -> {STAGED_DATA.name} ...")
+    print(f"copying weights {SOURCE_DATA.name} -> {STAGED_DATA.name} ...")
     t0 = time.perf_counter()
-    mode = try_hardlink(SOURCE_DATA, STAGED_DATA)
+    mode = materialize(SOURCE_DATA, STAGED_DATA)
     elapsed = time.perf_counter() - t0
     data_mb = STAGED_DATA.stat().st_size / (1024 * 1024)
     print(f"  {mode} complete in {elapsed:.2f} s, {data_mb:.1f} MB")
