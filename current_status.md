@@ -1,6 +1,8 @@
 # specula -- current status
 
-Last updated: 2026-04-21 (session 9 -- steps 4 + 5 both closed: NPU runs Qwen3-0.6B, 110 ms/decode-step at ctx 512)
+Last updated: 2026-04-21 (session 10 -- step 6 diagnosis: NPU binary
+runs but is semantically WRONG; nomask ONNX itself is broken.
+Step 4 needs a redo. Qualcomm Qwen3-4B reference surveyed.)
 
 Living document. Update every few turns. Anyone picking this up cold should
 be able to read this page, skim the README, and resume work.
@@ -315,7 +317,11 @@ binaries need a different ORT-QNN load path (either via
 wrapper that AI Hub emits alongside). Small extension expected.
 
 **Step 5 CLOSED (2026-04-21).** First forward pass running on the
-Hexagon NPU:
+Hexagon NPU. **Step 6 diagnosis (session 10, 2026-04-21) REOPENED
+STEP 4** — the binary runs cleanly but produces catastrophically
+wrong logits. See "Step 6 diagnosis" section below.
+
+
 
 ```
 session providers   : ['QNNExecutionProvider', 'CPUExecutionProvider']
@@ -356,28 +362,165 @@ step 7 when drafts pipeline alongside CPU verify). Commit `<TBD>`.
    inspection (`results/bin_inspect.json`); wrapper builder in
    `scripts/npu_load_qwen3_bin.py` updated to match.
 
-**Updated 10-step tracker:**
+**Updated 10-step tracker (after session 10 diagnosis):**
 
 ```
 [DONE]    1. Environment snapshot                 (commit 7230210)
 [DONE]    2. ORT-QNN sidecar skeleton             (commit 282e84a)
 [DONE]    3. Qwen3-0.6B ONNX sourced + CPU-valid  (commit 106c756)
-[DONE]    4. AI Hub compile -> Hexagon .bin       (commit 9e1d99e)
-[DONE]    5. Load .bin via NPUSession, shape-check (session 9 ★)
-          6. Correctness vs CPU, single greedy prompt <-- next
+[REDO]    4. AI Hub compile -> Hexagon .bin       <-- nomask ONNX
+                                                   is broken, need
+                                                   new x86 export
+[DONE]    5. Load .bin via NPUSession, shape-check (session 9)
+[PARTIAL] 6. Correctness vs CPU, single greedy     <-- harness
+                                                   exists, proves
+                                                   current binary
+                                                   is catastrophically
+                                                   wrong (session 10)
           7. Pipe first drafted token through llama.cpp verify
           8. External-drafter bridge for llama.cpp spec decode
           9. First NPU-spec number on 10-prompt humaneval
          10. Sweep k values, write up, close phase
 ```
 
-Step 6 needs the model to actually see a coherent KV state, which
-requires running prefill on something (probably ORT-CPU using the
-nomask ONNX, since the NPU graph is decode-only). Then compare NPU
-greedy decode vs HF/llama.cpp greedy decode on the same prompt for
-the first 16-32 tokens.
+### Step 6 diagnosis (session 10, 2026-04-21)
+
+**Summary: the compiled .bin loads + runs, but the nomask ONNX it
+was compiled from is computationally broken. The NPU is faithfully
+reproducing a corrupted graph.**
+
+Harness: `scripts/npu_vs_cpu_correctness.py` — drives CPU prefill
+on the optimum ONNX (standard-ops, FP32 KV) until past_len=511,
+then compares one more decode step on both backends with identical
+past_kv + input_ids + position_ids. Also runs a 16-step
+sliding-window greedy comparison.
+
+**Single-step result (prefilled KV):**
+- cosine sim: **0.546** (expected > 0.99)
+- argmax: CPU=264 (' a') vs NPU=133927 (Arabic glyph)
+- top-5 overlap: **0/5**
+- max |logit delta|: 23.97
+
+**Zero-KV + BOS control probe (isolates graph vs KV-handoff):**
+- cosine sim: **-0.183** (anti-correlated)
+- max logit magnitude: CPU=+14.09, NPU=+4.80
+
+Zero-KV failing rules out KV-handoff semantics — the NPU graph
+itself is wrong. Localized bug:
+
+1. **Root cause: `models/qwen3-0.6b-nomask/model.onnx` run on
+   CPU-ORT gives cos = -0.18 vs its optimum source.** All earlier
+   intermediate artifacts (`optimum`, `optimum-frozen`,
+   `optimum-frozen-ortopt`, `optimum-ortopt`, `patched`) produce
+   cos = +1.0000 with the source. Only `nomask` is broken.
+
+2. **Bisected the two `simplify_qwen3_no_mask.py` transforms
+   against the clean `patched` graph:**
+   - Mask-promote-to-constant alone: **cos = +1.0000** (safe)
+   - IsNaN/Where guard elision alone: **cos = +1.0000** (safe)
+   - Mask-promote + onnxsim(with shape overrides): **cos = -0.18** (BROKEN)
+
+3. **Breakage comes from `onnxsim.simplify()` folding with
+   `overwrite_input_shapes` pinning + attention_mask pre-promoted
+   to constant `[1,512]` all-ones.** Something in that combination
+   constant-folds a position-dependent subgraph incorrectly. Both
+   transforms are individually safe; their combination with
+   onnxsim is not.
+
+4. **Verified fix direction: skip onnxsim.** Starting from `patched`
+   (2185 nodes) and applying mask-promote + isnan-elide only
+   produces a graph with cos = +1.0000 vs source. But 2 BOOL Cast
+   nodes remain in the attention_mask subgraph (HTP will reject),
+   and both trace to ops whose inputs are now known constants.
+   They need a targeted surgical constant-fold of just that
+   subgraph (not a whole-graph onnxsim pass). See the updated
+   `docs/phase5_export_on_x86.md` for the recommended x86-side fix.
+
+### Qualcomm Qwen3-4B NPU reference (inspected session 10)
+
+Downloaded `qualcomm/Qwen3-4B` Genie w4a16 bundle
+(~3 GB zipped). Local copy at
+`models/qualcomm-qwen3-4b-ref/qwen3_4b-genie-w4a16-qualcomm_snapdragon_x2_elite/`.
+Inspected via `metadata.yaml` + `genie_config.json`. Their
+architecture choices are substantially different from ours:
+
+- **4-part binary split** per variant (embed + 3 transformer
+  chunks). Each part compiles as its own QNN context binary. This
+  almost certainly keeps each individual AI Hub compile under the
+  op-lowering complexity budget that bit us repeatedly at 4a-4f.
+- **40 variants in one bundle**: 5 context tiers (512 / 1024 /
+  2048 / 3072 / 4096) × 2 AR batch sizes (128 prefill, 1 decode)
+  × 4 parts. Weight-sharing across all of them.
+- **RoPE externalized.** `position_ids_cos` and `position_ids_sin`
+  are INPUT tensors of shape `[1, 1, seq_len, 64]`, uint16
+  quantized, pre-computed on CPU. Graph contains **zero**
+  Cos/Sin/Range ops. This eliminates a whole class of HTP
+  lowering issues.
+- **Attention mask is runtime input, additive, uint16.** Shape
+  `[1, 1, seq_q, seq_k]`, quant scale 0.00153 / offset -65535.
+  Graph adds this to attention scores pre-softmax. **Zero BOOL
+  tensors anywhere.** This is the mechanism for expressing the
+  causal pattern without any of the Range/Gather/Cast/And/Where
+  subgraph that onnxsim is supposed to fold for us.
+- **Full w4a16 quantization.** Activations and KV at the IO
+  boundary are uint8/uint16 quantized, not FP16 or FP32. Needs
+  AIMET (or AI Hub's quant path) and ~50-100 calibration prompts.
+- **Transposed key layout.** `past_key` is `[heads, batch,
+  head_dim, seq]` (head_dim BEFORE seq); `past_value` is `[heads,
+  batch, seq, head_dim]`. A Qualcomm-specific layout that the
+  graph surgery must emit.
+- **Tool versions:** QAIRT 2.42.0 (matches our pin for ORT-QNN
+  1.24.4 compatibility).
+
+Relevance to our fix: we cannot replicate the full Qualcomm
+pipeline (w4a16 + 4-way split + 5 ctx tiers + 2 batch modes is
+out of scope for a quick fix). But the two load-bearing
+architectural choices — **externalized RoPE** and
+**additive-FP16 attention mask** — are the principled fixes that
+make the graph naturally HTP-friendly without needing
+constant-folding tricks. Our current path (optimum + onnxsim)
+takes a graph that contains these problem subgraphs and tries to
+fold them out; the Qualcomm path never introduces them in the
+first place.
+
+The `docs/phase5_export_on_x86.md` doc now recommends two paths
+for the x86 re-export:
+
+- **Path A (minimal):** keep current pipeline (optimum +
+  `--no-post-process`), drop onnxsim entirely, apply
+  mask-promote + isnan-elide + targeted surgical fold of the
+  residual attention_mask subgraph. Preserves cos = 1.0 and
+  emits zero BOOL Casts. Smallest change; may still hit
+  compile-time op-lowering issues on monolithic graph
+  complexity.
+- **Path B (Qualcomm-style):** externalize RoPE + use
+  additive-FP16 attention mask. Larger surgery but the
+  architecturally robust path. Separate from w4a16 quantization
+  (which can layer on top later for the perf win).
+
+Path A is the recommended starting point since it's a smaller
+delta from what's known to produce a compileable graph (we
+already got one compile through on nomask, just semantically
+wrong).
+
+
 
 ## Immediate next steps (next session)
+
+**Blocker for step 7+: step 4 redo on x86.** The nomask ONNX
+pipeline corrupts the graph. Until a corrected ONNX lands and
+AI Hub emits a binary that passes the `npu_vs_cpu_correctness.py`
+probe (cos ≥ 0.99 on zero-KV control, cos ≥ 0.95 on prefilled-KV
+single step, ≥ 50% match-rate on 16-step sliding-window greedy),
+step 6 stays half-closed and step 7 (llama.cpp verify wiring)
+can't start. The CPU side of step 6 is ready and verified — only
+the NPU side is blocked.
+
+Handoff to the x86 machine: updated `docs/phase5_export_on_x86.md`
+carries the revised simplification plan (skip onnxsim, targeted
+surgical fold). Owner there re-runs the pipeline, transfers the
+new `model.onnx` + `model.onnx_data` back, and we re-stage +
+recompile via AI Hub (`compile_qwen3_ai_hub.py --submit`).
 
 **Strategy (session 5, 2026-04-20): close out Qwen3, then graduate
 fully to Qwen3.5 for all further work.**

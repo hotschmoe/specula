@@ -1,0 +1,30 @@
+=== step 6 - CPU vs NPU correctness ===
+
+--- loading CPU ONNX (FP32, dynamic past_len) ---
+  loaded in 3.0 s
+
+--- loading NPU binary (FP16 interior, fixed past_len=511) ---
+  loading wrapper ONNX qwen3_0_6b_draft_v81_ctx512.wrapper.onnx via legacy QNN EP ...
+  loaded in 2.2 s
+
+--- CPU prefill + decode to past_len=511 ---
+  prompt tokens (7): [785, 82055, 1599, 17, 33764, 49395, 374]
+  CPU decode: growing past_len 7 -> 511 (504 steps)...
+  decoded 504 tokens in 26.1 s
+
+  CPU-generated continuation (505 toks, first 120 chars):
+    'The Snapdragon X2 Elite Extreme is a high-end smartphone with a 6.5-inch 5G camera, and it has a 5G network. It is a high-end smartphone with a 6.5-inch 5'
+  anchor next-token id (position 511): 702
+
+--- single-step logit comparison at position 511 ---
+  cpu argmax      : 264  -> ' a'
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_vs_cpu_correctness.py", line 486, in <module>
+    rc = main()
+         ^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_vs_cpu_correctness.py", line 443, in main
+    print(f"  npu argmax      : {single['npu_argmax']}  -> {tok.decode([single['npu_argmax']])!r}")
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 33-36: character maps to <undefined>

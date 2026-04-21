@@ -1,7 +1,16 @@
 # Phase 5 — ONNX export on an x86_64 machine
 
-Revised 2026-04-20 session 7 (first execution on the Intel x86 box).
-Read top-to-bottom if you're picking this up cold.
+Revised 2026-04-21 session 10 — **major revision after session 10
+diagnosis**: the onnxsim-based simplification from sessions 7-9
+corrupts the graph. Compile succeeds but produces a binary that
+anti-correlates with the CPU reference (cosine -0.18 on zero-KV +
+BOS control). The "Simplify the graph with onnxsim" section below
+has been replaced with a targeted surgical-fold approach that
+preserves computational correctness.
+
+Read top-to-bottom if you're picking this up cold. If you're
+just here for the revised simplify step, jump to "Produce an
+HTP-compilable ONNX (revised path)".
 
 ## Why this document exists
 
@@ -132,79 +141,325 @@ At the end, optimum runs a PyTorch-vs-ONNX validation sweep and prints
 max-diff values per output. fp16 max diffs in the ~1e-3 range are
 normal and expected.
 
-## Simplify the graph with onnxsim (added after session 7 compile grind)
+## DEPRECATED: original onnxsim-based simplify (do not run)
 
-**Do not skip this.** Eight AI Hub compile attempts on the un-simplified
-optimum export all failed. The root cause: optimum's attention-mask
-path exports a dynamic subgraph (Range → Add → Flatten(Cast(mask)) →
-Gather → And → Where) that still uses BOOL tensors at runtime. HTP's
-QNN backend has no BOOL support anywhere — not in Gather, not even in
-Cast. It only accepts BF16/FP16/INT16/INT8.
+Sessions 7-9 used `onnxsim` with `--overwrite-input-shape` on all
+inputs plus a pre-promoted attention_mask constant. That pipeline
+produces a graph that compiles cleanly through AI Hub and loads
+cleanly through ORT-QNN, but is **computationally corrupted**:
 
-onnxsim's constant folding, given static input shapes, collapses this
-entire subgraph to a pre-computed numeric mask. Every AI Hub compile
-log we pulled explicitly complained:
+- Zero-KV + BOS control probe: cosine vs CPU reference = **-0.18**
+  (anti-correlated).
+- Single-step on prefilled KV: cosine = 0.55, top-5 overlap = 0/5,
+  argmax is an Arabic glyph where CPU produces " a".
+- 16-step greedy match rate: **0%**.
 
-    Onnx model simplification failed due to: No module named 'onnxsim'
-    Simplified model validation failed
+Session 10 diagnosis bisected the transforms:
 
-AI Hub's own pipeline expects onnxsim to pre-process the ONNX, but
-their environment doesn't ship it. We have to do it locally on the x86
-side — onnxsim has no Windows-on-ARM wheel, so this *cannot* happen on
-the X2E.
+| Transform starting from `patched` graph | cos vs source |
+|---|---:|
+| attention_mask promote-to-constant ONLY | **+1.0000** |
+| IsNaN/Where guard elision ONLY | **+1.0000** |
+| mask-promote + onnxsim(`--overwrite-input-shape`) | **-0.18** |
 
-```bash
-pip install onnxsim
+Both individual transforms are safe. The combination of
+**attention_mask-as-constant + shape-pinned position_ids** causes
+onnxsim's constant-folder to fold a position-dependent subgraph
+with a wrong assumption — the exact mechanism is unknown, but the
+symptom is that the graph anti-correlates with its source.
 
-python -m onnxsim \
-    models/qwen3-0.6b-optimum/model.onnx \
-    models/qwen3-0.6b-simplified/model.onnx \
-    --overwrite-input-shape \
-        "input_ids:1,1" \
-        "attention_mask:1,512" \
-        "position_ids:1,1" \
-        "past_key_values.0.key:1,8,511,128" \
-        "past_key_values.0.value:1,8,511,128"
+**Treat `scripts/simplify_qwen3_no_mask.py` as quarantined.** Use
+the revised path below instead.
+
+## Produce an HTP-compilable ONNX (revised path)
+
+**Goal:** produce a graph where (a) CPU-ORT output matches the
+optimum source with cosine ≥ 0.9999, (b) zero `com.microsoft`
+ops, (c) zero Cast-to-BOOL nodes, (d) zero Range nodes. We can't
+use onnxsim at all on the interior (it corrupts). Instead we do
+two verified-safe rewrites and one targeted surgical fold of just
+the attention_mask subgraph.
+
+### Step 1: run the `optimum` export exactly as before
+
+(Same command as the session-7 instructions above.) End state:
+`models/qwen3-0.6b-optimum/model.onnx` with 7,667 nodes, no
+`com.microsoft` ops.
+
+### Step 2: apply the two safe rewrites
+
+These two transforms individually verified cos = +1.0000 vs
+source in session 10. Neither uses onnxsim; both are pure
+protobuf edits.
+
+**2a. Promote `attention_mask` from runtime input to
+initializer.**
+
+The decode regime we compile for always has all 512 positions
+valid (no padding), so `attention_mask` is always `[1]*512` at
+runtime. Make it a graph-level constant:
+
+```python
+import numpy as np
+import onnx
+from onnx import numpy_helper
+
+m = onnx.load("models/qwen3-0.6b-optimum/model.onnx", load_external_data=True)
+
+inputs_to_keep = [i for i in m.graph.input if i.name != "attention_mask"]
+del m.graph.input[:]; m.graph.input.extend(inputs_to_keep)
+
+arr = np.ones((1, 512), dtype=np.int64)
+m.graph.initializer.append(numpy_helper.from_array(arr, name="attention_mask"))
 ```
 
-The `--overwrite-input-shape` flags pin the dynamic dimensions so the
-folder can evaluate Range/Shape ops at compile time. Shape values
-here mirror the X2E-side compile plan (decode-only step, ctx 512):
-`seq_len=1`, `total=512`, `past=511`. **You need the same override for
-all 56 past_key_values.{i}.{key,value}** — there's a one-liner to
-generate them:
+**2b. Elide `Where(IsNaN(x), const, x)` NaN-safety guards.**
 
-```bash
-python -c "print(' '.join(f'--overwrite-input-shape past_key_values.{i}.{k}:1,8,511,128' for i in range(28) for k in ['key','value']))"
+optimum emits 28 of these (one per layer, wrapping the softmax
+output). HTP rejects BOOL in any form — `IsNaN` and `Where`-with-
+bool-cond both fail. In the decode-only + full-KV regime, softmax
+cannot produce NaN (denominator is always non-zero because the
+mask allows ≥ 1 position), so `Where(IsNaN(x), 0, x) == x`
+identically. Rewrite:
+
+```python
+nodes = list(m.graph.node)
+producer = {o: n for n in nodes for o in n.output}
+renames, drop = {}, set()
+for w in nodes:
+    if w.op_type != "Where": continue
+    cond, _, false_val = w.input[:3]
+    isnan = producer.get(cond)
+    if isnan is None or isnan.op_type != "IsNaN": continue
+    if isnan.input[0] != false_val: continue
+    renames[w.output[0]] = false_val
+    drop.add(id(w))
+    isnan_users = [n for n in nodes if isnan.output[0] in n.input]
+    if len(isnan_users) == 1: drop.add(id(isnan))
+for n in nodes:
+    for i, inp in enumerate(list(n.input)):
+        if inp in renames: n.input[i] = renames[inp]
+for o in m.graph.output:
+    if o.name in renames: o.name = renames[o.name]
+kept = [n for n in nodes if id(n) not in drop]
+del m.graph.node[:]; m.graph.node.extend(kept)
 ```
 
-Expected result: graph shrinks from 7,667 nodes to roughly 1,500-2,500
-(attention-mask subgraph folds out, Range/Shape/Gather chains
-collapse). onnxsim auto-writes a second .onnx_data alongside if the
-total exceeds 2 GB.
+After 2a + 2b, the graph has:
+- Node count around 2,129 (from 7,667).
+- 0 `IsNaN`.
+- 0 `com.microsoft` ops.
+- **2 remaining Cast-to-BOOL nodes**, both inside the
+  attention_mask → causal-mask subgraph. They're the specific
+  ops HTP will still reject.
 
-After simplification, re-verify with inspect_onnx_ops.py below and
-confirm:
-1. Still zero `com.microsoft` ops.
-2. `Range` node count should be 0 (all folded).
-3. `Cast ... to BOOL` should be 0 (no BOOL on HTP).
+**Confirm correctness at this stage** before moving on:
 
-If BOOL Casts survived simplification, the attention-mask subgraph
-wasn't fully folded — usually means a past_key_values shape override
-was missed. Double-check all 56 of them are in the command.
-
-## Verify the output
-
-**This is the critical step — confirm the ONNX has no `com.microsoft`
-ops.** Without this check you'll burn another 15+ min upload to AI Hub
-before discovering a problem.
-
-```bash
-# Run on the SIMPLIFIED output, not the raw optimum output.
-python scripts/inspect_onnx_ops.py --model models/qwen3-0.6b-simplified/model.onnx
+```python
+import onnxruntime as ort
+# Save to a temp path, load with ORT-CPU, feed zero-KV + BOS at
+# position 0, compare argmax + logits to the same probe on the
+# optimum source. Expect cos = 1.0000, argmax match.
 ```
 
-What you want to see:
+### Step 3: targeted surgical fold of the attention_mask subgraph
+
+**Implementation status: script TBD on x86.** The approach is
+described below with enough detail to write; validation is
+immediate via CPU-ORT plus the cos-vs-source probe in step 4.
+Session 10 verified the approach works by tracing the specific
+nodes involved on the X2E side; actual implementation lands on
+x86 since that's where the ONNX tooling ecosystem is richer
+(onnx-graphsurgeon is x86-only, for example).
+
+With `attention_mask` now a known constant `[1]*512`, the
+downstream chain in each attention block looks like:
+
+```
+attention_mask → Cast(BOOL) → Flatten → Cast(INT8) → Gather_5
+    → Cast(INT8→BOOL) → Reshape → And_1 → ... → Where/Add → scores
+```
+
+**Nuance captured session 10:** `Gather_5`'s output depends on
+its *data* (the constant flattened mask, always all-ones) AND
+its *index* (which traces back to `position_ids` — runtime). So
+`Gather_5`'s output shape is runtime-dependent, but its values
+are always 1 because the data is all-ones. You cannot replace
+`Gather_5` with a bare Constant (wrong shape), but you CAN
+replace it with `ConstantOfShape(Shape(index), value=1)` — same
+values, shape carried forward from the runtime index.
+
+Algorithm:
+
+1. **Find the BOOL-tainted region.** Walk the graph, marking
+   every tensor whose producer is a `Cast(to=BOOL)` node OR
+   whose consumer chain will hit a `Cast(to=BOOL)` in < 3 hops.
+   This region is what HTP rejects.
+2. **Classify each tainted tensor** as:
+   - `data-constant`: values are runtime-shape but always the
+     same (e.g., all-1 after Gather over all-1 data). Replace
+     with `ConstantOfShape(Shape(runtime_dependent_input),
+     value=const_value)`.
+   - `fully-constant`: both shape and values are known. Replace
+     with an `Initializer`.
+   - `runtime`: actually varies. These shouldn't exist in the
+     BOOL region if attention_mask is the only runtime-BOOL
+     source; if you find one, escalate — may need Path B.
+3. **Rewrite** each tainted tensor per its class, splice into the
+   graph, remove the now-orphaned producer nodes.
+4. **Save** the modified graph to `models/qwen3-0.6b-fixed/`
+   with a single consolidated external-data sidecar.
+
+Suggested tooling: `onnx-graphsurgeon` (NVIDIA's ONNX surgery
+library, x86-only) for the rewrites — it handles node
+splice/remove cleanly. Alternative: pure-protobuf edits using
+the same style as steps 2a/2b.
+
+**End state:** 0 Cast-to-BOOL, 0 Range, cos = +1.0000 vs source.
+
+Write out:
+
+```bash
+# Consolidate weights + the newly folded initializers into one
+# external-data sidecar so the AI Hub upload matches the staging
+# layout the X2E compile script expects. Target directory:
+# models/qwen3-0.6b-fixed/
+```
+
+**If step 3 turns out to be more work than budgeted:** fall back
+to Path B (externalize RoPE + additive FP16 mask). That path
+avoids the BOOL problem at source rather than trying to fold it
+out; overall it's more surgery but no tricky graph-analysis
+logic.
+
+### Step 4: verify before transferring
+
+```bash
+python scripts/inspect_onnx_ops.py --model models/qwen3-0.6b-fixed/model.onnx
+```
+
+What you want:
+1. Zero `com.microsoft` ops.
+2. Zero `IsNaN` ops.
+3. Zero `Cast ... to BOOL` ops.
+4. Zero `Range` ops.
+
+And a correctness probe (run this as a one-off — the full harness
+is X2E-side at `scripts/npu_vs_cpu_correctness.py`, but we want
+an early signal on the x86 side before burning another upload):
+
+```python
+# Feed zero-KV + BOS (token 151643) at position 0 to both the
+# optimum source and the fixed graph on CPU-ORT. Compare
+# argmax and cosine. Expect argmax match and cos > 0.9999.
+```
+
+### Why this works where onnxsim didn't
+
+onnxsim's constant-folder is a whole-graph pass — with
+`attention_mask` pre-promoted AND all input shapes pinned (including
+`position_ids=[1,1]`), it has enough known values to fold
+position-dependent subgraphs using whatever dummy value it picked
+for `position_ids`, not knowing that the value is supposed to vary
+at runtime. The surgical fold only evaluates the specific
+attention_mask subgraph — it touches nothing that depends on
+`position_ids`, so runtime position-dependence is preserved.
+
+## Alternative Path B: Qualcomm-style (externalize RoPE + additive FP16 mask)
+
+**When to use this:** if Path A's surgical fold produces a graph
+that still fails AI Hub op-lowering, or if we later need
+higher-throughput w4a16 quantization. Larger surgery, but the
+architecturally robust route — matches how Qualcomm ships their
+own published X2E Qwen3-4B binary.
+
+The Qualcomm Qwen3-4B Genie bundle (inspected session 10, copy
+local at
+`models/qualcomm-qwen3-4b-ref/qwen3_4b-genie-w4a16-qualcomm_snapdragon_x2_elite/`)
+reveals the full production pattern. The two load-bearing
+architectural choices:
+
+1. **Externalize RoPE.** The HTP graph contains **zero**
+   Cos/Sin/Range ops. `position_ids_cos` and `position_ids_sin`
+   are input tensors of shape `[1, 1, seq_len, rope_dim/2]`
+   pre-computed on CPU per-step. The graph applies them via
+   plain Mul/Add.
+
+2. **Additive FP16 attention mask.** `attention_mask` is a
+   runtime input of shape `[1, 1, seq_q, seq_k]` at FP16/INT16
+   (not BOOL), containing 0s at valid positions and large
+   negative values (-inf equivalent) at masked positions. The
+   graph adds it to attention scores pre-softmax. **Zero BOOL
+   tensors anywhere in the graph.**
+
+The bundle also uses a 4-part binary split (embed + 3 transformer
+chunks), 5 context-length tiers, and 2 AR batch modes (128 for
+prefill + 1 for decode), plus full w4a16 quantization — but those
+are orthogonal and can be layered later. The two choices above
+are what make the graph *naturally* HTP-lowerable without any
+constant-folding trickery.
+
+### Implementation sketch (Path B)
+
+We don't have access to Qualcomm's internal export pipeline, but
+we can approximate the two key rewrites on top of the optimum
+export.
+
+**Externalize RoPE:**
+
+1. In optimum-onnx, RoPE is typically a subgraph like:
+   `position_ids → Cast → Gather(sin_cache, position_ids) → ...`
+   for sin; same for cos. Find all such subgraphs per layer.
+2. Replace each Gather with a new graph input
+   `position_ids_cos_{i}` / `position_ids_sin_{i}` (or a shared
+   pair across layers if RoPE is layer-independent in Qwen3 —
+   it usually is).
+3. Delete the Gather + Range + Cos/Sin ops that produced the
+   subgraph.
+4. On the runtime side, pre-compute cos/sin for the current
+   position on CPU and pass them in each decode step.
+
+**Additive mask:**
+
+1. In optimum-onnx, attention mask is computed as:
+   `attention_mask → Cast(BOOL) → ... (Range+Gather logic) → Where(mask, scores, -inf)`.
+2. Replace the whole subgraph that produces the `Where` second-arg
+   condition with a new graph input `attention_bias` of shape
+   `[1, 1, 1, 512]` (or `[1, 1, seq_q, seq_k]` for batched
+   prefill), dtype FP16.
+3. Replace `Where(mask_bool, scores, -inf)` with `Add(scores,
+   attention_bias)`.
+4. On the runtime side, pre-compute the additive mask on CPU:
+   `0.0` for valid positions, `-65504.0` (FP16 min) for masked
+   positions. For a fully-populated decode window, the mask is
+   all zeros — degenerate but cheap.
+
+**Verification targets** (same as Path A):
+- cos ≥ 0.9999 vs optimum source on zero-KV + BOS probe.
+- Zero Cast-to-BOOL, zero Range, zero IsNaN, zero Cos, zero Sin.
+
+**Estimated scope:** Path A is ~1 day of surgical edits. Path B
+is ~3-5 days — the RoPE externalization in particular needs
+careful per-layer identification of the sin/cos Gather pattern
+and rewiring of all consumers.
+
+**Recommendation:** try Path A first. Only escalate to Path B
+if Path A's output still fails AI Hub compile on op-lowering
+grounds, or when we later graduate to w4a16 for perf.
+
+## Inspect ops (sanity check on any stage)
+
+Useful at both the raw optimum output and after the Path A
+rewrites, to confirm no `com.microsoft` ops survived and to track
+the BOOL/IsNaN/Range counts shrinking to zero.
+
+```bash
+python scripts/inspect_onnx_ops.py --model models/qwen3-0.6b-optimum/model.onnx
+# later, after Path A rewrites:
+python scripts/inspect_onnx_ops.py --model models/qwen3-0.6b-fixed/model.onnx
+```
+
+What you want to see at the final stage:
 
 ```
 opset imports:
@@ -222,14 +477,20 @@ NON-STANDARD ops (will need decomposition or QAIRT custom op):
   com.microsoft::...
 ```
 
-Reference run histogram (top entries, for comparison): Constant 2759,
-Unsqueeze 884, Mul 567, Shape 429, Gather 372, Cast 351, Concat 340,
-Add 256, MatMul 254, Reshape 228, Div 169, Transpose 141, Slice 140,
-Where 114, Pow 113, ReduceMean 113, Sqrt 113, ConstantOfShape 59,
-Equal 58, Expand 58, Neg 56, Softmax 28, IsNaN 28, Sigmoid 28, Range 3,
-And 2, LessOrEqual 1, Flatten 1, Cos 1, Sin 1. Total 7667 nodes.
+**Histograms at each stage** (session 10 measurements):
 
-If `com.microsoft` ops somehow survive:
+| Stage | nodes | IsNaN | Cast→BOOL | Range | cos vs optimum |
+|---|---:|---:|---:|---:|---:|
+| optimum (raw export) | 7,667 | 28 | 3 | 3 | 1.0000 (ref) |
+| + safe rewrites 2a+2b | 2,129 | 0 | 2 | 0 | 1.0000 |
+| + step 3 surgical fold | ~2,050 | 0 | **0** | 0 | 1.0000 (target) |
+| **[DEPRECATED]** onnxsim-broken `nomask` | 2,033 | 0 | 0 | 0 | **-0.18** |
+
+The deprecated path looks structurally "clean" (zero BOOL, zero
+Range) but silently corrupts the math. Both the structural
+histogram AND the correctness probe are required.
+
+If `com.microsoft` ops somehow survive the optimum export:
 
 1. Double-check `--no-post-process` is on the command.
 2. Retry with `--optimize O1` explicitly off (it should be off by
@@ -239,36 +500,42 @@ If `com.microsoft` ops somehow survive:
 
 ## Transfer the output back to the X2E machine
 
-**Transfer the simplified directory, not the raw optimum one.** The
-X2E side has no onnxsim, so whatever lands on its disk is what gets
-uploaded to AI Hub.
+**Transfer the `qwen3-0.6b-fixed/` directory** (the Path A output,
+or `qwen3-0.6b-fixed-pathb/` if you went with Path B). The X2E
+side has no onnxsim and won't re-run any graph surgery, so
+whatever lands on its disk is what gets uploaded to AI Hub.
 
-The fp16 simplified export is ~3 GB. Pick your transfer mechanism:
+**Do NOT** transfer `qwen3-0.6b-nomask/` from the session 7-9
+pipeline. That directory is the quarantined output — re-uploading
+it reproduces the session 9 binary that fails step 6.
+
+The fp16 export is ~3 GB. Pick your transfer mechanism:
 
 ```bash
 # scp (simplest over SSH)
-scp -r models/qwen3-0.6b-simplified/ <user>@<x2e-host>:<path>/specula/models/
+scp -r models/qwen3-0.6b-fixed/ <user>@<x2e-host>:<path>/specula/models/
 
 # rsync (resumable, good for slow links)
-rsync -av --progress models/qwen3-0.6b-simplified/ \
-    <user>@<x2e-host>:<path>/specula/models/qwen3-0.6b-simplified/
+rsync -av --progress models/qwen3-0.6b-fixed/ \
+    <user>@<x2e-host>:<path>/specula/models/qwen3-0.6b-fixed/
 
 # Mapped Google Drive / cloud sync (the previous run used
 # G:\Shared drives\MAIN\Junk\qwen3-0.6b-optimum\ as the drop site)
-cp -r models/qwen3-0.6b-simplified "/path/to/mounted/drive/"
+cp -r models/qwen3-0.6b-fixed "/path/to/mounted/drive/"
 
 # USB / your tool of choice
 ```
 
-Also copy over the supporting files (tokenizer, config, etc.) from the
-*pre-simplification* directory if onnxsim didn't preserve them:
+Also copy over the supporting files (tokenizer, config, etc.) from
+the pre-rewrite directory if the surgical rewrites didn't preserve
+them (they won't — the rewrites are protobuf-only):
 
 ```bash
-cp models/qwen3-0.6b-optimum/*.json models/qwen3-0.6b-simplified/
-cp models/qwen3-0.6b-optimum/tokenizer.json models/qwen3-0.6b-simplified/
-cp models/qwen3-0.6b-optimum/merges.txt models/qwen3-0.6b-simplified/
-cp models/qwen3-0.6b-optimum/vocab.json models/qwen3-0.6b-simplified/
-cp models/qwen3-0.6b-optimum/chat_template.jinja models/qwen3-0.6b-simplified/
+cp models/qwen3-0.6b-optimum/*.json models/qwen3-0.6b-fixed/
+cp models/qwen3-0.6b-optimum/tokenizer.json models/qwen3-0.6b-fixed/
+cp models/qwen3-0.6b-optimum/merges.txt models/qwen3-0.6b-fixed/
+cp models/qwen3-0.6b-optimum/vocab.json models/qwen3-0.6b-fixed/
+cp models/qwen3-0.6b-optimum/chat_template.jinja models/qwen3-0.6b-fixed/
 ```
 
 Do **not** commit the ONNX to git. The repo's `.gitignore` excludes
@@ -278,20 +545,19 @@ pattern for the preferred "script the download" approach).
 
 ## Resume on the X2E side
 
-Once the directory lands at `<specula>/models/qwen3-0.6b-optimum/` on
-the X2E machine:
+Once the directory lands at `<specula>/models/qwen3-0.6b-fixed/`
+on the X2E machine:
 
 1. **Sanity-check the transfer** (file sizes match what you sent —
    `model.onnx_data` should be ~3.0 GB).
 
-2. **Point the staging + compile scripts at the new source.** In the
-   current session these scripts hardcode `models/qwen3-0.6b-onnx/` as
-   the source; they need a small update to accept the
-   `qwen3-0.6b-optimum/` path. Options:
-   - Edit `scripts/prep_onnx_for_ai_hub.py`'s `SOURCE_ONNX` /
-     `SOURCE_DATA` constants to match the new filenames.
-   - Or (cleaner) add `--source` argparse flags to both scripts. The
-     ARM-side user will hit this first and can refactor in-place.
+2. **Point the staging + compile scripts at the new source.** The
+   session 9 pipeline used `models/qwen3-0.6b-nomask/` as the
+   source (the quarantined directory). Update:
+   - `scripts/prep_onnx_for_ai_hub.py`: change `SOURCE_ONNX` to
+     `models/qwen3-0.6b-fixed/model.onnx`.
+   - `scripts/compile_qwen3_ai_hub.py`: change `SOURCE_DIR` to
+     `models/qwen3-0.6b-fixed`.
 
 3. **Re-stage and compile:**
 
@@ -305,13 +571,37 @@ the X2E machine:
    by quantization (if applicable) and final context-binary
    generation. Downloaded artefact:
    `models/qwen3_0_6b_draft_v81_ctx512.bin` (~500–800 MB FP16).
+   Keep the previous binary as
+   `qwen3_0_6b_draft_v81_ctx512.broken.bin` for comparison.
 
-5. **If compile fails again on a different op:** capture the failure
+5. **Validate before declaring step 4 re-closed.** This is the
+   lesson from session 10 — compile success is NOT enough. Run
+   the full correctness harness:
+
+   ```powershell
+   .venv\Scripts\python.exe scripts\npu_vs_cpu_correctness.py
+   ```
+
+   Exit criteria:
+   - Zero-KV + BOS control: cosine ≥ 0.99 (was -0.18 on broken).
+   - Single step on prefilled KV: cosine ≥ 0.95 (was 0.55).
+   - 16-step sliding-window greedy match rate ≥ 50% (was 0%).
+   - NPU stream produces recognizable English text (was Arabic
+     glyphs on repeat).
+
+   If any of these fails, capture `results/bin_inspect.json` on
+   the new binary and compare IO shapes to the one in git
+   (session 9); the fix to the ONNX should not have changed the
+   bin signature (same 58/57 input/output tensors, same dtypes).
+
+6. **If compile fails again on a different op:** capture the failure
    reason, inspect the ops via `inspect_onnx_ops.py`, and either
    regenerate with different optimum flags (on the x86 machine) or
    escalate for a targeted decomposition. See
    `results/npu_env_snapshot.txt` for the prior failure-mode log as
-   a template for what to capture.
+   a template for what to capture. This is also the signal to try
+   Path B (Qualcomm-style externalized RoPE + additive FP16 mask)
+   instead of Path A.
 
 ## Where this fits in the larger plan
 
