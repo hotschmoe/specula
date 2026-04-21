@@ -103,6 +103,12 @@ def build_input_specs(cfg: dict, extra_input_specs: dict) -> dict:
     """Static shapes + dtypes for every ONNX input, keyed by input name.
 
     Follows the qai_hub convention: {name: ((shape...), "dtype_str")}.
+
+    Order matters: AI Hub validates that its iteration order over
+    input_specs matches the order of graph.input in the uploaded ONNX.
+    For pathbmask, the x86-side rewrite appends `attention_bias` as the
+    LAST graph input (after 56 past_kv entries), so we have to append
+    `extra_input_specs` at the end, not insert it near the top.
     """
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]
@@ -114,11 +120,11 @@ def build_input_specs(cfg: dict, extra_input_specs: dict) -> dict:
         "input_ids": ((1, 1), "int64"),
         "position_ids": ((1, 1), "int64"),
     }
-    specs.update(extra_input_specs)
     for i in range(n_layers):
         shape = (1, n_kv, past_len, head_dim)
         specs[f"past_key_values.{i}.key"] = (shape, "float32")
         specs[f"past_key_values.{i}.value"] = (shape, "float32")
+    specs.update(extra_input_specs)
     return specs
 
 

@@ -88,11 +88,15 @@ def describe_inputs(cfg: dict, path_key: str) -> list[tuple[str, list[int], int]
     inputs: list[tuple[str, list[int], int]] = []
     inputs.append(("input_ids", [1, 1], TensorProto.INT32))
     inputs.append(("position_ids", [1, 1], TensorProto.INT32))
-    if path_key == "pathbmask":
-        inputs.append(("attention_bias", [1, 1, 1, CONTEXT_MAX], TensorProto.FLOAT))
     for i in range(n_layers):
         inputs.append((f"past_key_values_{i}_key", [1, n_kv, past_len, head_dim], TensorProto.FLOAT))
         inputs.append((f"past_key_values_{i}_value", [1, n_kv, past_len, head_dim], TensorProto.FLOAT))
+    # Order matters for the EPContext wrapper's declared IO to align with the
+    # compiled binary. Path B-mask's ONNX has `attention_bias` as the last
+    # graph input (after all past_kv entries) — see compile_qwen3_ai_hub's
+    # build_input_specs comment.
+    if path_key == "pathbmask":
+        inputs.append(("attention_bias", [1, 1, 1, CONTEXT_MAX], TensorProto.FLOAT))
     return inputs
 
 
