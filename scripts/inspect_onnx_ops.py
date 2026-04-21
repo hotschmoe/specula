@@ -2,10 +2,17 @@
 lowering fix after the first AI Hub compile failed with
 `No Op registered for SimplifiedLayerNormalization with domain_version of 14`.
 
+Reports all (domain, op_type) pairs and flags any op not in the default
+onnx domain as a potential QAIRT incompatibility. Use after a new ONNX
+export (e.g. the x86-produced Qwen3 ONNX) to confirm the file will
+make it past the AI Hub OPTIMIZING_MODEL phase.
+
 Run:
     .venv\\Scripts\\python.exe scripts\\inspect_onnx_ops.py
+    .venv\\Scripts\\python.exe scripts\\inspect_onnx_ops.py --model path/to/model.onnx
 """
 
+import argparse
 import sys
 from collections import Counter
 from pathlib import Path
@@ -13,17 +20,18 @@ from pathlib import Path
 import onnx
 
 
-SOURCE_ONNX = (
+DEFAULT_ONNX = (
     Path(__file__).resolve().parent.parent
     / "models" / "qwen3-0.6b-onnx" / "onnx" / "model.onnx"
 )
 
 
-def main() -> int:
-    if not SOURCE_ONNX.exists():
-        print(f"ERROR: missing {SOURCE_ONNX}")
+def inspect(model_path: Path) -> int:
+    if not model_path.exists():
+        print(f"ERROR: missing {model_path}")
         return 2
-    model = onnx.load(str(SOURCE_ONNX), load_external_data=False)
+    print(f"inspecting: {model_path}")
+    model = onnx.load(str(model_path), load_external_data=False)
 
     # Opset imports.
     print("opset imports:")
@@ -54,6 +62,18 @@ def main() -> int:
         print("\nall ops are in the default onnx domain")
 
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--model",
+        type=Path,
+        default=DEFAULT_ONNX,
+        help=f"path to .onnx file (default: {DEFAULT_ONNX})",
+    )
+    args = parser.parse_args()
+    return inspect(args.model)
 
 
 if __name__ == "__main__":
