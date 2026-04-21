@@ -1,0 +1,121 @@
+[2026-04-21T20:17:11.352+00:00] [INFO] Compiling model ID mqy8d6kxn
+[2026-04-21T20:17:11.352+00:00] [INFO] [compile-pre-compile] Memory: 3.5GiB / 40.0GiB (9%) | working_set: 652.8MiB | peak: 6.9GiB
+[2026-04-21T20:17:19.090+00:00] [INFO] -=- Converting ONNX graph: decompose GeLU layers -=-
+[2026-04-21T20:17:19.517+00:00] [INFO] Applying ONNX IR shape inference
+[2026-04-21T20:17:21.782+00:00] [INFO] Applying ONNX IR rewriter with rules
+[2026-04-21T20:17:23.800+00:00] [INFO] Ran 3 passes, 1 triggered
+[2026-04-21T20:17:23.800+00:00] [INFO] Passes triggered:
+[2026-04-21T20:17:23.830+00:00] [INFO] +---------------------------+----------+
+[2026-04-21T20:17:23.830+00:00] [INFO] | Pass Name                 | Triggers |
+[2026-04-21T20:17:23.830+00:00] [INFO] +---------------------------+----------+
+[2026-04-21T20:17:23.830+00:00] [INFO] | OverrideFoldConstantsPass |        1 |
+[2026-04-21T20:17:23.831+00:00] [INFO] +---------------------------+----------+
+[2026-04-21T20:17:23.836+00:00] [INFO] Model metrics comparison:
+[2026-04-21T20:17:23.837+00:00] [INFO] +-----------------+--------+--------+-----------+
+[2026-04-21T20:17:23.837+00:00] [INFO] | Metric          | Before |  After |     Delta |
+[2026-04-21T20:17:23.837+00:00] [INFO] +-----------------+--------+--------+-----------+
+[2026-04-21T20:17:23.837+00:00] [INFO] | Op count        |   7580 |   5567 |     [32m-2013[0m |
+[2026-04-21T20:17:23.838+00:00] [INFO] | Model size      | 2.8GiB | 2.8GiB | [32m-136.2KiB[0m |
+[2026-04-21T20:17:23.838+00:00] [INFO] | Add             |    256 |    253 |        [32m-3[0m |
+[2026-04-21T20:17:23.838+00:00] [INFO] | And             |      2 |      0 |        [32m-2[0m |
+[2026-04-21T20:17:23.838+00:00] [INFO] | Cast            |    348 |      1 |      [32m-347[0m |
+[2026-04-21T20:17:23.838+00:00] [INFO] | Concat          |    340 |    113 |      [32m-227[0m |
+[2026-04-21T20:17:23.838+00:00] [INFO] | Constant        |   2731 |   3162 |      [31m+431[0m |
+[2026-04-21T20:17:23.838+00:00] [INFO] | ConstantOfShape |     60 |      0 |       [32m-60[0m |
+[2026-04-21T20:17:23.838+00:00] [INFO] | Cos             |      1 |      1 |        +0 |
+[2026-04-21T20:17:23.838+00:00] [INFO] | Div             |    169 |    113 |       [32m-56[0m |
+[2026-04-21T20:17:23.838+00:00] [INFO] | Equal           |     58 |      0 |       [32m-58[0m |
+[2026-04-21T20:17:23.838+00:00] [INFO] | Expand          |     58 |     56 |        [32m-2[0m |
+[2026-04-21T20:17:23.838+00:00] [INFO] | Gather          |    371 |      1 |      [32m-370[0m |
+[2026-04-21T20:17:23.838+00:00] [INFO] | Identity        |      0 |    231 |      [31m+231[0m |
+[2026-04-21T20:17:23.838+00:00] [INFO] | LessOrEqual     |      1 |      0 |        [32m-1[0m |
+[2026-04-21T20:17:23.838+00:00] [INFO] | MatMul          |    254 |    254 |        +0 |
+[2026-04-21T20:17:23.838+00:00] [INFO] | Mul             |    567 |    450 |      [32m-117[0m |
+[2026-04-21T20:17:23.838+00:00] [INFO] | Neg             |     56 |     56 |        +0 |
+[2026-04-21T20:17:23.838+00:00] [INFO] | Pow             |    113 |    113 |        +0 |
+[2026-04-21T20:17:23.839+00:00] [INFO] | Range           |      3 |      0 |        [32m-3[0m |
+[2026-04-21T20:17:23.839+00:00] [INFO] | ReduceMean      |    113 |    113 |        +0 |
+[2026-04-21T20:17:23.839+00:00] [INFO] | Reshape         |    228 |    168 |       [32m-60[0m |
+[2026-04-21T20:17:23.839+00:00] [INFO] | Shape           |    430 |      0 |      [32m-430[0m |
+[2026-04-21T20:17:23.839+00:00] [INFO] | Sigmoid         |     28 |     28 |        +0 |
+[2026-04-21T20:17:23.839+00:00] [INFO] | Sin             |      1 |      1 |        +0 |
+[2026-04-21T20:17:23.839+00:00] [INFO] | Slice           |    140 |    112 |       [32m-28[0m |
+[2026-04-21T20:17:23.839+00:00] [INFO] | Softmax         |     28 |     28 |        +0 |
+[2026-04-21T20:17:23.839+00:00] [INFO] | Sqrt            |    113 |    113 |        +0 |
+[2026-04-21T20:17:23.839+00:00] [INFO] | Transpose       |    141 |    141 |        +0 |
+[2026-04-21T20:17:23.839+00:00] [INFO] | Unsqueeze       |    884 |     59 |      [32m-825[0m |
+[2026-04-21T20:17:23.839+00:00] [INFO] | Where           |     86 |      0 |       [32m-86[0m |
+[2026-04-21T20:17:23.839+00:00] [INFO] +-----------------+--------+--------+-----------+
+[2026-04-21T20:17:23.839+00:00] [ERROR] Internal compiler error
+| Traceback (most recent call last):
+|   File "/tetra/tetra_env/lib/python3.10/site-packages/onnx_ir/passes/_pass_infra.py", line 250, in call
+|     pass_result = pass_(model)
+|   File "/tetra/tetracode/src/www/python/tetrai/compilers/onnx2onnx/_instrumentation.py", line 125, in __call__
+|     result = self.pass_instance(model)
+|   File "/tetra/tetra_env/lib/python3.10/site-packages/onnx_ir/passes/_pass_infra.py", line 127, in __call__
+|     result = self.call(model)
+|   File "/tetra/tetra_env/lib/python3.10/site-packages/onnxscript/rewriter/__init__.py", line 83, in call
+|     count = self.rules.apply_to_model(model)
+|   File "/tetra/tetra_env/lib/python3.10/site-packages/onnxscript/rewriter/_rewrite_rule.py", line 802, in apply_to_model
+|     count = self._apply_to_graph_or_function(
+|   File "/tetra/tetra_env/lib/python3.10/site-packages/onnxscript/rewriter/_rewrite_rule.py", line 669, in _apply_to_graph_or_function
+|     delta = rule.try_rewrite(
+|   File "/tetra/tetra_env/lib/python3.10/site-packages/onnxscript/rewriter/_rewrite_rule.py", line 324, in try_rewrite
+|     replacement_subgraph = self._replacement_pattern.get_replacement(match)
+|   File "/tetra/tetra_env/lib/python3.10/site-packages/onnxscript/rewriter/_rewrite_rule.py", line 220, in get_replacement
+|     new_outputs = self._function(context, **match.bindings)
+|   File "/tetra/tetracode/src/www/python/tetrai/compilers/onnx2onnx/_op_identity.py", line 30, in rewrite
+|     shape = np.broadcast_shapes(x.shape.dims, y.shape.dims)  # type: ignore
+|   File "/tetra/tetra_env/lib/python3.10/site-packages/numpy/lib/stride_tricks.py", line 472, in broadcast_shapes
+|     arrays = [np.empty(x, dtype=[]) for x in args]
+|   File "/tetra/tetra_env/lib/python3.10/site-packages/numpy/lib/stride_tricks.py", line 472, in <listcomp>
+|     arrays = [np.empty(x, dtype=[]) for x in args]
+| TypeError: 'SymbolicDim' object cannot be interpreted as an integer
+| 
+| The above exception was the direct cause of the following exception:
+| 
+| Traceback (most recent call last):
+|   File "/tetra/tetra_env/lib/python3.10/site-packages/onnx_ir/passes/_pass_infra.py", line 317, in call
+|     step_result = super().call(model)
+|   File "/tetra/tetra_env/lib/python3.10/site-packages/onnx_ir/passes/_pass_infra.py", line 253, in call
+|     raise PassError(
+| onnx_ir.passes.PassError: An error occurred when running the '<tetrai.compilers.onnx2onnx._instrumentation.PassInstrumentationWrapper object at 0x7f749bb796c0>' pass after the following passes: ['<tetrai.compilers.onnx2onnx._instrumentation.PassInstrumentationWrapper object at 0x7f749bb79600>', '<tetrai.compilers.onnx2onnx._instrumentation.PassInstrumentationWrapper object at 0x7f749bb79660>']
+| 
+| The above exception was the direct cause of the following exception:
+| 
+| Traceback (most recent call last):
+|   File "/tetra/tetra_env/lib/python3.10/site-packages/onnx_ir/passes/_pass_infra.py", line 250, in call
+|     pass_result = pass_(model)
+|   File "/tetra/tetracode/src/www/python/tetrai/compilers/onnx2onnx/_instrumentation.py", line 125, in __call__
+|     result = self.pass_instance(model)
+|   File "/tetra/tetra_env/lib/python3.10/site-packages/onnx_ir/passes/_pass_infra.py", line 127, in __call__
+|     result = self.call(model)
+|   File "/tetra/tetra_env/lib/python3.10/site-packages/onnx_ir/passes/_pass_infra.py", line 319, in call
+|     raise PassError(f"An error occurred at step {step}") from e
+| onnx_ir.passes.PassError: An error occurred at step 0
+| 
+| The above exception was the direct cause of the following exception:
+| 
+| Traceback (most recent call last):
+|   File "/tetra/tetracode/src/www/python/tetrai/tasks/compiler.py", line 362, in compile
+|     target_shapes = asset_builder.compile_and_checkpoint_target_model(
+|   File "/tetra/tetracode/src/www/python/tetrai/device_farm/model_asset_builders/model_asset_builder.py", line 262, in compile_and_checkpoint_target_model
+|     metadata = self.compile_model(
+|   File "/tetra/tetracode/src/www/python/tetrai/device_farm/model_asset_builders/qnn_asset_builder.py", line 355, in compile_model
+|     return compile_to_qnn_context_binary(
+|   File "/tetra/tetracode/src/www/python/tetrai/compilers/qnn_compiler.py", line 548, in compile_to_qnn_context_binary
+|     metadata = compile_to_qnn_dlc(
+|   File "/tetra/tetracode/src/www/python/tetrai/compilers/qairt_compiler.py", line 545, in compile_to_qnn_dlc
+|     onnx_model, encodings_file = compile_input_file_to_onnx_proto(
+|   File "/tetra/tetracode/src/www/python/tetrai/compilers/onnx_compiler.py", line 1152, in compile_input_file_to_onnx_proto
+|     return optimize_onnx_proto(
+|   File "/tetra/tetracode/src/www/python/tetrai/compilers/onnx_compiler.py", line 1013, in optimize_onnx_proto
+|     onnx_model = _optimize_onnx_using_onnx_ir(onnx_model=onnx_model, logger=logger)
+|   File "/tetra/tetracode/src/www/python/tetrai/compilers/onnx2onnx/optimizer.py", line 185, in optimize_onnx_using_onnx_ir
+|     ir.passes.Sequential(*instrumented_passes)(model)
+|   File "/tetra/tetra_env/lib/python3.10/site-packages/onnx_ir/passes/_pass_infra.py", line 127, in __call__
+|     result = self.call(model)
+|   File "/tetra/tetra_env/lib/python3.10/site-packages/onnx_ir/passes/_pass_infra.py", line 253, in call
+|     raise PassError(
+| onnx_ir.passes.PassError: An error occurred when running the '<tetrai.compilers.onnx2onnx._instrumentation.PassInstrumentationWrapper object at 0x7f749bb795a0>' pass after the following passes: ['<tetrai.compilers.onnx2onnx._instrumentation.PassInstrumentationWrapper object at 0x7f749bb78040>']
+

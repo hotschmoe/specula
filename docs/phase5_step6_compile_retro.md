@@ -131,19 +131,78 @@ specs from `scripts/compile_qwen3_ai_hub.py:build_input_specs` and
 5. Fill in the x86 report's 2×2 outcome matrix based on which
    candidates compile AND pass the 4-gate correctness probe.
 
-## Predictions (to verify next cycle)
+## Session 11 iteration log (actual compile attempts)
 
-- **Path A**: the `OverrideFoldConstantsPass` already folded its
-  BOOL region in the first run; the only new variable this cycle
-  is pinned shapes. Expected: compile succeeds.
-- **Path B-mask**: gets past shape validation. Whether its folded
-  graph compiles or hits a different pass bug is the open question
-  — no op-histogram datapoint for it yet because the first run
-  died at validation.
-- **Correctness**: if either binary compiles, the x86 CPU-ORT
-  cos=1.0 probe guarantees the ONNX input is numerically correct,
-  so any wrong decode output on NPU would be HTP numerical
-  fidelity (FP16 drift, HMX rounding), not an ONNX rewrite bug.
+The pin-shapes pass was necessary but not sufficient. Five
+iterations total before Path A compiled and validated.
+
+| attempt | patha job   | pathbmask job | pipeline change from prior                                                                             | outcome                                             |
+|--------:|-------------|---------------|--------------------------------------------------------------------------------------------------------|-----------------------------------------------------|
+|      v1 | `jp83n13kg` | `jp01w619g`   | x86 handoff, no extra prep                                                                             | both FAILED (SymbolicDim crash / shape validation)  |
+|      v2 | `jgj09qwep` | —             | + pin graph.input shapes to static                                                                     | patha FAILED identically                            |
+|      v3 | `jg93rddmg` | —             | + `resolve_dim_params` on graph.output + value_info (`batch_size`/`sequence_length`/`past_sequence_length + sequence_length` → ints) | patha FAILED identically (op-histogram byte-for-byte same) |
+|      v4 | `jpr4rw7vg` | —             | + `onnx.shape_inference(data_prop=True)` populates value_info (7523 entries, 735 tensors unresolved)   | patha FAILED identically (AI Hub ignores provided value_info) |
+|      v5 | `jperqy07g` | `bee8x0jvc`   | + **ORT `ORT_ENABLE_BASIC` constant-fold pass** (node count 7580 → 2061; 0 tensors with symbolic dims after) | **patha SUCCESS @ 430s** (compile + validation both) |
+
+The load-bearing step turned out to be **ORT constant-folding**.
+All upstream passes (pin, resolve_dim_params, shape_inference) were
+necessary to make ORT's pass succeed — without input/output dims
+concrete, ORT can't propagate — but AI Hub's compiler also needs
+the *graph itself* to be structurally simpler, not just annotated
+with shapes. ORT's constant folder eliminates the Range / Shape /
+ConstantOfShape / Gather / Where chains that computed the causal
+mask at runtime; once they're gone, only the actual transformer
+math remains (MatMul / Add / Mul / Softmax / Sigmoid / Neg /
+Transpose / Concat / Slice / Reshape) and AI Hub's rewriter walks
+the graph without hitting a SymbolicDim.
+
+Retained structurally: the RoPE Cos/Sin pair (1 of each). These
+compute functions of `position_ids` at runtime — not
+constant-foldable. Their outputs' shapes are fully concrete once
+the inputs are pinned, so they don't generate SymbolicDim.
+
+ORT_ENABLE_BASIC was chosen over ENABLE_EXTENDED specifically to
+avoid operator fusions (GELU fusion, LayerNorm fusion, Attention
+fusion) that would emit `com.microsoft` ops — the exact ones we
+spent sessions 7-9 removing. Session 10's `optimum-ortopt`
+bisection already confirmed BASIC is numerically equivalent to
+source (cos = 1.0000).
+
+## Path A correctness (jperqy07g binary)
+
+```
+--- zero-KV diagnostic ---
+  [zero-KV, BOS=151643, pos=0]   cos=0.9402  top5_overlap=1/5  argmax_match=False
+  [zero-KV, BOS=151643, pos=511] cos=0.9392  top5_overlap=1/5  argmax_match=False
+  [zero-KV, token=785, pos=0]    cos=1.0000  top5_overlap=5/5  argmax_match=True
+
+--- single-step at position 511 (prefilled KV) ---
+  cpu argmax=264 (" a"), npu argmax=264 (" a"), top-5 5/5
+  cosine=0.999916, max |delta|=0.17
+
+--- 16-step sliding-window greedy ---
+  match rate = 100% (16/16 tokens identical)
+  NPU text: " a 5G network. It is a smartphone with a smartphone"
+
+=== STATUS: ok ===
+```
+
+All four gates pass: cos > 0.99, match-rate ≥ 50%, recognizable
+English, no NaN. NPU latency 110 ms/step on the wrapper-loaded
+binary. The 0.94 on zero-KV + BOS is an edge (degenerate input;
+all-zero past_kv through ScaledDotProduct divides zeros, RoPE on
+position 0 vs 511 exercises different RoPE phase) — not a gate
+failure because the gates explicitly target the prefilled-KV and
+multi-step comparison.
+
+## Predictions updated
+
+- **Path A**: ✓ **VERIFIED** — compiled, downloaded 1.4 GB binary
+  (`qwen3_0_6b_draft_v81_ctx512.patha.bin`), passes all 4 gates.
+  Step 6 closed on Path A.
+- **Path B-mask**: compile in progress (job `bee8x0jvc`). Same
+  pipeline delta applied; expected to compile (2061-node post-ORT
+  graph, structurally identical to Path A). Validation pending.
 
 ## Side note: other Qualcomm productions
 

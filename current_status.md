@@ -1,10 +1,9 @@
 # specula -- current status
 
-Last updated: 2026-04-21 (session 11 -- x86 delivered Path A +
-Path B-mask ONNX variants, cos=1.0 verified. First AI Hub compile
-cycle FAILED for both; workbench logs show AI Hub folds BOOL
-cleanly but chokes on dynamic shapes. Fix landed in
-prep_onnx_for_ai_hub.py, resubmit in progress.)
+Last updated: 2026-04-21 (session 11 -- **Path A COMPILED + VALIDATED:
+cos=0.9999 single-step, 100% greedy match-rate. Step 6 closed on Path A.**
+Five iterations to find the load-bearing fix: ORT_ENABLE_BASIC constant-
+folding collapses 7580 -> 2061 nodes. Path B-mask compile in progress.)
 
 Living document. Update every few turns. Anyone picking this up cold should
 be able to read this page, skim the README, and resume work.
@@ -364,22 +363,19 @@ step 7 when drafts pipeline alongside CPU verify). Commit `<TBD>`.
    inspection (`results/bin_inspect.json`); wrapper builder in
    `scripts/npu_load_qwen3_bin.py` updated to match.
 
-**Updated 10-step tracker (after session 10 diagnosis):**
+**Updated 10-step tracker (after session 11 Path A success):**
 
 ```
 [DONE]    1. Environment snapshot                 (commit 7230210)
 [DONE]    2. ORT-QNN sidecar skeleton             (commit 282e84a)
 [DONE]    3. Qwen3-0.6B ONNX sourced + CPU-valid  (commit 106c756)
-[REDO]    4. AI Hub compile -> Hexagon .bin       <-- nomask ONNX
-                                                   is broken, need
-                                                   new x86 export
-[DONE]    5. Load .bin via NPUSession, shape-check (session 9)
-[PARTIAL] 6. Correctness vs CPU, single greedy     <-- harness
-                                                   exists, proves
-                                                   current binary
-                                                   is catastrophically
-                                                   wrong (session 10)
-          7. Pipe first drafted token through llama.cpp verify
+[DONE]    4. AI Hub compile -> Hexagon .bin       (session 11 jperqy07g,
+                                                   patha binary 1.4 GB)
+[DONE]    5. Load .bin via NPUSession, shape-check (session 9, re-verified
+                                                   session 11 on Path A wrapper)
+[DONE]    6. Correctness vs CPU, single greedy    (session 11 Path A:
+                                                   cos=0.9999, 100% match)
+          7. Pipe first drafted token through llama.cpp verify <-- next
           8. External-drafter bridge for llama.cpp spec decode
           9. First NPU-spec number on 10-prompt humaneval
          10. Sweep k values, write up, close phase
@@ -555,6 +551,67 @@ halving upload bandwidth on this link (~25 min/path single-stream
 vs ~50 min parallel). Predicted outcome: both compile (the fold pass
 already handled the BOOL region for Path A; pinning resolves the
 SymbolicDim bug for both).
+
+### Session 11 cont. — what actually unblocked the compile
+
+Predicted wrong. Shape pinning + dim_param resolution was **not
+sufficient** — iterations v2, v3, v4 produced byte-for-byte
+identical op histograms on the failing compile side. AI Hub's
+pipeline discards or re-derives our provided value_info and
+re-triggers the same SymbolicDim crash in its identity-op
+rewriter.
+
+**The load-bearing fix was ORT's `ORT_ENABLE_BASIC` graph-optimization
+pass applied locally before upload.** Sequence that worked (v5):
+1. pin_input_shapes — graph.input dims concrete
+2. resolve_dim_params — substitute `batch_size`/`sequence_length`/
+   `past_sequence_length + sequence_length` with concrete ints
+3. **ORT-BASIC constant-fold** (node count 7580 → 2061)
+4. resolve any `unk__N` placeholders ORT generated → 1
+5. final onnx.shape_inference(data_prop=True) — 0 tensors with
+   symbolic dims
+
+Why ORT-BASIC wins where AI Hub's own fold pass didn't: ORT
+actually *replaces* Range/Shape/ConstantOfShape/Gather nodes with
+Constant initializers and eliminates them from the graph.
+AI Hub's `OverrideFoldConstantsPass` also folds them but keeps
+residual tensor shape annotations marked SymbolicDim from its own
+shape inference, which the downstream rewriter then chokes on.
+By pre-folding with ORT, the symbolic-shape annotations never
+enter AI Hub's pipeline in the first place.
+
+Why not use ORT `ENABLE_EXTENDED`: that level introduces operator
+fusions (GELU/LayerNorm/Attention) that emit `com.microsoft`
+ops — the exact ones we spent sessions 7-9 removing. BASIC is
+strictly constant-folding + redundant-node elimination, numerically
+equivalent to source per session 10's `optimum-ortopt` cos=1.0
+probe.
+
+Jobs in session 11:
+
+| path      | job id      | result                              |
+|-----------|-------------|-------------------------------------|
+| patha v1  | jp83n13kg   | FAILED (SymbolicDim in rewriter)    |
+| pathbmask v1 | jp01w619g | FAILED (pre-compile shape mismatch) |
+| patha v2  | jgj09qwep   | FAILED (same)                       |
+| patha v3  | jg93rddmg   | FAILED (same)                       |
+| patha v4  | jpr4rw7vg   | FAILED (same)                       |
+| patha v5  | **jperqy07g** | **SUCCESS @ 430s, 1.4 GB binary** |
+| pathbmask v5 | bee8x0jvc | in progress (submitted after patha validated) |
+
+Correctness on the patha v5 binary (jperqy07g, compiled locally
+with `npu_vs_cpu_correctness.py --path patha`):
+- Single-step prefilled KV: **cos = 0.9999** (gate ≥ 0.95)
+- 16-step sliding-window greedy: **100% match rate** (gate ≥ 50%)
+- NPU text matches CPU verbatim: `" a 5G network. It is a
+  smartphone with a smartphone"` (CPU and NPU streams byte-identical)
+- Zero-KV + BOS probe: cos 0.94 (edge; non-BOS zero-KV = cos 1.0000)
+
+**Step 6 CLOSED on Path A.** Step 7 (llama.cpp verify wiring) now
+unblocked. Path B-mask compile is a research datapoint (does the
+additive-mask pattern behave identically to Path A's ConstantOfShape
+substitution post-fold, given both collapse to the same 2061-node
+graph?) but not on the critical path.
 
 ## Immediate next steps (next session)
 

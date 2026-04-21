@@ -1,0 +1,25 @@
+uploading C:\Users\hotschmoe\Documents\GitHub\specula\models\qwen3-0.6b-patha-ai-hub (2.80 GB) to AI Hub ...
+uploaded in 794.1 s, model_id=mqy8d6kxn
+submitting compile job 'qwen3-0.6b-draft-v81-ctx512-patha-fp16' ...
+Scheduled compile job (jgj09qwep) successfully. To see the status and results:
+    https://workbench.aihub.qualcomm.com/jobs/jgj09qwep/
+job submitted: id=jgj09qwep url=https://workbench.aihub.qualcomm.com/jobs/jgj09qwep/
+polling for completion ...
+  [   0s] CREATED
+  [  10s] CREATED
+  [  20s] CREATED
+  [  30s] CREATED
+  [  40s] CREATED
+  [  50s] OPTIMIZING_MODEL
+  [  60s] OPTIMIZING_MODEL
+  [  70s] OPTIMIZING_MODEL
+  [  80s] OPTIMIZING_MODEL
+  [  90s] OPTIMIZING_MODEL
+  [ 100s] OPTIMIZING_MODEL
+  [ 110s] OPTIMIZING_MODEL
+  [ 120s] OPTIMIZING_MODEL
+  [ 130s] OPTIMIZING_MODEL
+  [ 140s] FAILED
+COMPILE FAILED.
+failure reason: Internal compiler error
+inspect at     : https://workbench.aihub.qualcomm.com/jobs/jgj09qwep/
