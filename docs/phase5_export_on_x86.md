@@ -132,6 +132,67 @@ At the end, optimum runs a PyTorch-vs-ONNX validation sweep and prints
 max-diff values per output. fp16 max diffs in the ~1e-3 range are
 normal and expected.
 
+## Simplify the graph with onnxsim (added after session 7 compile grind)
+
+**Do not skip this.** Eight AI Hub compile attempts on the un-simplified
+optimum export all failed. The root cause: optimum's attention-mask
+path exports a dynamic subgraph (Range → Add → Flatten(Cast(mask)) →
+Gather → And → Where) that still uses BOOL tensors at runtime. HTP's
+QNN backend has no BOOL support anywhere — not in Gather, not even in
+Cast. It only accepts BF16/FP16/INT16/INT8.
+
+onnxsim's constant folding, given static input shapes, collapses this
+entire subgraph to a pre-computed numeric mask. Every AI Hub compile
+log we pulled explicitly complained:
+
+    Onnx model simplification failed due to: No module named 'onnxsim'
+    Simplified model validation failed
+
+AI Hub's own pipeline expects onnxsim to pre-process the ONNX, but
+their environment doesn't ship it. We have to do it locally on the x86
+side — onnxsim has no Windows-on-ARM wheel, so this *cannot* happen on
+the X2E.
+
+```bash
+pip install onnxsim
+
+python -m onnxsim \
+    models/qwen3-0.6b-optimum/model.onnx \
+    models/qwen3-0.6b-simplified/model.onnx \
+    --overwrite-input-shape \
+        "input_ids:1,1" \
+        "attention_mask:1,512" \
+        "position_ids:1,1" \
+        "past_key_values.0.key:1,8,511,128" \
+        "past_key_values.0.value:1,8,511,128"
+```
+
+The `--overwrite-input-shape` flags pin the dynamic dimensions so the
+folder can evaluate Range/Shape ops at compile time. Shape values
+here mirror the X2E-side compile plan (decode-only step, ctx 512):
+`seq_len=1`, `total=512`, `past=511`. **You need the same override for
+all 56 past_key_values.{i}.{key,value}** — there's a one-liner to
+generate them:
+
+```bash
+python -c "print(' '.join(f'--overwrite-input-shape past_key_values.{i}.{k}:1,8,511,128' for i in range(28) for k in ['key','value']))"
+```
+
+Expected result: graph shrinks from 7,667 nodes to roughly 1,500-2,500
+(attention-mask subgraph folds out, Range/Shape/Gather chains
+collapse). onnxsim auto-writes a second .onnx_data alongside if the
+total exceeds 2 GB.
+
+After simplification, re-verify with inspect_onnx_ops.py below and
+confirm:
+1. Still zero `com.microsoft` ops.
+2. `Range` node count should be 0 (all folded).
+3. `Cast ... to BOOL` should be 0 (no BOOL on HTP).
+
+If BOOL Casts survived simplification, the attention-mask subgraph
+wasn't fully folded — usually means a past_key_values shape override
+was missed. Double-check all 56 of them are in the command.
+
 ## Verify the output
 
 **This is the critical step — confirm the ONNX has no `com.microsoft`
@@ -139,7 +200,8 @@ ops.** Without this check you'll burn another 15+ min upload to AI Hub
 before discovering a problem.
 
 ```bash
-python scripts/inspect_onnx_ops.py --model models/qwen3-0.6b-optimum/model.onnx
+# Run on the SIMPLIFIED output, not the raw optimum output.
+python scripts/inspect_onnx_ops.py --model models/qwen3-0.6b-simplified/model.onnx
 ```
 
 What you want to see:
@@ -177,23 +239,36 @@ If `com.microsoft` ops somehow survive:
 
 ## Transfer the output back to the X2E machine
 
-The fp16 export is ~3 GB (larger than the old ort-genai builder claim
-of 1-2 GB because `--no-post-process` disables weight de-duplication).
-Pick your transfer mechanism:
+**Transfer the simplified directory, not the raw optimum one.** The
+X2E side has no onnxsim, so whatever lands on its disk is what gets
+uploaded to AI Hub.
+
+The fp16 simplified export is ~3 GB. Pick your transfer mechanism:
 
 ```bash
 # scp (simplest over SSH)
-scp -r models/qwen3-0.6b-optimum/ <user>@<x2e-host>:<path>/specula/models/
+scp -r models/qwen3-0.6b-simplified/ <user>@<x2e-host>:<path>/specula/models/
 
 # rsync (resumable, good for slow links)
-rsync -av --progress models/qwen3-0.6b-optimum/ \
-    <user>@<x2e-host>:<path>/specula/models/qwen3-0.6b-optimum/
+rsync -av --progress models/qwen3-0.6b-simplified/ \
+    <user>@<x2e-host>:<path>/specula/models/qwen3-0.6b-simplified/
 
-# Mapped Google Drive / cloud sync (the reference run used
+# Mapped Google Drive / cloud sync (the previous run used
 # G:\Shared drives\MAIN\Junk\qwen3-0.6b-optimum\ as the drop site)
-cp -r models/qwen3-0.6b-optimum "/path/to/mounted/drive/"
+cp -r models/qwen3-0.6b-simplified "/path/to/mounted/drive/"
 
 # USB / your tool of choice
+```
+
+Also copy over the supporting files (tokenizer, config, etc.) from the
+*pre-simplification* directory if onnxsim didn't preserve them:
+
+```bash
+cp models/qwen3-0.6b-optimum/*.json models/qwen3-0.6b-simplified/
+cp models/qwen3-0.6b-optimum/tokenizer.json models/qwen3-0.6b-simplified/
+cp models/qwen3-0.6b-optimum/merges.txt models/qwen3-0.6b-simplified/
+cp models/qwen3-0.6b-optimum/vocab.json models/qwen3-0.6b-simplified/
+cp models/qwen3-0.6b-optimum/chat_template.jinja models/qwen3-0.6b-simplified/
 ```
 
 Do **not** commit the ONNX to git. The repo's `.gitignore` excludes
@@ -277,3 +352,26 @@ Documented here so future sessions don't re-derive these from scratch.
   before burning the export cycle. See
   `results/ai_hub_model_zoo_check.md` (if present; otherwise perform
   the check yourself).
+
+## Follow-up: w4a16 precision (perf, not correctness)
+
+Every Qualcomm-published HTP LLM on X2 Elite ships at **w4a16** (int4
+grouped weights, fp16 activations). The Llama-v3.2-1B benchmark on X2E
+is 90.36 t/s at w4a16 vs 27.95 t/s at w4 on identical hardware — a
+~3× gap coming directly from Hexagon v81's HMX matrix units having
+int4×fp16 as a native op. Details in
+`results/ai_hub_model_zoo_check.md`.
+
+Our current export path (fp16 weights + fp16 activations) lands on a
+slower HTP datapath. For a first working binary this doesn't matter —
+get compile-to-execution working, then revisit precision. When we do
+revisit, the path is:
+
+1. On the x86 machine, run the export with w4a16 quantization (either
+   via AIMET or AI Hub's `--quantize_full_type int4 --quantize_io`).
+2. Either requires ~50-100 calibration prompts; use specula's existing
+   `prompts/humaneval_subset.jsonl` + `structured_json.jsonl`.
+3. Re-upload and recompile on the X2E side.
+
+Not blocking for the current push; tracked as a perf-tuning pass once
+the pipeline is unblocked.
