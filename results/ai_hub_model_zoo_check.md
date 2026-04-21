@@ -116,3 +116,86 @@ this hardware.
 - Qwen2.5-1.5B gets an X2 Elite asset added to its `release_assets.json`.
 - Genie SDK ships with ORT-QNN-compatible export (unlikely short-term;
   Genie's whole point is a different runtime).
+
+## Implicit NPU capability signals (added 2026-04-20, session 5)
+
+Reading the zoo as a platform spec sheet rather than a shopping list —
+what the published X2 Elite assets tell us about the underlying HTP,
+regardless of which runtime we end up using.
+
+### w4a16 is a hardware fast path, not a Genie choice
+
+Every X2E-targeted model in the zoo uses **w4a16** (int4 grouped
+weights, fp16 activations, fp16 KV). The Llama-v3.2-1B README
+publishes both precisions on the same hardware:
+
+| Precision | TG t/s @ 4096 ctx |
+|-----------|------------------:|
+| w4a16     | **90.36**         |
+| w4        | 27.95             |
+
+The ~3× gap is a property of Hexagon v81's HMX matrix units — int4
+weights × fp16 activations is a native HMX op. Any other combo
+(int8×int8, fp16×fp16, int4×int8) hits a slower or emulated
+datapath. **This applies to ORT-QNN identically**, not just Genie —
+both runtimes compile down to the same HMX instructions. ORT-QNN
+adds its own overhead on top (graph partitioning, ONNX runtime
+layer), so its achievable number sits below the Genie ceiling, but
+the quant-choice preference is the same.
+
+**Implication for Phase 5 export:** target w4a16 explicitly. If the
+x86 ONNX export currently produces fp16/fp16 (optimum default) or
+int8/int8 QDQ, we're on the slow path before runtime overhead even
+starts. Re-check the export config when the first compile succeeds.
+
+### Observed size ceiling ≠ hardware ceiling
+
+Biggest X2E pre-compile shipped: **Qwen3-4B** (~2 GB w4a16 weights).
+Larger Qualcomm-org models exist (Qwen2-7B, Qwen2.5-7B, Llama-3.1-8B)
+but none are X2E-flagged. This is almost certainly release
+prioritization + AI Hub compile-time bounds, not a hardware ceiling —
+`dspArch:81, socModel:88` + voice_project's working 1.7B Whisper
+compiles show the HTP can host larger graphs. So compiling our
+Qwen3-8B target via AI Hub is plausible-but-not-free; unsurprising
+if it hits more op-lowering edges than the 0.6B draft.
+
+### Hybrid architectures are absent from the X2E zoo
+
+No Qwen3.5-27B-hybrid, no delta-net, no SSM anything. Consistent with
+npu_scoping.md's finding that `gated_delta_net` and `ssm_conv` with
+persistent state aren't in QNN's shipped op library. Genie's sweet
+spot is pure-attention transformers. Reinforces the Phase 5 pin on
+Qwen3-0.6B (pure attention) before any Qwen3.5-family NPU work.
+
+### Speed vs efficiency — it's efficiency
+
+The Genie 90 t/s on Llama-1B is **below** our CPU (111 t/s on Qwen3-0.6B
+Q8_0) and OpenCL Adreno (111 t/s same model). So at the 1B class the
+NPU is slightly *slower* per token than CPU/GPU on this machine. The
+Qualcomm pitch is tok/watt — HTP typically 2-5 W under LLM load vs
+CPU 15-30 W, so ~5-6× tok/joule advantage while losing on raw t/s.
+
+**Re-centers the Phase 5 value prop:** NPU drafting doesn't win by
+running drafts faster than CPU. It wins by (a) freeing CPU for
+parallel target verification — pipelined overlap instead of serial
+draft→verify, and (b) strong TTFT (Llama-1B table: 0.05-1.61 s at
+4096 ctx) from HTP's large-batch prefill path. If NPU-draft only
+matches CPU-draft per token but parallelizes with target, that's a
+win, not a tie.
+
+### What the zoo does NOT answer
+
+- **Context-length ceiling.** All published numbers stop at 4096.
+  Whether Genie bundles support 32K / 128K on X2E isn't advertised.
+- **Small-batch latency shape.** Published TG is batch-1. Spec-decode
+  verify batches (3-8 tokens) are where sd.npu's pad-and-recycle
+  trick (npu_scoping.md §10) exists because NPUs handle tiny batches
+  poorly. Whether X2E HTP is flat or spiky at k ∈ {3..8} is unknown
+  until we measure.
+- **Multi-model residency.** Our Phase 5 end-state wants NPU draft +
+  CPU target concurrent. VTCM residency model for two models at once
+  isn't in the zoo data.
+
+These are Phase 5 bring-up's empirical questions — the zoo confirms
+the platform is capable of useful LLM work, it doesn't answer the
+spec-decode-specific questions.
