@@ -239,3 +239,92 @@ Step 3 exit: PASS (coherence-substituted).
   sourcing.
 - KV-cache buffer sharing across session.run() calls is the latency
   lever we'll probe at step 5+ if per-token dispatch is slow.
+
+
+## Step 4 - AI Hub compile attempts (2026-04-20)
+
+Three attempts before hitting a real compile-engine failure that needs
+a new plan. Each failure was cheap (seconds to minutes), not hours.
+
+### Attempt 1: single-file upload
+- Command : hub.upload_model(str(model.onnx))  [300 MB file only]
+- Failure : 'The uploaded ONNX model is missing its external weights.'
+- Lesson  : AI Hub needs BOTH graph and external-data together.
+- Upload  : 138 s wasted before compile rejection.
+
+### Attempt 2: directory upload, .onnx_data extension
+- Command : hub.upload_model(str(staging_dir)) with model.onnx_data
+- Failure : qai_hub.client.UserError 'Model directory ... can only
+            contain .onnx, .data, .encodings, and .bin files.'
+- Lesson  : qai-hub whitelists file extensions. .onnx_data (the
+            onnx-community convention) is rejected.
+- Upload  : 0 s (client-side check, never reached the server).
+- Fix     : scripts/prep_onnx_for_ai_hub.py -- patch every
+            external_data 'location' entry from 'model.onnx_data' to
+            'model.data' + hardlink the weights. Graph-only load,
+            0.5 s, zero disk duplication.
+
+### Attempt 3: upload succeeded, compile rejected on custom op
+- Command : hub.upload_model(str(staging_dir)) with model.onnx + model.data
+- Upload  : 759.7 s (12.7 min) for 2.24 GB. ~3 MB/s effective.
+- Job     : id=j5wdkqxzg at workbench.aihub.qualcomm.com/jobs/j5wdkqxzg/
+- Status  : CREATED (30 s) -> OPTIMIZING_MODEL (70 s) -> FAILED (100 s)
+- Reason  : 'No Op registered for SimplifiedLayerNormalization with
+            domain_version of 14'
+- Lesson  : onnx-community's Qwen3-0.6B-ONNX export uses ORT's fused
+            ops (com.microsoft domain) that QAIRT's QNN converter
+            does not support.
+
+### Op inventory after attempt 3 (scripts/inspect_onnx_ops.py)
+
+Total nodes: 610 across two opset domains.
+Opset imports:
+    <default>       v14
+    com.microsoft   v1
+
+Non-standard ops (not in QAIRT's stock op library):
+    com.microsoft::RotaryEmbedding                   56 instances
+    com.microsoft::SkipSimplifiedLayerNormalization  56 instances
+    com.microsoft::GroupQueryAttention               28 instances
+
+Plus one default-domain op that QAIRT also doesn't recognize:
+    SimplifiedLayerNormalization                     57 instances
+
+All four ops are ORT-side fusions of standard ONNX primitives. They
+are baked in by optimum.exporters.onnx's default ORT optimization
+pass. This is what the onnx-community mirror publishes.
+
+### Path-forward decision
+
+Three options evaluated. Picked #1.
+
+1. [CHOSEN] Re-export on a non-WoA machine via Microsoft's
+   onnxruntime_genai.models.builder with execution_provider='qnn'.
+   Official QNN target; should produce QAIRT-compatible ONNX
+   directly. Requires torch (WoA wall), so run on Linux VM /
+   Codespaces / another machine and copy the ONNX back.
+   Estimated 1-2 hours end-to-end.
+
+2. Manual ONNX graph surgery: decompose all four fused ops to
+   standard primitives in specula. Deterministic but expensive;
+   GroupQueryAttention with KV-cache semantics is 4-8 hours alone.
+   Total 6-11 hours, high bug risk.
+
+3. Manual optimum export on non-WoA machine with ORT fusion disabled
+   (no_post_process=True). Still needs torch. Less QNN-optimized
+   than option 1 but simpler than 2.
+
+Picked option 1 because Microsoft's onnxruntime-genai builder is
+the official QNN path and handles all four fused ops as a tested
+feature, not as a workaround.
+
+### State on this machine
+
+- models/qwen3-0.6b-ai-hub/ kept (2.3 GB) in case we want to retry
+  once we have a QNN-compatible ONNX from option 1.
+- AI Hub model_id=mnzpzwxdq is now orphaned (unused by any job).
+  Can be deleted via qai_hub.delete_model() or left to expire.
+- scripts/{download_qwen3_onnx,prep_onnx_for_ai_hub,compile_qwen3_ai_hub,
+  inspect_onnx_ops}.py all working and kept for re-run.
+- Next: produce a QAIRT-compatible Qwen3-0.6B ONNX via option 1,
+  copy to models/, re-run compile_qwen3_ai_hub.py --submit.

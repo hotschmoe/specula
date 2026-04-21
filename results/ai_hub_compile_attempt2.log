@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+    raise UserError(
+qai_hub.client.UserError: Model directory 'C:\Users\hotschmoe\Documents\GitHub\specula\models\qwen3-0.6b-onnx\onnx' can only contain .onnx, .data, .encodings, and .bin files.
+uploading C:\Users\hotschmoe\Documents\GitHub\specula\models\qwen3-0.6b-onnx\onnx (2.24 GB) to AI Hub ...
