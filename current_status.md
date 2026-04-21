@@ -1,9 +1,9 @@
 # specula -- current status
 
-Last updated: 2026-04-21 (session 11 -- **Path A COMPILED + VALIDATED:
-cos=0.9999 single-step, 100% greedy match-rate. Step 6 closed on Path A.**
-Five iterations to find the load-bearing fix: ORT_ENABLE_BASIC constant-
-folding collapses 7580 -> 2061 nodes. Path B-mask compile in progress.)
+Last updated: 2026-04-21 (session 11 -- **both Path A AND Path B-mask
+COMPILED + VALIDATED with byte-identical NPU output. Step 6 fully closed.**
+ORT_ENABLE_BASIC constant-folding was the load-bearing fix (collapses
+7580 -> 2061 nodes; both paths converge to the same post-fold graph).)
 
 Living document. Update every few turns. Anyone picking this up cold should
 be able to read this page, skim the README, and resume work.
@@ -597,21 +597,29 @@ Jobs in session 11:
 | patha v3  | jg93rddmg   | FAILED (same)                       |
 | patha v4  | jpr4rw7vg   | FAILED (same)                       |
 | patha v5  | **jperqy07g** | **SUCCESS @ 430s, 1.4 GB binary** |
-| pathbmask v5 | bee8x0jvc | in progress (submitted after patha validated) |
+| pathbmask v5 | j563xwkv5 | FAILED (input-spec *order* mismatch) |
+| pathbmask v6 | **jpx7q4o9g** | **SUCCESS @ 400s, 1.4 GB binary** |
 
-Correctness on the patha v5 binary (jperqy07g, compiled locally
-with `npu_vs_cpu_correctness.py --path patha`):
-- Single-step prefilled KV: **cos = 0.9999** (gate ≥ 0.95)
-- 16-step sliding-window greedy: **100% match rate** (gate ≥ 50%)
-- NPU text matches CPU verbatim: `" a 5G network. It is a
-  smartphone with a smartphone"` (CPU and NPU streams byte-identical)
+Correctness on both v5/v6 binaries (`npu_vs_cpu_correctness.py --path {patha,pathbmask}`):
+- Single-step prefilled KV: **cos = 0.999916** (gate ≥ 0.95) — both paths
+- 16-step sliding-window greedy: **100% match rate** (gate ≥ 50%) — both paths
+- NPU text matches CPU verbatim: `" a 5G network. It is a smartphone with a smartphone"`
+- Path A and Path B-mask produce **byte-identical NPU output** (expected — same 2061-node graph after ORT fold)
 - Zero-KV + BOS probe: cos 0.94 (edge; non-BOS zero-KV = cos 1.0000)
 
-**Step 6 CLOSED on Path A.** Step 7 (llama.cpp verify wiring) now
-unblocked. Path B-mask compile is a research datapoint (does the
-additive-mask pattern behave identically to Path A's ConstantOfShape
-substitution post-fold, given both collapse to the same 2061-node
-graph?) but not on the critical path.
+**Step 6 CLOSED on both paths.** x86's 2×2 hypothesis matrix
+(Path A: "BOOL casts removed, tensors remain" vs Path B-mask:
+"zero BOOL tensors") is answered: HTP accepts either. The
+load-bearing issue was graph complexity (dynamic shapes + unfolded
+Range/Shape/Expand chains), not BOOL op types.
+
+**Operational recommendation:** Path A is the primary NPU binary
+(one less runtime feed — no `attention_bias` zeros tensor per
+step). Path B-mask stays in the repo as the documented equivalent
+path, useful if a future regime needs a non-zero additive bias
+(partial-window prefill with padding).
+
+Step 7 (llama.cpp verify wiring) now unblocked.
 
 ## Immediate next steps (next session)
 

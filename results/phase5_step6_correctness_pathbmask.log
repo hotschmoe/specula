@@ -1,0 +1,52 @@
+=== step 6 - CPU vs NPU correctness (pathbmask) ===
+
+--- loading CPU ONNX (FP32, dynamic past_len) ---
+  loaded in 2.1 s
+
+--- loading NPU binary (FP16 interior, fixed past_len=511) ---
+  loading wrapper ONNX qwen3_0_6b_draft_v81_ctx512.pathbmask.wrapper.onnx via legacy QNN EP ...
+  loaded in 1.8 s
+
+--- zero-KV diagnostic (isolate graph vs KV-handoff failures) ---
+  [zero-KV, token=151643 (BOS), pos=0] cpu_max=+14.09 npu_max=+13.40 cos=0.9402 top5_overlap=1/5 argmax_match=False
+    cpu argmax: 133724 -> ' s\\u1ea1n'
+    npu argmax: 2223 -> '.ex'
+  [zero-KV, token=151643 (BOS), pos=511] cpu_max=+14.09 npu_max=+13.38 cos=0.9392 top5_overlap=1/5 argmax_match=False
+    cpu argmax: 133724 -> ' s\\u1ea1n'
+    npu argmax: 2223 -> '.ex'
+  [zero-KV, token=785 (BOS), pos=0] cpu_max=+13.47 npu_max=+13.45 cos=1.0000 top5_overlap=5/5 argmax_match=True
+    cpu argmax: 12478 -> ' Solution'
+    npu argmax: 12478 -> ' Solution'
+
+--- CPU prefill + decode to past_len=511 ---
+  prompt tokens (7): [785, 82055, 1599, 17, 33764, 49395, 374]
+  CPU decode: growing past_len 7 -> 511 (504 steps)...
+  decoded 504 tokens in 28.8 s
+
+  CPU-generated continuation (505 toks, first 120 chars):
+    'The Snapdragon X2 Elite Extreme is a high-end smartphone with a 6.5-inch 5G camera, and it has a 5G network. It is a high-end smartphone with a 6.5-inch 5'
+  anchor next-token id (position 511): 702
+
+--- single-step logit comparison at position 511 ---
+  cpu argmax      : 264  -> ' a'
+  npu argmax      : 264  -> ' a'
+  argmax match    : True
+  top-5 overlap   : 5 / 5
+    cpu top5      : [264, 458, 279, 220, 902]
+    npu top5      : [264, 458, 279, 220, 902]
+  cosine sim      : 0.999916
+  max |delta|     : 0.1669
+
+--- multi-step greedy (16 steps, sliding-window KV) ---
+  CPU stream ids  : [264, 220, 20, 38, 3922, 13, 1084, 374, 264, 21511, 448, 264, 21511, 448, 264, 21511]
+  NPU stream ids  : [264, 220, 20, 38, 3922, 13, 1084, 374, 264, 21511, 448, 264, 21511, 448, 264, 21511]
+  per-step match  : [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+  match rate      : 100.0%
+  CPU text        : ' a 5G network. It is a smartphone with a smartphone with a smartphone'
+  NPU text        : ' a 5G network. It is a smartphone with a smartphone with a smartphone'
+
+=== STATUS ===
+  cosine > 0.99           : True (0.9999)
+  greedy match-rate >= 50%: True (100.0%)
+  NPU stream is text      : True
+  overall                 : ok

@@ -197,12 +197,67 @@ multi-step comparison.
 
 ## Predictions updated
 
-- **Path A**: ✓ **VERIFIED** — compiled, downloaded 1.4 GB binary
-  (`qwen3_0_6b_draft_v81_ctx512.patha.bin`), passes all 4 gates.
-  Step 6 closed on Path A.
-- **Path B-mask**: compile in progress (job `bee8x0jvc`). Same
-  pipeline delta applied; expected to compile (2061-node post-ORT
-  graph, structurally identical to Path A). Validation pending.
+- **Path A**: ✓ **VERIFIED** — compiled (job `jperqy07g`, ~430s),
+  downloaded 1.4 GB binary, passes all 4 gates.
+- **Path B-mask**: ✓ **VERIFIED** — compiled (v6 job `jpx7q4o9g`, ~400s)
+  after a 1-line fix to input *ordering* (v5 `j563xwkv5` failed pre-compile);
+  downloaded 1.4 GB binary, passes all 4 gates with byte-identical NPU
+  output to Path A.
+
+### Path B-mask input-ordering fix (v5 → v6)
+
+v5 failed pre-compile with the familiar "Provided input_shapes does
+not match shapes inferred from the model" error. All shape *values*
+matched now (thanks to the ORT+pin pipeline) but the **iteration
+order** of our `input_specs` dict differed from the ONNX's
+`graph.input` order:
+
+- Our `build_input_specs` placed `attention_bias` at index 2 (after
+  `input_ids` and `position_ids`, before the 56 past_kv entries).
+- The x86-rewritten ONNX declares `attention_bias` as the *last*
+  graph input (index 58, after all 28 past_kv key/value pairs).
+
+AI Hub validates position-by-position, not by name. Fix:
+`compile_qwen3_ai_hub.build_input_specs` now appends
+`extra_input_specs` *after* the past_kv loop. Matching tweak in
+`npu_load_qwen3_bin.describe_inputs` for the EPContext wrapper's
+IO declaration.
+
+## Outcome matrix (x86 report's 2×2)
+
+The x86 report set up Path A vs Path B-mask as probes of HTP's
+BOOL strictness. With both binaries compiled and validated, we
+can fill the matrix definitively:
+
+| A compiles + valid? | B-mask compiles + valid? | Interpretation |
+|---|---|---|
+| ✓ | ✓ | **(observed)** — both paths collapse to the same 2061-node graph after ORT constant-folding. HTP accepts either; the x86 BOOL-hypothesis framing is moot on this compiler pipeline. |
+
+Specifically:
+- **Path A output** (NPU): `" a 5G network. It is a smartphone with a smartphone with a smartphone"`
+- **Path B-mask output** (NPU): `" a 5G network. It is a smartphone with a smartphone with a smartphone"` (byte-identical)
+- Both match CPU reference token-for-token over 16 steps (100% match rate).
+- Both: single-step cos = 0.999916, max |delta| = 0.1669 (identical numerics).
+
+The convergence is expected: ORT-BASIC folds away all the BOOL-
+tainted subgraph (`Where` / `LessOrEqual` / `Equal` / `Range`),
+plus Path A's surgical `ConstantOfShape` substitution. Path B-mask
+contributes a runtime `attention_bias` input whose all-zeros feed
+is numerically equivalent to Path A's post-fold inlined all-ones-
+mask-applied-to-scores behavior.
+
+## Operational recommendation
+
+**Use Path A as the primary NPU binary.** Its 58-input signature
+has one less runtime feed than Path B-mask (no `attention_bias`
+zeros-tensor per step). Slightly smaller per-step feed dict, same
+outputs.
+
+**Keep Path B-mask in the repo as the documented equivalent path.**
+Useful if a future context/budget regime needs a partially-filled
+window (e.g., prefill with padding) where `attention_bias` would be
+lower-triangular `0 / -65504.0` rather than all zeros. Path A can't
+support that without re-compiling; Path B-mask can.
 
 ## Side note: other Qualcomm productions
 
