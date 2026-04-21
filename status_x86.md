@@ -121,6 +121,60 @@ Captured here so they make it into the final report:
   keeps source vs staged in the same shape space. Verified cos=1.0
   on this probe — which is the same bar the doc wanted.
 
+## Recon findings (the actual BOOL topology)
+
+Full dump in `results/phase5_step6_bool_region_dump.txt`. Summary:
+
+**The 3 Cast→BOOL nodes are NOT what the doc implied.** Only one is a
+"real" dtype conversion; the other two are BOOL→BOOL identity casts
+that optimum inserted redundantly.
+
+| Node | Input dtype | Output dtype | Role |
+|---|---|---|---|
+| `/model/Cast_2` | INT64 | BOOL | Real cast (`attention_mask` → BOOL) |
+| `/model/Cast_5` | BOOL | BOOL | **Identity** (LessOrEqual is already BOOL) |
+| `/model/Cast_6` | BOOL | BOOL | **Identity** (Reshape_1 is already BOOL) |
+
+**The attention-mask BOOL region is shared, not per-layer.** One
+subgraph produces a BOOL mask, fanned out via `Expand → 28 × Slice_4`.
+Per-layer fork starts at `Slice_4`. This means a single subgraph
+rewrite benefits all 28 layers — the doc's "per-attention-block"
+framing was misleading.
+
+**The mask is additive in the graph already, just via Where.**
+Critical finding for Path B-mask: the Where the doc pointed at is
+`/model/layers.N/self_attn/Where_2`, but its signature is NOT
+`Where(bool_cond, scores, -inf)`. It's:
+
+```
+Where_2(
+    cond=Slice_4_output_0 (BOOL),
+    then=Constant_63 (FP32 scalar 0.0),
+    else=Constant_64 (FP32 scalar -inf)
+)
+-> Add_2(MatMul_output_0 + Where_2_output_0)
+```
+
+The Where produces an **additive** FP32 mask (0 or -inf) that gets
+Added to scores at `Add_2`. So Qualcomm's "production additive-mask
+pattern" is already effectively what the graph computes — just via
+a BOOL subgraph instead of a direct FP input. Path B-mask becomes
+a much cleaner rewrite than the doc suggested: just splice a new
+`attention_bias` FP32 input directly into the 28 `Add_2` nodes and
+delete the Where/BOOL chain.
+
+**Structural non-issues (separate from attention mask):**
+
+- 58 `Equal` nodes — these feed `Where(Equal, ConstantOfShape_zero,
+  Reshape_int64)` patterns for dynamic-shape resolution, not
+  attention masking. Sink cleanly at INT64. Could still fail HTP
+  op-lowering (BOOL-cond Where with INT64 branches is the pattern)
+  but **not** in scope for this cycle's rewrites.
+- 3 `Range`, 1 `LessOrEqual`, 1 `Cos`, 1 `Sin` — the position-aware
+  computations (causal triangle, RoPE). Path B-mask removes Range +
+  LessOrEqual by killing the causal-mask subgraph. Cos/Sin are
+  RoPE; full Path B handles them but B-mask doesn't.
+
 ## Progress log additions
 
 ### 2026-04-21 — session 1 continued

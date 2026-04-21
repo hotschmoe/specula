@@ -1,0 +1,35 @@
+{
+  "model": "C:\\Users\\hotschmoe\\Documents\\GitHub\\specula\\models\\qwen3-0.6b-staged\\model.onnx",
+  "node_count": 7611,
+  "cast_to_bool_count": 3,
+  "cast_to_bool_nodes": [
+    {
+      "name": "/model/Cast_2",
+      "op_type": "Cast",
+      "input": "attention_mask",
+      "input_dtype": "INT64",
+      "output": "/model/Cast_2_output_0"
+    },
+    {
+      "name": "/model/Cast_5",
+      "op_type": "Cast",
+      "input": "/model/LessOrEqual_output_0",
+      "input_dtype": "BOOL",
+      "output": "/model/Cast_5_output_0"
+    },
+    {
+      "name": "/model/Cast_6",
+      "op_type": "Cast",
+      "input": "/model/Reshape_1_output_0",
+      "input_dtype": "BOOL",
+      "output": "/model/Cast_6_output_0"
+    }
+  ],
+  "bool_op_counts": {
+    "LessOrEqual": 1,
+    "And": 2,
+    "Equal": 58
+  },
+  "total_bool_tensors": 97,
+  "bool_initializers": 0
+}
