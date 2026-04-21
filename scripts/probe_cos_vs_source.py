@@ -134,8 +134,10 @@ def build_feed(sess: ort.InferenceSession, for_source: bool) -> dict:
     if "attention_bias" in input_names:
         # Path B-mask graph. Additive causal mask; since total_len=512
         # and we're at the last position (511), all previous positions
-        # are valid -> all zeros for this probe. FP16.
-        feed["attention_bias"] = np.zeros((1, 1, 1, CTX_LEN), dtype=np.float16)
+        # are valid -> all zeros for this probe. Dtype detected from
+        # the session (optimum fp16 export keeps attention math in FP32).
+        bias_dtype = detect_input_dtype(sess, "attention_bias")
+        feed["attention_bias"] = np.zeros((1, 1, 1, CTX_LEN), dtype=bias_dtype)
 
     # Report what we built so mismatches with the session are easy to
     # spot.

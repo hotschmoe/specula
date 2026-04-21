@@ -193,3 +193,18 @@ delete the Where/BOOL chain.
   **cos=1.0, max_abs_diff=0.0, argmax match, top-5 5/5. PASS.**
   Report: `results/phase5_step6_probe_staged.json`. 2a+2b is proven
   safe; moving on to BOOL-region recon.
+- Recon run — key findings captured in the "Recon findings" section
+  above. Most consequential: the mask is already additive (Where_2
+  produces FP32 0/-inf, added to scores at Add_2), which dramatically
+  simplifies Path B-mask.
+- **Path A implemented and validated.** 7,611 → 7,580 nodes. 0
+  Cast→BOOL. Probe cos=1.0, max_abs_diff=0.0, argmax match. Report:
+  `results/phase5_step6_probe_patha.json`.
+- **Path B-mask implemented and validated.** 7,611 → 7,166 nodes.
+  0 Cast→BOOL, 0 Range, 0 And, 0 LessOrEqual, 0 BOOL tensors anywhere
+  (matches Qualcomm zoo pattern). Probe cos=1.0, max_abs_diff=0.0,
+  argmax match. Report: `results/phase5_step6_probe_pathbmask.json`.
+- Consolidated findings for the aarch64 team in
+  `docs/phase5_step6_export_report.md`. That document is the handoff;
+  this file remains the on-x86 operator logbook.
+- **Next:** transfer to `Z:\exposed\junk\` per the user's request.
