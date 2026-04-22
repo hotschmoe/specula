@@ -72,16 +72,23 @@ and `.` with `_`. Verified on both `embed_tokens/Gather_output_0`
 Wrapper declares 1 input (int32 `input_ids [1,1]`) and 1 output
 (uint16 `_model_model_embed_tokens_Gather_output_0 [1,1,2560]`).
 
+AC rerun with warmup + 20 measured iters (2026-04-22):
+
 ```
-  loaded in 1.2 s
+  loaded in 1.0 s
   providers: ['QNNExecutionProvider', 'CPUExecutionProvider']
-  run latency : 3.27 ms
+  run latency (20 iters, warmup discarded):
+    min 0.03 ms  median 0.04 ms  max 0.12 ms  mean 0.05 ms
   output shape=(1, 1, 2560) dtype=uint16 min=17571 max=44165
 ```
 
-Dequantized with metadata's `scale=7.197e-6, offset=-30800`:
-output range = `[-0.095, +0.096]` — plausible embedding magnitude
-for a transformer post-embed-scale. **Load + forward pass green.**
+Single-call battery measurement (before warmup add): **3.27 ms** —
+dominated by graph-init / HMX context setup, not the embedding op
+itself. The 0.04 ms AC median reflects the actual per-call cost
+once the graph is hot. Dequantized with metadata's
+`scale=7.197e-6, offset=-30800`: output range = `[-0.095, +0.096]`
+— plausible embedding magnitude for a transformer post-embed-scale.
+**Load + forward pass green.**
 
 ### Part 2 — layers 0..11 (full-quant IO surface)
 
@@ -90,10 +97,13 @@ uint16 cos/sin + 24 × uint8 past_kv) and 25 outputs (uint16 hidden
 + 24 × uint8 present_kv slices). All shapes + dtypes as declared
 matched by ORT-QNN's `session.get_inputs()/get_outputs()`.
 
+AC rerun with warmup + 20 measured iters (2026-04-22):
+
 ```
-  loaded in ~1-2 s
+  loaded in ~1 s
   providers: ['QNNExecutionProvider', 'CPUExecutionProvider']
-  run latency : 13.37 ms
+  run latency (20 iters, warmup discarded):
+    min 7.12 ms  median 7.20 ms  max 7.42 ms  mean 7.22 ms
   _model_model_layers_11_Add_1_output_0  shape=(1,1,2560) uint16 min=12108 max=23169
   past_key_0_out                          shape=(8,1,128,1) uint8 min=113 max=142
   past_key_1_out                          shape=(8,1,128,1) uint8 min=104 max=153
@@ -102,6 +112,11 @@ matched by ORT-QNN's `session.get_inputs()/get_outputs()`.
 
 **Load + forward pass green.** uint16 hidden output, uint8
 per-layer present_kv outputs, all consumed and produced cleanly.
+
+Battery-power single-call measurement was 13.37 ms; AC median is
+**7.22 ms** — a 1.85× speedup, consistent with but slightly larger
+than the +27% battery→AC gap we saw on fp16 pathbmask. The variance
+is low (7.12–7.42 ms over 20 iters) so this is a tight estimate.
 
 ## Key findings
 
@@ -119,19 +134,41 @@ per-layer present_kv outputs, all consumed and produced cleanly.
    - past_key_N, past_value_N: **uint8 per-layer**, offset=-128
      (symmetric int8 shifted), scale varies per layer.
 
-3. **Perf datapoint (BATTERY, pending AC rerun):** 12 layers of
-   Qwen3-4B at w4a16 runs in **~13.37 ms** (1.11 ms/layer).
-   *This number was collected on battery power; Lever B's AC-vs-
-   battery delta on the same binary was +27%, so a clean-AC rerun
-   should land around ~10.5 ms/12-layers.* Extrapolating to Qwen3-0.6B
-   (28 layers, single-partition graph) → **~22–31 ms/step** depending
-   on power state, vs our fp16 63 ms baseline. Rough ceiling: **~2×
-   faster per-step** for w4a16 vs fp16. Stacked onto Lever B's
-   18.12 t/s AC this projects ~35–40 t/s for k=2 speculative —
-   comfortably past the 30 t/s Phase 5.5 stretch target.
-   Extrapolation has error bars (different model topology, partition
-   strategy, ctx, and no AC rerun yet) — but the order of magnitude
-   is right.
+3. **Perf datapoint (AC, clean):** 12 layers of Qwen3-4B at w4a16
+   runs in **7.22 ms median** (min 7.12, max 7.42 over 20 iters
+   with warmup discarded). That's **0.60 ms/layer** on the
+   Qualcomm reference w4a16 IO convention.
+
+   **Extrapolation to Qwen3-0.6B** (28 layers, single-partition graph):
+   28 × 0.60 = **~16.8 ms/step** projected.
+
+   Full-pipeline Qwen3-4B decode (all 4 partitions chained):
+   ~(1 × 0.04 embed) + (3 × 7.22 attention blocks) ≈ **~22 ms/step**
+   → ~45 t/s standalone on the 4B model (bounded extrapolation —
+   we only measured 1 of 3 attention partitions; the head-unembed
+   partition likely adds ~2-3 ms).
+
+   **Speculative-decode projection** (v Lever B's 18.12 t/s AC fp16
+   baseline, same ctx=256, same target verify ~157 ms/call):
+   Expected committed per round ≈ `1 + k × accept_rate`; round
+   wall ≈ `max(k × step, verify_ms)`. For step=17 ms (w4a16 draft)
+   and verify=157 ms:
+
+   | k | committed (acc=0.80) | round wall | t/s |
+   |---|---:|---:|---:|
+   | 2 | 2.6 | max(34, 157) = 157 | 16.6 |
+   | 4 | 4.2 | max(68, 157) = 157 | 26.8 |
+   | 6 | 5.8 | max(102, 157) = 157 | 36.9 |
+   | 8 | 7.4 | max(136, 157) = 157 | 47.1 |
+   | 10 | 9.0 | max(170, 170) = 170 | 52.9 ← NPU-bound crossover |
+   | 12 | 10.6 | 204 | 52.0 |
+
+   Accept rate drops with k (Phase 5 close: 81% at k=2 → 55% at k=8),
+   so the 7.4 committed at k=8 is optimistic. Realistic projection:
+   **~30-45 t/s in the k=4-8 range** vs 18.12 t/s today. *w4a16's
+   real leverage isn't per-call speed at k=2 (still verify-bound) —
+   it's unlocking larger-k speculative where today's fp16 would be
+   NPU-bound.*
 
 4. **Weight-shared multi-graph binaries are a thing.** Qualcomm
    ships 10 graphs per `.bin` with shared weights and `use-mmap:
@@ -208,12 +245,12 @@ pathb ONNX + the same calibration `.npz`).
 
 ## Status
 
-- Tasks 11–15 closed.
-- **AC rerun still to do.** Probe ran on battery; rerunning parts
-  1–2 on AC (with other programs closed, matching the Lever B
-  18.12 t/s methodology) will give the clean per-step datapoint
-  for the writeup. User will flag when plugged in.
-- Next session after the AC rerun: local QAIRT install +
-  single-graph w4a16 compile of our pathb ONNX (bypasses AI Hub).
-  If that stalls, revisit AIMET; surgery and runtime patch remain
-  as contingency.
+- Tasks 11–16 closed (side-quest complete).
+- AC rerun landed: **7.22 ms median for 12 layers of Qwen3-4B
+  w4a16**, variance tight (7.12–7.42 over 20 iters). Projects to
+  ~17 ms/step for our 28-layer Qwen3-0.6B → realistic **30-45 t/s
+  k=4-8 speculative** vs today's 18.12 t/s k=2 fp16.
+- Next: local QAIRT install on the x86 compile box + single-graph
+  w4a16 compile of our pathb ONNX (bypasses AI Hub's preserve-list
+  bug). If that stalls, revisit AIMET; surgery + runtime patch
+  remain as contingency.

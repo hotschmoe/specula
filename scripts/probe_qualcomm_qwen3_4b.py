@@ -189,6 +189,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--part", type=int, choices=(1, 2), default=1,
                         help="partition to probe (default: 1 = embedding only)")
+    parser.add_argument("--iters", type=int, default=1,
+                        help="measured forward-pass iterations (default: 1). "
+                             "When >1, the first call is discarded as warmup and "
+                             "median/min/max over the remaining calls are reported.")
     args = parser.parse_args()
 
     part_cfg = PARTS[args.part]
@@ -256,16 +260,31 @@ def main() -> int:
             fill = 128 if np_dtype == np.uint8 else 0
             feed[x.name] = np.full(shape, fill, dtype=np_dtype)
 
+    # Warmup (discarded) when iters > 1; first call includes kernel
+    # JIT/HMX context init that would skew single-call timing.
+    latencies_ms: list[float] = []
     try:
-        t0 = time.perf_counter()
-        outputs = sess.run(None, feed)
-        ms = (time.perf_counter() - t0) * 1000
+        if args.iters > 1:
+            sess.run(None, feed)  # warmup
+        for _ in range(args.iters):
+            t0 = time.perf_counter()
+            outputs = sess.run(None, feed)
+            latencies_ms.append((time.perf_counter() - t0) * 1000)
     except Exception as e:
         print(f"  forward FAILED: {type(e).__name__}: {str(e)[:300]}")
         traceback.print_exc()
         return 1
 
-    print(f"  run latency : {ms:.2f} ms")
+    if len(latencies_ms) == 1:
+        print(f"  run latency : {latencies_ms[0]:.2f} ms")
+    else:
+        sorted_ms = sorted(latencies_ms)
+        median = sorted_ms[len(sorted_ms) // 2]
+        print(f"  run latency over {len(latencies_ms)} iters (warmup discarded):")
+        print(f"    min    : {min(latencies_ms):.2f} ms")
+        print(f"    median : {median:.2f} ms")
+        print(f"    max    : {max(latencies_ms):.2f} ms")
+        print(f"    mean   : {sum(latencies_ms) / len(latencies_ms):.2f} ms")
     for name, arr in zip((o.name for o in sess.get_outputs()), outputs):
         finite_frac = (
             float(np.isfinite(arr.astype(np.float32)).mean())
