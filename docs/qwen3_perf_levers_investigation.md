@@ -51,7 +51,8 @@ each lever's **Result** subsection below.
 | Lever B ctx=256 + pipelined (f755d6d) | CLOSED | 14.28 | +79.0% | ~76% (battery) | best cell 17.78, 10-humaneval, battery+CAD |
 | Lever B AC rerun (this session) | CLOSED | **18.12** | **+127%** | **81.91%** | same sweep, AC+idle; best cell 19.07 |
 | R4 zero-copy / shared-mem (557c59e) | NEGATIVE | — | no win | — | per-step cost already dominated by compute not copy |
-| Lever C W4A16 (in flight) | WIP | — | — | — | Bundle A compile submitted, see §Lever C Progress |
+| Lever C W4A16 attempt 1 (jp4x74ll5) | FAILED | — | — | — | calibration_data order bug, fixed 372e17a |
+| Lever C W4A16 attempt 2 (j563xme75) | FAILED | — | — | — | rotary_emb op-lowering; needs graph rewrite — see §Lever C |
 
 Battery→AC delta on the same binary is ~+27% — a reminder that all
 lever comparisons must be AC-vs-AC to avoid thermal-confound swamping
@@ -317,24 +318,97 @@ Infrastructure landed this session:
   samples), each with a `.manifest.json` describing shapes, dtypes,
   source prompts, and capture positions.
 
-**Gotcha learned this session (commit TBD).** AI Hub's PTQ validator
-iterates `calibration_data` positionally and checks each slot against
-the ONNX graph's `graph.input[i].name` — key-set equality is not
-enough, ordering matters. First submit failed at ~120s with
-*"Calibration data set has input 'attention_bias' but expected
-'past_key_values.0.key'"* because the capture script built per-sample
-dicts as (input_ids, position_ids, **attention_bias**, past_kv…),
-but the ONNX graph has attention_bias LAST (after all 56 past_kv
-entries, per build_input_specs). Fix: rebuild DatasetEntries by
-iterating `specs` (already in graph order) in the compile script;
-also fixed `capture_for_prompt` to save in the right order.
+**Attempt 1 — calibration_data order bug (commit 372e17a).** First
+submit failed at ~120s with *"Calibration data set has input
+'attention_bias' but expected 'past_key_values.0.key'"*. AI Hub's
+PTQ validator iterates `calibration_data` positionally and checks
+each slot against `graph.input[i].name` — key-set equality is not
+enough, ordering matters. The capture script built per-sample dicts
+as (input_ids, position_ids, **attention_bias**, past_kv…), but the
+ONNX graph has attention_bias LAST (after all 56 past_kv entries, per
+build_input_specs). Fix: rebuild DatasetEntries by iterating `specs`
+(already in graph order) in the compile script; `capture_for_prompt`
+also updated to save in the right order.
 
-**In flight (retry).** Bundle A compile resubmitted with
-`--reuse-upload mq23729wn` (model already on AI Hub from the first
-failed attempt, ~15 min upload skipped). Calibration re-upload in
-progress (~32 min at ~1.7 MB/s for 3.27 GB); compile itself 25-40
-min thereafter. Output: `models/qwen3_0_6b_draft_v81_ctx256.pathbmask.w4a16-a.bin`.
-Correctness probe + sweep flow pending compile completion.
+**Attempt 2 — rotary_emb lowering bug (job j563xme75, FAILED 6010s).**
+Re-submitted with calibration ordering fixed and `--reuse-upload`
+skipping the 15-min model upload. The pipeline got deep this time:
+ONNX → DLC conversion ✓, quantizer ran to completion ✓ ("Quantization
+completed successfully", DLC saved), then **QNN backend op-validation
+rejected the quantized DLC** with:
+
+```
+<E> [4294967295] has incorrect Value 0, expected equal to -32768.
+<E> Failed to validate op /model/rotary_emb/MatMul with error 0xc26
+Conversion to context binary failed with exit code 14
+```
+
+Log: `results/aihub-compile-log-j563xme75-w4a16-a-FAILED.log` (5.65 MB,
+downloaded via `hub.get_job(job_id).download_results()`).
+
+**Root cause (confirmed by inspecting `models/qualcomm-qwen3-4b-ref/.../metadata.yaml`).**
+Qualcomm's shipping Qwen3-4B w4a16 Genie bundle — same QAIRT 2.42,
+same X2 Elite target — **does not contain rotary_emb as an internal
+subgraph at all**. Instead, it declares `position_ids_cos` and
+`position_ids_sin` as top-level graph inputs (shape `[1,1,128,64]`,
+dtype uint16, **offset -32768**, scale ≈ 3.05e-5). The rotary
+rotation is hoisted out of the compiled graph; the caller (Genie
+runtime or the outer-loop host) computes cos/sin from position_ids
+and feeds them in as pre-quantized inputs.
+
+Our graph computes rotary_emb inline via Cast → Cos/Sin → MatMul.
+The conversion-time warning *"Only numerical type cast is supported.
+The cast op: /model/rotary_emb/Cast_1 will be interpreted at
+conversion time"* flags that the Cast is folded out; then when the
+quantizer tries to emit valid INT16 symmetric parameters for the
+downstream MatMul output, it can't match the offset the QNN backend
+hard-codes for rotary outputs (-32768, exactly the offset in
+Qualcomm's reference). Hence the zero-point mismatch.
+
+**W8A16 wouldn't fix this.** The failing op is the rotary MatMul
+output's INT16 activation encoding — INT4 vs INT8 on the *weight*
+side doesn't change the A16 path. Whatever bit-width we pick, the
+same zero-point mismatch occurs.
+
+**The missing pipeline step:** a rotary_emb hoisting rewrite in our
+x86 surgery, analogous to what `rewrite_qwen3_htp.py` already did
+for the BOOL attention mask → additive-bias rewrite. Pre-compute
+cos/sin externally, delete the rotary subgraph, add cos/sin as
+graph inputs. Runtime NPU caller (probe, outer_loop, sweep) then
+computes cos/sin each decode step and feeds them alongside
+input_ids/position_ids/attention_bias/past_kv.
+
+Scope: ~200-300 LOC of ONNX surgery + ~50 LOC to compute + feed
+cos/sin at inference time. Comparable lift to pathbmask. Gate: CPU
+equivalence on the rewritten ONNX must match pre-rewrite logits.
+
+**Other intel from the Qualcomm reference bundle** (potentially
+actionable or informative for Phase 6):
+
+| detail | Qualcomm qwen3_4b-genie-w4a16 | our current path |
+|--------|-------------------------------|------------------|
+| attention mask | additive, `[1,1,128,512]`, uint16 | additive, fp32, our pathbmask ✓ |
+| past_key/value | uint8 per-tensor quant, dtype uint8 | preserved fp32 ✗ |
+| rotary embedding | hoisted, cos/sin as inputs | inline in graph ✗ (failure mode) |
+| ctx / batch | 512 ctx, 128-token prefill chunks, 4-part split | 256 ctx, single-part binary |
+| runtime | Genie (QAIRT 2.42) | ORT-QNN 1.24.4 (QAIRT 2.42) |
+| weight sharing / memory | `shared_buffer` + `weight_sharing_enabled` | single-session, default |
+
+**Decision (pending).** Options on the table, in decreasing speed:
+
+1. **W8A16 probe (cheap).** 60-100 min AI Hub burn, ~10% chance of
+   working despite the analysis above. Only worth it if we want
+   belt-and-braces before declaring the rotary rewrite necessary.
+2. **Rotary hoisting rewrite (medium).** ~2 sessions. Aligned with
+   Qualcomm's proven recipe, highest confidence of success, also
+   advances the Qwen3.5 graduation path since the same hoisting will
+   be needed there.
+3. **Close Lever C negative, pivot (cheap).** Document the findings
+   as-is, move to R2/R3 or other levers. Preserves session budget
+   but leaves the biggest lever unattempted.
+4. **Genie pivot.** Drop AI Hub + ORT-QNN entirely, integrate
+   Qualcomm's Qwen3-4B Genie bundle. Out of scope for Lever C (4B
+   too large as a draft), but interesting Phase 6 option.
 
 ---
 
