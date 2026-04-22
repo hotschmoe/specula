@@ -52,7 +52,8 @@ each lever's **Result** subsection below.
 | Lever B AC rerun (this session) | CLOSED | **18.12** | **+127%** | **81.91%** | same sweep, AC+idle; best cell 19.07 |
 | R4 zero-copy / shared-mem (557c59e) | NEGATIVE | — | no win | — | per-step cost already dominated by compute not copy |
 | Lever C W4A16 attempt 1 (jp4x74ll5) | FAILED | — | — | — | calibration_data order bug, fixed 372e17a |
-| Lever C W4A16 attempt 2 (j563xme75) | FAILED | — | — | — | rotary_emb op-lowering; needs graph rewrite — see §Lever C |
+| Lever C W4A16 attempt 2 (j563xme75) | FAILED | — | — | — | rotary_emb op-lowering; needs Path B graph rewrite |
+| Lever C W4A16 retry (pending pathb) | HANDED OFF | — | — | — | x86 team producing pathb (rotary hoist) per export doc |
 
 Battery→AC delta on the same binary is ~+27% — a reminder that all
 lever comparisons must be AC-vs-AC to avoid thermal-confound swamping
@@ -394,21 +395,54 @@ actionable or informative for Phase 6):
 | runtime | Genie (QAIRT 2.42) | ORT-QNN 1.24.4 (QAIRT 2.42) |
 | weight sharing / memory | `shared_buffer` + `weight_sharing_enabled` | single-session, default |
 
-**Decision (pending).** Options on the table, in decreasing speed:
+**Decision (2026-04-22): option 2, rotary hoisting rewrite.** Handed
+off to the x86 team. W8A16 probe declined (~10% success estimate and
+same A16 failure mode predicted); close-and-pivot declined because
+we now know the fix and it's also forward-compatible with Qwen3.5.
 
-1. **W8A16 probe (cheap).** 60-100 min AI Hub burn, ~10% chance of
-   working despite the analysis above. Only worth it if we want
-   belt-and-braces before declaring the rotary rewrite necessary.
-2. **Rotary hoisting rewrite (medium).** ~2 sessions. Aligned with
-   Qualcomm's proven recipe, highest confidence of success, also
-   advances the Qwen3.5 graduation path since the same hoisting will
-   be needed there.
-3. **Close Lever C negative, pivot (cheap).** Document the findings
-   as-is, move to R2/R3 or other levers. Preserves session budget
-   but leaves the biggest lever unattempted.
-4. **Genie pivot.** Drop AI Hub + ORT-QNN entirely, integrate
-   Qualcomm's Qwen3-4B Genie bundle. Out of scope for Lever C (4B
-   too large as a draft), but interesting Phase 6 option.
+**x86-side work:** produce `models/qwen3-0.6b-pathb/` by extending
+the existing `pathbmask` rewrite with a rotary-hoist pass.
+Implementation contract lives in
+`docs/phase5_export_on_x86.md` §"Path B implementation contract
+(2026-04-22 revision)". Key obligations: delete the
+`/model/rotary_emb/*` subgraph, add `position_ids_cos` +
+`position_ids_sin` as graph inputs shape `[1,1,1,128]` float32 each
+(after `attention_bias`), preserve CPU-equivalence cos ≥ 0.9999 vs
+optimum source. Deliverable checklist in the export doc.
+
+**X2E-side follow-up** (once pathb lands):
+
+1. Extend `scripts/compile_qwen3_ai_hub.py::build_input_specs` for
+   pathb to append the two new inputs; add `pathb` to the path_key
+   choices.
+2. Regenerate calibration bundles via
+   `scripts/capture_calibration_samples.py` targeting pathb's 61-input
+   schema (add cos/sin samples per decode step, computed from
+   position_ids with Qwen3's rope_theta=1e6, attention_scaling
+   preserved if kept in-graph per option (b) in the export doc).
+3. Submit `--quant w4a16 --calibration-npz bundle_a_pathb_ctx256.npz`.
+4. Extend `scripts/npu_load_qwen3_bin.py::describe_inputs` and the
+   runtime probe / outer loop to compute cos/sin each decode step
+   and feed them to `session.run()`. Shape / ordering in the feed
+   dict must match input_specs.
+5. Re-run the correctness probe (cos ≥ 0.95 post-quant tolerated)
+   and the AC sweep; compare against the 18.12 t/s fp16 baseline.
+
+**Budget estimate.** ~0.5 session x86 side (ONNX surgery is scoped and
+verification is cheap on x86). ~1.5 sessions X2E side (regenerate
+calibration, compile, runtime plumbing, probe, sweep). If Bundle A
+w4a16 passes the accept gate, the same calibration pipeline reuses
+for Bundle B (step-0 only — answers whether cheap calibration works,
+valuable for Qwen3.5 graduation).
+
+**Alternatives still available if Path B also fails.** Escalating
+options, in decreasing order of appeal:
+- **AIMET-side pre-quantization** that manually excludes rotary from
+  quantization, feeding AI Hub a pre-quantized ONNX. Heavier lift;
+  only useful if Path B shows the hoist alone isn't sufficient.
+- **Close Lever C negative, pivot to R2 (draft-p-min).**
+- **Genie pivot for larger draft.** Phase 6 territory; Qwen3-4B is
+  too big as a draft of 8B target (ratio < 2× kills spec-decode math).
 
 ---
 

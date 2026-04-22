@@ -1,5 +1,17 @@
 # specula -- current status
 
+Last updated: 2026-04-22 (session 12 -- **Phase 5.5 Lever C handed
+off to x86.** Levers A + B closed on battery + AC (k=2 async-pipelined,
+ctx=256): AC baseline **18.12 t/s mean, 19.07 best, 81.91% accept**
+(+127% over Phase 5 baseline 7.98 t/s). Lever C W4A16 compile
+attempted twice, both failed at AI Hub — root cause diagnosed by
+inspecting Qualcomm's shipping Qwen3-4B w4a16 bundle: our graph
+computes rotary_emb inline; Qualcomm hoists it out. Fix is a new
+x86-side export (Path B: rotary hoisted + additive mask) per
+`docs/phase5_export_on_x86.md` §"Path B implementation contract
+(2026-04-22 revision)". See also Phase 5.5 section below and
+Lever C detail in `docs/qwen3_perf_levers_investigation.md`.)
+
 Last updated: 2026-04-21 (session 11 -- **Phase 5 CLOSED.** Full sweep
 landed: 40 cells (k ∈ {2,3,4,8} × 10 humaneval prompts, n_predict=256)
 in 25.9 min. **k=2 wins with 7.98 t/s mean, 81.0% accept (best cell
@@ -394,6 +406,94 @@ step 7 when drafts pipeline alongside CPU verify). Commit `<TBD>`.
                                                    CPU-alone TG, w4a16 lever
                                                    flagged for Phase 5.5)
 ```
+
+## Phase 5.5 status (session 12, 2026-04-22)
+
+Full detail in `docs/qwen3_perf_levers_investigation.md` — this is the
+project-wide summary.
+
+**Closed levers:**
+
+| lever | commit | k=2 mean t/s | vs baseline | notes |
+|-------|--------|-------------:|------------:|-------|
+| Phase 5 baseline | 7e10670 | 7.98 | — | ctx=512 fp16 sync |
+| Lever A (async draft∥verify) | 64de69f | 10.93 | +37% | pipelined verify-ahead landed in 56b375b |
+| Lever B (ctx=256) × A | f755d6d | 14.28 | +79% | battery + CAD load; best cell 17.78 |
+| Lever B AC rerun (this session) | 90594d9 CSV | **18.12** | **+127%** | clean AC, other programs closed; **new reference baseline** |
+| R4 (zero-copy / shared-mem) | 557c59e | — | no win | parked; per-step dominated by compute not copy |
+
+Battery→AC delta on identical binary is +26.9%, larger than any single
+lever's gain — future comparisons must be AC-vs-AC.
+
+**Lever C — W4A16 quantization — in flight, x86 handoff.**
+
+Two AI Hub compile attempts this session, both failed:
+
+1. `jp4x74ll5` (FAILED, ~120s): AI Hub's PTQ validator rejects
+   `calibration_data` dicts whose key order doesn't match ONNX
+   `graph.input` order. Fixed in commit 372e17a (compile script now
+   iterates `specs` to rebuild DatasetEntries; capture script
+   puts `attention_bias` AFTER past_kv to match graph order).
+2. `j563xme75` (FAILED, 6010s): pipeline got deep — ONNX→DLC ✓,
+   quantizer ✓, quantized DLC saved ✓, then QNN backend
+   op-validation rejected `/model/rotary_emb/MatMul` with *"has
+   incorrect Value 0, expected equal to -32768"* (INT16_MIN, the
+   offset QNN's backend hard-codes for rotary outputs). Full AI Hub
+   log archived at
+   `results/aihub-compile-log-j563xme75-w4a16-a-FAILED.log`.
+
+**Root cause confirmed by inspecting Qualcomm's shipping Qwen3-4B
+w4a16 Genie bundle** (`models/qualcomm-qwen3-4b-ref/.../metadata.yaml`):
+their graph does not contain rotary_emb internally. `position_ids_cos`
+and `position_ids_sin` are declared as top-level graph inputs
+(shape `[1,1,N,head_dim/2]`, dtype uint16, **offset -32768** —
+exactly the value the AI Hub error expected). Same QAIRT 2.42, same
+X2 Elite target. The conclusion: for w4a16 compile to succeed, our
+export must hoist rotary out, matching Qualcomm's recipe.
+
+**Infrastructure landed this session** (commits 90594d9, 372e17a,
+11fe8fa):
+
+- `scripts/capture_calibration_samples.py` — CPU FP32 prefill +
+  greedy decode on humaneval + structured_json fixtures, snapshots
+  model inputs at selected decode positions into stacked-per-input
+  `.npz`. Reusable for Qwen3.5 cutover.
+- `scripts/compile_qwen3_ai_hub.py` extended: `--quant
+  {float16,w4a16,w8a16}`, `--calibration-npz`,
+  `--calibration-dataset-id`, `--quant-tag`. fp16 path
+  backward-compatible.
+- `SPECULA_NPU_VARIANT` env var wired through
+  `npu_load_qwen3_bin.py` + `npu_vs_cpu_correctness.py` so
+  probe/outer_loop/sweep target variant binaries transparently.
+  Mirrors `SPECULA_NPU_CTX`'s pattern.
+- Calibration bundles (models/calibration/, gitignored): Bundle A
+  (60 realistic samples, 3.27 GB) + Bundle B (20 step-0 samples,
+  1.09 GB). Both at ctx=256 for the pathbmask schema; both need
+  regeneration once pathb lands.
+
+**Next — x86 team work:** produce `models/qwen3-0.6b-pathb/` per
+`docs/phase5_export_on_x86.md` §"Path B implementation contract
+(2026-04-22 revision)". Start from our existing pathbmask, delete
+the `/model/rotary_emb/*` subgraph, add `position_ids_cos` +
+`position_ids_sin` as graph inputs of shape `[1,1,1,128]` float32.
+CPU-equivalence probe gate: cos ≥ 0.9999 vs optimum source. ~0.5
+session estimate.
+
+**Next — X2E team work (after pathb arrives):**
+
+1. Add `pathb` to `build_paths` + `build_input_specs` in
+   `compile_qwen3_ai_hub.py` (61 inputs, includes cos/sin).
+2. Regenerate Bundle A + B calibration for pathb schema (compute
+   cos/sin per sample using Qwen3's rope_theta=1e6).
+3. Submit `--quant w4a16 --calibration-npz
+   bundle_a_pathb_ctx256.npz` — expected to succeed this time based
+   on Qualcomm-reference alignment.
+4. Wire cos/sin computation into the runtime caller (probe,
+   outer_loop, sweep).
+5. Correctness probe (cos ≥ 0.95 tolerated post-w4a16) + AC sweep
+   vs 18.12 t/s baseline. Optionally run Bundle B for the
+   cheap-vs-realistic calibration A/B.
+6. Phase 5.5 writeup + close.
 
 ### Step 6 diagnosis (session 10, 2026-04-21)
 
