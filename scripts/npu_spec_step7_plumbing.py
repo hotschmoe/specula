@@ -109,9 +109,9 @@ def wait_for_health(url: str, timeout_s: float) -> bool:
     return False
 
 
-def spawn_server() -> tuple[subprocess.Popen, object]:
-    SERVER_LOG.parent.mkdir(parents=True, exist_ok=True)
-    log_f = SERVER_LOG.open("w", encoding="utf-8")
+def spawn_server(log_path: Path = SERVER_LOG) -> tuple[subprocess.Popen, object]:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_f = log_path.open("w", encoding="utf-8")
     cmd = [
         str(LLAMA_SERVER),
         "-m", str(TARGET_MODEL),
@@ -122,7 +122,7 @@ def spawn_server() -> tuple[subprocess.Popen, object]:
         "--no-warmup",
     ]
     print(f"launching llama-server:\n    {' '.join(cmd)}")
-    print(f"    log -> {SERVER_LOG}")
+    print(f"    log -> {log_path}")
     proc = subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT)
     return proc, log_f
 

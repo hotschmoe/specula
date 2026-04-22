@@ -594,6 +594,16 @@ token by step 7, end-to-end spec decode by step 10.
    this hybrid.
    Exit: scripted run produces a complete sequence with accept-
    rate logged per round. Numbers don't need to beat anything yet.
+   **[DONE, session 11]** Sidecar-as-driver. Two scripts:
+   `scripts/npu_short_prompt_probe.py` (gate: Path B-mask masking
+   at prompt_len=16, cos=0.999960, 3/3 multi-step match) and
+   `scripts/npu_spec_outer_loop.py` (end-to-end: humaneval p0,
+   k=3, n_predict=64, **65.2% accept, 6.23 t/s**, coherent
+   fibonacci output). NPU per-step latency (~63 ms, 5 calls/round)
+   is the bottleneck: 6.9s of 10.4s wall is NPU-bound.
+   Phase 2 CPU-spec's 40.2 t/s ceiling looks out of reach without
+   NPU/target overlap. Log:
+   `results/phase5_step8_outer_loop.log`.
 
 9. **First NPU-spec number.** Run the sidecar-driven spec decode
    on specula's 10-prompt humaneval subset, k=3, greedy, same

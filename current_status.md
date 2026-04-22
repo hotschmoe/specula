@@ -1,9 +1,11 @@
 # specula -- current status
 
-Last updated: 2026-04-21 (session 11 -- **step 7 plumbing checkpoint PASSED.**
-NPU draft (Path A) + llama-server target (Qwen3-8B-Q4_K_M) agree on the same
-anchor-position greedy token; accept/reject logic wired. Step 6 still fully
-closed from earlier today. Step 8 is next: external-drafter outer loop.)
+Last updated: 2026-04-21 (session 11 -- **step 8 end-to-end PASSED.**
+First NPU-drafted spec-decode run landed: 22 rounds, 65 coherent tokens
+of a memoized Fibonacci, 65.2% accept, **6.23 t/s**. That's 6.5x slower
+than Phase 2 CPU-spec (40.2 t/s) — NPU per-step latency is the
+bottleneck (~63 ms/call × 110 calls = 6.9 s of 10.4 s wall). Step 9
+(sweep k + multi-prompt) next.)
 
 Living document. Update every few turns. Anyone picking this up cold should
 be able to read this page, skim the README, and resume work.
@@ -378,8 +380,11 @@ step 7 when drafts pipeline alongside CPU verify). Commit `<TBD>`.
 [DONE]    7. Pipe first drafted token through     (session 11 step-7
               llama.cpp verify                     plumbing script passed;
                                                    draft=target=264 at anchor)
-          8. External-drafter bridge for llama.cpp spec decode <-- next
-          9. First NPU-spec number on 10-prompt humaneval
+[DONE]    8. External-drafter bridge for          (session 11: short-prompt
+              llama.cpp spec decode                probe + outer loop;
+                                                   6.23 t/s, 65% accept on
+                                                   humaneval p0, coherent text)
+          9. First NPU-spec number on 10-prompt humaneval <-- next
          10. Sweep k values, write up, close phase
 ```
 
@@ -685,42 +690,137 @@ has to prove it out before the first end-to-end run.
 
 Step 8 (external-drafter outer loop) now unblocked.
 
+### Session 11 cont. — step 8 PASSED end-to-end
+
+Two scripts landed, both green:
+
+**`scripts/npu_short_prompt_probe.py`** — short-prompt NPU probe
+gate. Encodes humaneval p0 (16 tokens), CPU-prefills, then NPU
+single-step at position 16 with slots 16..510 zero-padded and
+`attention_bias` set to `-65504` over padded slots + 0 over
+valid slots + 0 over the self-slot. Also validates the multi-step
+KV rearrangement primitive (3 consecutive NPU steps, each growing
+valid_past_len by 1, moving the K/V from slot 511 to slot P after
+each step). Both gates passed byte-clean: **single-step cos =
+0.999960**, argmax match, top-5 5/5; **multi-step 100% match**
+(3/3 tokens identical to CPU greedy), NPU text `"    if n"`.
+
+**`scripts/npu_spec_outer_loop.py`** — first NPU-drafted spec
+decode end-to-end. Sidecar-as-driver; per round:
+
+1. Draft k tokens on NPU via short-prompt mask + slot-511→slot-P
+   rearrangement between steps. Keep k+1 past snapshots so any
+   accept count j ∈ [0, k] can roll back cleanly.
+2. POST committed ids to `/completion` with `n_predict=k+1`,
+   `cache_prompt=true`, greedy pinned. Read k+1 target tokens.
+3. Longest-common-prefix accept: j matching drafts + 1 bonus
+   target token committed.
+4. Absorb bonus into past via one more NPU step → next round's
+   state + first candidate for next round.
+
+Run on humaneval p0, k=3, n_predict=64:
+
+```
+rounds              : 22
+decoded tokens      : 65
+mean accept rate    : 65.2%   (43/66 drafts accepted)
+wall generate       : 10.43 s
+  NPU draft total   :  5.22 s
+  target verify     :  3.53 s
+  NPU absorb        :  1.67 s
+decode rate         : 6.23 t/s
+```
+
+**Generated text** (the NPU-drafted, target-verified continuation of
+the Fibonacci stub):
+
+```
+    # Initialize a memoization dictionary
+    memo = {0: 0, 1: 1}
+
+    # Define a helper function to compute the Fibonacci number
+    # recursively with memoization
+    def fib(n):
+        if n not in memo:
+            memo[n] = fib(n-1) + fib
+```
+
+Functionally correct memoized Fibonacci. Proves draft + verify + KV
+rearrangement are all semantically sound; the question now is purely
+performance.
+
+**Why 6.23 t/s (not faster than 25.91 t/s CPU-alone, let alone
+Phase 2's 40.2 t/s CPU-spec)?**
+
+Bottleneck is NPU per-call latency:
+
+- **110 NPU calls / 22 rounds = 5 calls/round** (3 drafts + 1 final-
+  snapshot step that only pays off when j == k + 1 absorb-bonus).
+- At ~63 ms/call that's 6.9 s of the 10.4 s wall budget.
+- Target verify is 3.53 s = 160 ms/round. At CPU target TG ~26 t/s
+  and k+1=4 tokens per round, that's ~155 ms of decode + negligible
+  HTTP. Cache-prompt keeps prefill cost off the critical path after
+  round 1.
+- Draft phase of 5.22 s + absorb of 1.67 s = 6.89 s strictly
+  sequential with the target verify's 3.53 s. 10.4 s total.
+
+**CPU-spec baseline used** ~25 ms/token-generated with 0.6B at
+~9 ms/draft-step on CPU. NPU's 63 ms/step is ~7× slower per step.
+Without overlap or a fatter draft tree, there's no way to recover
+the cost of running draft + target sequentially when draft alone
+costs more than target's per-token decode.
+
+**Step 9/10 levers (in priority order):**
+
+1. **Drop the final-snapshot step when j < k.** Saves 1 NPU call
+   (22 × 63 ms = 1.4 s in this run). Easy lazy-compute refactor —
+   only materialise `past_snapshots[k]` if j==k actually happens.
+   Would push us toward ~7.2 t/s, still below 25.91 CPU-alone TG.
+2. **Overlap NPU draft with target verify.** Kick off `/completion`
+   for round N's verify and NPU draft for round N+1 in parallel.
+   Caveat: round N+1's draft depends on round N's accepted tokens,
+   so this only overlaps the target-side portion of round N with
+   round N+1's BEFORE-accept drafts (which we'd speculatively compute
+   assuming drafts[0] accepted). Saves up to 3.5 s on the verify
+   side. Complex but can double throughput if it works.
+3. **Pipelined k+K drafting.** Draft k tokens, but also opportunistically
+   start the next-round's first draft step during verify. Structural.
+4. **Reduce NPU per-step latency.** Would need ORT-QNN EP-side work
+   (cl_qcom_ion_host_ptr-style zero-copy KV, per-call bind caching)
+   or a recompiled binary with a smaller compiled context. Deep dive,
+   Phase 5.5 or 6 territory.
+
+Step 9 (sweep k + multi-prompt) will produce the real CSV for the
+writeup. Lever (1) is easy and should land before step 9 so the
+numbers we report don't carry an obvious waste. Levers (2-4) are
+explicitly out-of-scope for Phase 5 close; noted for Phase 6.
+
 ## Immediate next steps (next session)
 
-**Next: step 8 — external-drafter outer loop.** With step 7 closed,
-the open scoping question flips from "can we compile + drive the
-NPU binary?" to "what's the outer loop shape for real spec decode?"
-Options:
+**Next: step 9 — sweep k + 10-prompt humaneval.** Exit criterion
+per scoping doc §7 step 9: CSV row written to
+`results/spec-npu-...csv` with schema comparable to Phase 2's
+`spec-cpu-...csv`. Plan:
 
-- **(a) Sidecar as driver.** Our Python sidecar owns the outer
-  generate loop; per round it (i) runs k NPU draft steps into a
-  short token buffer, (ii) POSTs `prefix + drafts` to llama-server
-  `/completion` with `n_predict=k+1`, (iii) compares returned ids
-  one-for-one, commits the longest matching prefix, drops to the
-  next round. Biggest unknown: how to express "verify this draft
-  sequence" in a single llama-server call. llama-server's stock
-  `/completion` with `n_predict=k+1` returns its own k+1 greedy
-  tokens — comparing those against our drafts is the standard
-  greedy-accept rule and does not need anything fancier from the
-  server.
-- **(b) llama-server as driver + external drafter over HTTP.**
-  Would need a new server hook for "here's a drafted token
-  sequence, return which ones you accept." Doesn't exist today.
-  Bigger code lift; skip unless (a) blocks.
+1. Land lever (1) above — lazy final-snapshot. ~20 LOC tweak to
+   `draft_k_tokens`. Re-run on humaneval p0 to confirm no
+   regression; expect ~7.2 t/s.
+2. Wrap the outer-loop script with a sweep harness (port
+   `scripts/sweep_speculative.ps1` or write a Python equivalent).
+   Sweep k ∈ {2, 3, 4, 8} × all 10 humaneval prompts. Greedy,
+   n_predict=256 to match Phase 2 directly.
+3. Emit CSV with columns matching Phase 2's schema: prompt_idx,
+   k, accept_rate, mean_decode_tps, n_predict, wall_generate_s.
+4. If any config is within 20% of 25.91 t/s CPU-alone TG, diagnose
+   where the overhead went. If NOT (likely), step 10 writes it up
+   as "NPU-draft on Qwen3-0.6B + CPU target Qwen3-8B via
+   llama-server HTTP is a structural regression vs CPU-spec on
+   this hardware, driven by NPU per-step latency."
 
-Plan (a) is the cheaper information: it reuses the step-7
-invocation pattern end-to-end, adds only a k-step draft loop on
-top, and produces a CSV row immediately comparable to Phase 2's
-40.2 t/s CPU-spec baseline.
-
-**Gating item for step 8: short-prompt NPU drafting.** Real spec-
-decode runs don't start with a 511-token anchor. Need to validate
-Path B-mask's `attention_bias` with lower-triangular -65504 masking
-for invalid KV slots on a short prompt (e.g. 20-token humaneval
-seed). Expected probe: same `npu_vs_cpu_correctness.py`-style
-cosine check, but at past_len = prompt_len with padded zeros + a
-proper causal bias mask. One session of work; becomes a new probe
-script `scripts/npu_short_prompt_probe.py`.
+Phase 5 closes either way in step 10. The numerically negative
+outcome is itself a publishable result per the scoping doc's
+§7 step 10 exit: "Phase 5 closes with either a win, tie, or
+documented loss with root cause."
 
 **Strategy (session 5, 2026-04-20): close out Qwen3, then graduate
 fully to Qwen3.5 for all further work.**
