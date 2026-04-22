@@ -1,0 +1,27 @@
+path key            : pathbmask
+ctx                 : 256
+source dir          : C:\Users\hotschmoe\Documents\GitHub\specula\models\qwen3-0.6b-pathbmask
+staging dir         : C:\Users\hotschmoe\Documents\GitHub\specula\models\qwen3-0.6b-pathbmask-ai-hub-ctx256
+loading graph-only (no weights into memory) from model.onnx ...
+  loaded in 0.33 s, 311 initializers
+patched 255 external_data references: 'model.onnx_data' -> 'model.data'
+  initializer tensors        : 255
+  node attribute tensors     : 0
+pinned 59 graph input shapes to static dims (0 already static, 0 not declared on graph)
+resolved 114 dim_param references (inputs + outputs + value_info)
+  saved pre-ORT graph in 0.37 s, 1.3 MB
+copying weights model.onnx_data -> model.data ...
+  copy complete in 1.49 s, 2867.2 MB
+running ORT ENABLE_BASIC graph optimization (in-place) ...
+  ORT optimization complete in 4.5 s
+  post-ORT node count: 2061 (started at 7166)
+resolved 0 ORT-generated `unk__*` dim_params -> 1 (0 distinct names: [])
+  final shape_inference: 2004 value_info entries, 0 tensors still with symbolic dims, 0.5 s
+saving final graph to model.onnx ...
+  saved in 0.27 s, 0.6 MB
+
+staging directory contents:
+  model.data             2867.2 MB
+  model.onnx                0.6 MB
+
+=== STATUS: ok; AI Hub upload can target C:\Users\hotschmoe\Documents\GitHub\specula\models\qwen3-0.6b-pathbmask-ai-hub-ctx256 ===

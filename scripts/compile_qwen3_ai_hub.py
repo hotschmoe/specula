@@ -48,7 +48,7 @@ import onnxruntime as ort
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-CONTEXT_MAX = 512
+DEFAULT_CONTEXT_MAX = 512
 DEVICE = "Snapdragon X2 Elite CRD"
 # Compile options learned across attempts 3-5 + session 9. Keep them
 # comment-tagged so future sessions know what each flag buys:
@@ -76,30 +76,40 @@ COMPILE_OPTIONS = (
 )
 
 
-# path_key -> config for this path's source + output naming.
-PATHS: dict[str, dict] = {
-    "patha": {
-        "source_dir": REPO_ROOT / "models" / "qwen3-0.6b-patha",
-        "staging_dir": REPO_ROOT / "models" / "qwen3-0.6b-patha-ai-hub",
-        "output_bin": REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.patha.bin",
-        "job_name": f"qwen3-0.6b-draft-v81-ctx{CONTEXT_MAX}-patha-fp16",
-        "extra_input_specs": {},
-    },
-    "pathbmask": {
-        "source_dir": REPO_ROOT / "models" / "qwen3-0.6b-pathbmask",
-        "staging_dir": REPO_ROOT / "models" / "qwen3-0.6b-pathbmask-ai-hub",
-        "output_bin": REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.pathbmask.bin",
-        "job_name": f"qwen3-0.6b-draft-v81-ctx{CONTEXT_MAX}-pathbmask-fp16",
-        # Path B-mask's additive attention bias. All-zeros at runtime for
-        # the decode-only regime (past=511 + seq_q=1 = fully-valid window).
-        "extra_input_specs": {
-            "attention_bias": ((1, 1, 1, CONTEXT_MAX), "float32"),
-        },
-    },
-}
+def build_paths(path_key: str, ctx: int) -> dict:
+    """Return the ctx-specific source / staging / output paths for a path_key.
+
+    Source dir is ctx-independent (the unpinned ONNX is shared between
+    ctx tiers — `prep_onnx_for_ai_hub.py` pins dims per-ctx downstream).
+    Staging dir, output bin, and job name are ctx-specific so parallel
+    tiers can coexist on disk (e.g. ctx=512 baseline + ctx=256 Lever B).
+    """
+    if path_key not in ("patha", "pathbmask"):
+        raise ValueError(f"unknown path_key {path_key!r}")
+    ctx_suffix = f"ctx{ctx}"
+    # ctx=512 keeps legacy naming to preserve existing artifacts + docs.
+    staging_suffix = "-ai-hub" if ctx == DEFAULT_CONTEXT_MAX else f"-ai-hub-{ctx_suffix}"
+    extra_input_specs: dict = {}
+    if path_key == "pathbmask":
+        extra_input_specs = {
+            "attention_bias": ((1, 1, 1, ctx), "float32"),
+        }
+    return {
+        "source_dir": REPO_ROOT / "models" / f"qwen3-0.6b-{path_key}",
+        "staging_dir": REPO_ROOT / "models" / f"qwen3-0.6b-{path_key}{staging_suffix}",
+        "output_bin": REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_{ctx_suffix}.{path_key}.bin",
+        "job_name": f"qwen3-0.6b-draft-v81-{ctx_suffix}-{path_key}-fp16",
+        "extra_input_specs": extra_input_specs,
+        "ctx": ctx,
+    }
 
 
-def build_input_specs(cfg: dict, extra_input_specs: dict) -> dict:
+# Legacy alias: module-level PATHS stays for backward compatibility with
+# any caller that still imports it. Points at the default (ctx=512) tier.
+PATHS: dict[str, dict] = {k: build_paths(k, DEFAULT_CONTEXT_MAX) for k in ("patha", "pathbmask")}
+
+
+def build_input_specs(cfg: dict, extra_input_specs: dict, ctx: int = DEFAULT_CONTEXT_MAX) -> dict:
     """Static shapes + dtypes for every ONNX input, keyed by input name.
 
     Follows the qai_hub convention: {name: ((shape...), "dtype_str")}.
@@ -114,7 +124,7 @@ def build_input_specs(cfg: dict, extra_input_specs: dict) -> dict:
     n_kv = cfg["num_key_value_heads"]
     head_dim = cfg.get("head_dim", cfg["hidden_size"] // cfg["num_attention_heads"])
 
-    past_len = CONTEXT_MAX - 1  # decode step adds 1 new token to reach CONTEXT_MAX
+    past_len = ctx - 1  # decode step adds 1 new token to reach ctx
 
     specs: dict[str, tuple] = {
         "input_ids": ((1, 1), "int64"),
@@ -205,7 +215,7 @@ def check_mode(path_cfg: dict) -> int:
     print(f"model_type          : {cfg.get('model_type')}")
     print(f"num_hidden_layers   : {cfg['num_hidden_layers']}")
 
-    specs = build_input_specs(cfg, path_cfg["extra_input_specs"])
+    specs = build_input_specs(cfg, path_cfg["extra_input_specs"], ctx=path_cfg["ctx"])
     summarize_specs(specs)
 
     print("\n--- validating specs against ONNX header ---")
@@ -262,7 +272,7 @@ def submit_mode(path_cfg: dict, reuse_upload: str | None = None) -> int:
 
     with config_json.open() as f:
         cfg = json.load(f)
-    specs = build_input_specs(cfg, path_cfg["extra_input_specs"])
+    specs = build_input_specs(cfg, path_cfg["extra_input_specs"], ctx=path_cfg["ctx"])
 
     if reuse_upload:
         print(f"reusing uploaded model_id={reuse_upload} (skipping ~15 min upload)")
@@ -319,7 +329,9 @@ def submit_mode(path_cfg: dict, reuse_upload: str | None = None) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--path", choices=sorted(PATHS), required=True)
+    parser.add_argument("--path", choices=("patha", "pathbmask"), required=True)
+    parser.add_argument("--ctx", type=int, default=DEFAULT_CONTEXT_MAX,
+                        help=f"compiled context window size (default: {DEFAULT_CONTEXT_MAX})")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--check", action="store_true", help="validate + print plan, no upload")
     group.add_argument("--submit", action="store_true", help="upload + compile + download")
@@ -330,7 +342,7 @@ def main() -> int:
         help="skip upload, reuse an already-uploaded AI Hub model_id (e.g. mn1goxe4n)",
     )
     args = parser.parse_args()
-    path_cfg = PATHS[args.path]
+    path_cfg = build_paths(args.path, args.ctx)
     try:
         if args.check:
             return check_mode(path_cfg)

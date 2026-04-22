@@ -32,6 +32,7 @@ Run:
 
 import argparse
 import json
+import os
 import sys
 import time
 import traceback
@@ -47,7 +48,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 SOC_MODEL = "88"
 HTP_ARCH = "81"
-CONTEXT_MAX = 512
+# Runtime context-window tier. Defaults to 512 (Phase 5 baseline). Set
+# SPECULA_NPU_CTX=256 before invoking the outer loop / sweep to target
+# the Lever B ctx=256 binary. Value must match the compiled binary's
+# past_len (CONTEXT_MAX - 1) or the wrapper ONNX signature won't match
+# what the binary expects.
+CONTEXT_MAX = int(os.environ.get("SPECULA_NPU_CTX", 512))
 
 # Logits live on the first compiled output ('output_0'). Capture this so
 # downstream analysis code stays robust to the qairt naming convention.

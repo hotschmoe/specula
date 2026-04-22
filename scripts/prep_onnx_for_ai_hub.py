@@ -49,13 +49,11 @@ from onnx import shape_inference
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from compile_qwen3_ai_hub import PATHS as COMPILE_PATHS, build_input_specs  # noqa: E402
-
-# path_key -> (source_dir_name, staging_dir_name)
-PATHS = {
-    "patha": ("qwen3-0.6b-patha", "qwen3-0.6b-patha-ai-hub"),
-    "pathbmask": ("qwen3-0.6b-pathbmask", "qwen3-0.6b-pathbmask-ai-hub"),
-}
+from compile_qwen3_ai_hub import (  # noqa: E402
+    DEFAULT_CONTEXT_MAX,
+    build_input_specs,
+    build_paths,
+)
 
 OLD_LOCATION = "model.onnx_data"
 NEW_LOCATION = "model.data"
@@ -143,11 +141,15 @@ def pin_input_shapes(model: onnx.ModelProto, specs: dict) -> tuple[int, int]:
 # dim_param name shows up in a future export we want to fail loudly
 # rather than ship a graph that AI Hub's rewriter will choke on later
 # with a SymbolicDim TypeError (see docs/phase5_step6_compile_retro.md).
-OPTIMUM_DIM_PARAMS = {
-    "batch_size": 1,
-    "sequence_length": 1,
-    "past_sequence_length + sequence_length": 512,
-}
+def build_optimum_dim_params(ctx: int) -> dict:
+    """The three symbolic dim names optimum-onnx emits for a causal
+    decoder with past-kv export, resolved to the concrete values for a
+    given CONTEXT_MAX tier."""
+    return {
+        "batch_size": 1,
+        "sequence_length": 1,
+        "past_sequence_length + sequence_length": ctx,
+    }
 
 
 def resolve_dim_params(model: onnx.ModelProto, dim_map: dict) -> tuple[int, set]:
@@ -181,10 +183,10 @@ def resolve_dim_params(model: onnx.ModelProto, dim_map: dict) -> tuple[int, set]
     return substituted, unresolved
 
 
-def stage(path_key: str) -> int:
-    source_dir_name, staging_dir_name = PATHS[path_key]
-    source_dir = REPO_ROOT / "models" / source_dir_name
-    staging = REPO_ROOT / "models" / staging_dir_name
+def stage(path_key: str, ctx: int = DEFAULT_CONTEXT_MAX) -> int:
+    path_cfg = build_paths(path_key, ctx)
+    source_dir = path_cfg["source_dir"]
+    staging = path_cfg["staging_dir"]
     source_onnx = source_dir / "model.onnx"
     source_data = source_dir / "model.onnx_data"
     staged_onnx = staging / "model.onnx"
@@ -199,6 +201,7 @@ def stage(path_key: str) -> int:
 
     staging.mkdir(parents=True, exist_ok=True)
     print(f"path key            : {path_key}")
+    print(f"ctx                 : {ctx}")
     print(f"source dir          : {source_dir}")
     print(f"staging dir         : {staging}")
 
@@ -217,14 +220,14 @@ def stage(path_key: str) -> int:
 
     with (source_dir / "config.json").open() as f:
         cfg = json.load(f)
-    compile_extra = COMPILE_PATHS[path_key]["extra_input_specs"]
-    specs = build_input_specs(cfg, compile_extra)
+    compile_extra = path_cfg["extra_input_specs"]
+    specs = build_input_specs(cfg, compile_extra, ctx=ctx)
     pinned, already_static = pin_input_shapes(model, specs)
     print(f"pinned {pinned} graph input shapes to static dims "
           f"({already_static} already static, "
           f"{len(specs) - pinned - already_static} not declared on graph)")
 
-    substituted, unresolved = resolve_dim_params(model, OPTIMUM_DIM_PARAMS)
+    substituted, unresolved = resolve_dim_params(model, build_optimum_dim_params(ctx))
     print(f"resolved {substituted} dim_param references (inputs + outputs + value_info)")
     if unresolved:
         print(f"ERROR: unresolved dim_param names would crash AI Hub rewriter: {sorted(unresolved)}")
@@ -325,9 +328,11 @@ def stage(path_key: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--path", choices=sorted(PATHS), required=True)
+    parser.add_argument("--path", choices=("patha", "pathbmask"), required=True)
+    parser.add_argument("--ctx", type=int, default=DEFAULT_CONTEXT_MAX,
+                        help=f"compiled context window size (default: {DEFAULT_CONTEXT_MAX})")
     args = parser.parse_args()
-    return stage(args.path)
+    return stage(args.path, ctx=args.ctx)
 
 
 if __name__ == "__main__":
