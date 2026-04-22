@@ -38,7 +38,7 @@ NPU time (draft + absorb): 5.86 s = 63% of wall. Target verify is
 below attacks one of these two budgets or the dependency between
 them.
 
-## Status snapshot — 2026-04-21
+## Status snapshot — 2026-04-22
 
 Running tally of closed levers. Full per-lever detail lives in
 each lever's **Result** subsection below.
@@ -49,11 +49,12 @@ each lever's **Result** subsection below.
 | Lever A (64de69f) | CLOSED | 10.93 | +37.0% | ~81% | async draft∥verify, battery |
 | Lever A step 2 pipelined (56b375b) | CLOSED | — | +39.6% wall | — | pipelined verify-ahead stacks on A |
 | Lever B ctx=256 + pipelined (f755d6d) | CLOSED | 14.28 | +79.0% | ~76% (battery) | best cell 17.78, 10-humaneval, battery+CAD |
-| Lever B AC rerun (this session) | CLOSED | **18.12** | **+127%** | **81.91%** | same sweep, AC+idle; best cell 19.07 |
+| Lever B AC rerun | CLOSED | **18.12** | **+127%** | **81.91%** | same sweep, AC+idle; best cell 19.07 |
 | R4 zero-copy / shared-mem (557c59e) | NEGATIVE | — | no win | — | per-step cost already dominated by compute not copy |
 | Lever C W4A16 attempt 1 (jp4x74ll5) | FAILED | — | — | — | calibration_data order bug, fixed 372e17a |
 | Lever C W4A16 attempt 2 (j563xme75) | FAILED | — | — | — | rotary_emb op-lowering; needs Path B graph rewrite |
-| Lever C W4A16 retry (pending pathb) | HANDED OFF | — | — | — | x86 team producing pathb (rotary hoist) per export doc |
+| Lever C W4A16 — pathb x86 surgery | DELIVERED | — | — | — | x86 produced `models/qwen3-0.6b-pathb/`, cos=1.0 vs source, rotary hoisted |
+| Lever C W4A16 retry on pathb | PENDING X2E | — | — | — | calibration regen + compile + sweep |
 
 Battery→AC delta on the same binary is ~+27% — a reminder that all
 lever comparisons must be AC-vs-AC to avoid thermal-confound swamping
@@ -400,15 +401,52 @@ off to the x86 team. W8A16 probe declined (~10% success estimate and
 same A16 failure mode predicted); close-and-pivot declined because
 we now know the fix and it's also forward-compatible with Qwen3.5.
 
-**x86-side work:** produce `models/qwen3-0.6b-pathb/` by extending
-the existing `pathbmask` rewrite with a rotary-hoist pass.
-Implementation contract lives in
-`docs/phase5_export_on_x86.md` §"Path B implementation contract
-(2026-04-22 revision)". Key obligations: delete the
-`/model/rotary_emb/*` subgraph, add `position_ids_cos` +
-`position_ids_sin` as graph inputs shape `[1,1,1,128]` float32 each
-(after `attention_bias`), preserve CPU-equivalence cos ≥ 0.9999 vs
-optimum source. Deliverable checklist in the export doc.
+**x86-side work — DELIVERED (2026-04-22 session 2).** Artifact:
+`models/qwen3-0.6b-pathb/` (61 inputs, 7,131 nodes, zero
+`/model/rotary_emb/*` nodes). Built via
+`scripts/rewrite_qwen3_pathb.py` from pathbmask:
+
+- Rewired layer-0 `Unsqueeze_6/7.input[0]` to new graph inputs
+  (one node downstream of the doc-spec seam, but lets the entire
+  rotary chain prune cleanly — including `Mul × Constant_7`=1.0
+  and `Cast_4/5` FP32→FP32 identities).
+- New inputs: `position_ids_cos` and `position_ids_sin`, shape
+  `[batch_size, sequence_length, 128]` float32, appended after
+  `attention_bias`. Note: shipped 3D shape rather than the doc's
+  `[1,1,1,128]` 4D — the doc spec was based on Qualcomm's
+  metadata for a different (post-layer-Unsqueeze) seam; our seam
+  is pre-layer-Unsqueeze so 3D is the correct shape there.
+  `build_input_specs` will read shape from the graph regardless.
+- Script asserts `Constant_7 == Constant_8 == 1.0` before
+  proceeding (true for Qwen3-0.6B; protects Qwen3.5 graduation
+  from silently dropping non-identity attention_scaling).
+
+**CPU-equivalence gate (`scripts/probe_pathb_equivalence.py`):**
+
+| probe | cosine | argmax match | top-5 overlap |
+|---|---:|:-:|:-:|
+| pos=0, BOS, zero KV | **1.000000** | ✓ | 5/5 |
+| pos=5, synthetic past_kv | **1.000000** | ✓ | 5/5 |
+
+Numerically exact (every dropped node was provably identity).
+
+**Handoff bundle:** `Z:\exposed\junk\phase5_step12_pathb\qwen3-0.6b-pathb\`
+- model.data MD5: `86658b4d5b573d07db4fc2db1d4a31a7` (same as
+  pathbmask — weights unchanged, only graph topology)
+- model.onnx MD5: `3507c698ac81899b228c6b3aee412c1c`
+
+**Canonical runtime cos/sin formula** (for X2E
+`npu_load_qwen3_bin.py` and calibration capture):
+
+```python
+def rope_tables(position_id, head_dim=128, rope_theta=1_000_000.0):
+    inv_freq = 1.0 / (rope_theta ** (np.arange(0, head_dim, 2, dtype=np.float32) / head_dim))
+    freqs = position_id * inv_freq
+    emb = np.concatenate([freqs, freqs], axis=-1)
+    cos = np.cos(emb)[None, None, :].astype(np.float32)   # [1, 1, 128]
+    sin = np.sin(emb)[None, None, :].astype(np.float32)
+    return cos, sin
+```
 
 **X2E-side follow-up** (once pathb lands):
 

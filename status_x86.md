@@ -240,3 +240,77 @@ ca53d3e phase5 step 6: safe rewrites (2a+2b) + cos probe, verified cos=1.0
 467d485 phase5 step 6 x86: scaffold venv + handoff log
 7f0838b phase 5 step 6 DIAGNOSIS: nomask ONNX is broken, step 4 needs redo
 ```
+
+### 2026-04-22 — session 2: Path B (rotary hoist) for w4a16
+
+**Trigger:** aarch64 team's two w4a16 compile attempts on `pathbmask`
+both failed at QNN op-validation with `/model/rotary_emb/MatMul has
+incorrect Value 0, expected equal to -32768` (INT16_MIN). Root cause
+diagnosed by inspecting Qualcomm's shipping Qwen3-4B w4a16 bundle:
+they hoist rotary_emb out of the compiled graph and feed
+`position_ids_cos`/`position_ids_sin` as top-level inputs. We must
+match. Per `docs/phase5_export_on_x86.md` §"Path B implementation
+contract (2026-04-22 revision)".
+
+**Artifact produced:** `models/qwen3-0.6b-pathb/`
+- 61 graph inputs (was 59 in pathbmask): `position_ids_cos` and
+  `position_ids_sin` appended after `attention_bias`, shape
+  `['batch_size', 'sequence_length', 128]` float32 each.
+- 7,131 nodes (was 7,166). All ops in default ONNX domain.
+- **Zero `/model/rotary_emb/*` nodes remaining.**
+
+**Surgery seam:** rewired layer-0 `Unsqueeze_6/7.input[0]` directly
+to the new graph inputs (one node downstream of the doc-spec seam
+at `Cast_4.input[0]`). Result: the entire upstream rotary chain —
+including `Mul × Constant_7` (=1.0 for Qwen3-0.6B, identity) and
+`Cast_4/5` (FP32→FP32, identity) — pruned cleanly. The two layer-0
+Unsqueezes still broadcast cos/sin to all 56 layer-side Mul
+consumers, none of which were touched. Net effect numerically
+identical to the doc-spec seam for Qwen3-0.6B; for Qwen3.5 the
+script asserts on `Constant_7 == 1.0` and would refuse to run,
+prompting a fold-into-runtime fix.
+
+**Shape deviation from doc:** doc spec said `[1,1,1,128]` 4D; we
+shipped `[batch_size, sequence_length, 128]` 3D. The doc's 4D was
+based on Qualcomm's metadata convention for a different seam
+(post-layer-Unsqueeze). Our seam is pre-layer-Unsqueeze, so 3D is
+correct for the actual graph point. The X2E `build_input_specs`
+will read the actual shape from the graph regardless.
+
+**Scripts landed:**
+- `scripts/rewrite_qwen3_pathb.py` — pure protobuf rewrite
+  (no onnxsim, no graphsurgeon). Asserts Constant_7==Constant_8==1.0
+  before proceeding. Iterative dead-node prune.
+- `scripts/probe_pathb_equivalence.py` — CPU-ORT gate probe.
+
+**Gate evidence:**
+
+| probe | cosine | argmax match | top-5 overlap |
+|---|---:|:-:|:-:|
+| pos=0, BOS, zero KV | **1.000000** | ✓ | 5/5 |
+| pos=5, synthetic past_kv | **1.000000** | ✓ | 5/5 |
+
+Numerically exact (not just within tolerance) — every dropped node
+was provably identity for this model.
+
+**Handoff bundle: `Z:\exposed\junk\phase5_step12_pathb\`**
+- `qwen3-0.6b-pathb/` — full artifact (model.onnx + model.data + sidecars)
+  - model.data MD5: `86658b4d5b573d07db4fc2db1d4a31a7` (same as
+    pathbmask — weights unchanged, only graph topology)
+  - model.onnx MD5: `3507c698ac81899b228c6b3aee412c1c`
+
+**Runtime cos/sin formula** (canonical — for X2E `npu_load_qwen3_bin.py`
+and calibration capture):
+
+```python
+def rope_tables(position_id, head_dim=128, rope_theta=1_000_000.0):
+    inv_freq = 1.0 / (rope_theta ** (np.arange(0, head_dim, 2, dtype=np.float32) / head_dim))
+    freqs = position_id * inv_freq
+    emb = np.concatenate([freqs, freqs], axis=-1)
+    cos = np.cos(emb)[None, None, :].astype(np.float32)   # [1, 1, 128]
+    sin = np.sin(emb)[None, None, :].astype(np.float32)   # [1, 1, 128]
+    return cos, sin
+```
+
+`rope_theta=1e6` per `models/qwen3-0.6b-optimum/config.json`.
+attention_scaling = 1.0 (no extra multiplier needed).

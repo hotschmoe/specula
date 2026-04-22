@@ -1,5 +1,18 @@
 # specula -- current status
 
+Last updated: 2026-04-22 (session 13 -- **x86 delivered Path B
+(rotary hoisted).** `models/qwen3-0.6b-pathb/`: 61 inputs (was 59),
+7,131 nodes, **zero `/model/rotary_emb/*` nodes**. CPU-equivalence
+probe vs optimum source: cos = 1.000000 on both pos=0 zero-KV and
+pos=5 synthetic-past_kv probes (numerically exact, not just within
+tolerance). Transferred to `Z:\exposed\junk\phase5_step12_pathb\`
+with MD5 verified end-to-end. New scripts: `rewrite_qwen3_pathb.py`
+(pure protobuf rewrite) + `probe_pathb_equivalence.py`. X2E follow-up
+unchanged from session 12: extend `compile_qwen3_ai_hub.py` for the
+pathb 61-input schema, regenerate calibration, submit `--quant w4a16`.
+See `status_x86.md` session 2 for handoff details and the canonical
+runtime cos/sin formula.)
+
 Last updated: 2026-04-22 (session 12 -- **Phase 5.5 Lever C handed
 off to x86.** Levers A + B closed on battery + AC (k=2 async-pipelined,
 ctx=256): AC baseline **18.12 t/s mean, 19.07 best, 81.91% accept**
@@ -471,11 +484,15 @@ export must hoist rotary out, matching Qualcomm's recipe.
   1.09 GB). Both at ctx=256 for the pathbmask schema; both need
   regeneration once pathb lands.
 
-**Next — x86 team work:** produce `models/qwen3-0.6b-pathb/` per
-`docs/phase5_export_on_x86.md` §"Path B implementation contract
-(2026-04-22 revision)". Start from our existing pathbmask, delete
-the `/model/rotary_emb/*` subgraph, add `position_ids_cos` +
-`position_ids_sin` as graph inputs of shape `[1,1,1,128]` float32.
+**x86 team work — DELIVERED (session 13).** Artifact:
+`models/qwen3-0.6b-pathb/` (61 inputs, 7,131 nodes, zero
+`/model/rotary_emb/*` nodes). CPU-equivalence cos = 1.000000 on
+both probes vs optimum source. Shipped 3D shape
+`[batch_size, sequence_length, 128]` for cos/sin (doc said 4D
+`[1,1,1,128]` but that was for a different seam — see
+`status_x86.md` session 2 for the seam choice). Bundle on NAS at
+`Z:\exposed\junk\phase5_step12_pathb\qwen3-0.6b-pathb\` with MD5
+verified.
 CPU-equivalence probe gate: cos ≥ 0.9999 vs optimum source. ~0.5
 session estimate.
 
