@@ -43,6 +43,10 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from npu_load_qwen3_bin import CONTEXT_MAX  # noqa: E402
 from npu_short_prompt_probe import HUMANEVAL, load_prompt  # noqa: E402
 from npu_spec_outer_loop import PATH_KEY, run_spec_decode  # noqa: E402
+from npu_spec_outer_loop_async import (  # noqa: E402
+    run_spec_decode_async,
+    run_spec_decode_async_pipelined,
+)
 from npu_spec_step7_plumbing import (  # noqa: E402
     BASE_URL,
     HEALTH_TIMEOUT_S,
@@ -97,6 +101,8 @@ def run_sweep(
     k_values: list[int],
     n_predict: int,
     csv_path: Path,
+    mode: str = "sync",
+    p_min: float = 0.0,
 ) -> list[dict]:
     """Run the full (prompt x k) matrix, emitting one CSV row per cell."""
     rows: list[dict] = []
@@ -129,10 +135,21 @@ def run_sweep(
                     continue
 
                 try:
-                    summary = run_spec_decode(
-                        cpu_sess, npu_sess, cfg, tok, prompt_ids,
-                        k=k, n_predict_target=n_predict,
-                    )
+                    if mode == "async":
+                        summary = run_spec_decode_async(
+                            cpu_sess, npu_sess, cfg, tok, prompt_ids,
+                            k=k, n_predict_target=n_predict, p_min=p_min,
+                        )
+                    elif mode == "async-pipelined":
+                        summary = run_spec_decode_async_pipelined(
+                            cpu_sess, npu_sess, cfg, tok, prompt_ids,
+                            k=k, n_predict_target=n_predict, p_min=p_min,
+                        )
+                    else:
+                        summary = run_spec_decode(
+                            cpu_sess, npu_sess, cfg, tok, prompt_ids,
+                            k=k, n_predict_target=n_predict,
+                        )
                 except Exception:
                     traceback.print_exc()
                     print("   cell FAILED - continuing sweep")
@@ -217,12 +234,18 @@ def main() -> int:
                         help="draft_max values (default: 2 3 4 8)")
     parser.add_argument("-n", "--n-predict", type=int, default=256,
                         help="tokens to generate per cell (default: 256 for Phase-2 parity)")
+    parser.add_argument("--mode", choices=("sync", "async", "async-pipelined"), default="sync",
+                        help="outer-loop mode: sync (baseline), async (Lever A design 1), "
+                             "async-pipelined (Lever A design 2)")
+    parser.add_argument("--p-min", type=float, default=0.0,
+                        help="R2 early-exit threshold (async only; 0 disables)")
     args = parser.parse_args()
 
-    print("=== phase 5 step 9 — NPU-spec sweep ===")
+    print("=== NPU-spec sweep ===")
     print(f"  prompts    : {args.prompts}")
     print(f"  k-values   : {args.k_values}")
     print(f"  n_predict  : {args.n_predict}")
+    print(f"  mode       : {args.mode}  p_min={args.p_min}")
 
     if not HUMANEVAL.exists():
         print(f"ERROR: {HUMANEVAL} missing")
@@ -233,9 +256,10 @@ def main() -> int:
     tok = Tokenizer.from_file(str(TOKENIZER_JSON))
 
     ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    mode_tag = args.mode if args.p_min == 0.0 else f"{args.mode}-pmin{args.p_min:g}"
     csv_path = (
         REPO_ROOT / "results"
-        / f"spec-npu-Qwen3-8B-Q4_K_M-vs-Qwen3-0.6B-pathbmask-{ts}.csv"
+        / f"spec-npu-Qwen3-8B-Q4_K_M-vs-Qwen3-0.6B-pathbmask-{mode_tag}-{ts}.csv"
     )
     print(f"  csv out    : {csv_path}")
 
@@ -267,6 +291,7 @@ def main() -> int:
             cpu_sess, npu_sess, cfg, tok,
             prompt_indices=args.prompts, k_values=args.k_values,
             n_predict=args.n_predict, csv_path=csv_path,
+            mode=args.mode, p_min=args.p_min,
         )
         print_summary_table(rows)
         return 0 if rows else 1

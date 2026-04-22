@@ -293,6 +293,200 @@ def run_spec_decode_async(
     return summary
 
 
+def run_spec_decode_async_pipelined(
+    cpu_sess,
+    npu_sess,
+    cfg: dict,
+    tok: Tokenizer,
+    prompt_ids: list[int],
+    k: int,
+    n_predict_target: int,
+    p_min: float = 0.0,
+) -> dict:
+    """Design (2) — pipelined variant of design (1).
+
+    On top of design (1)'s draft || verify overlap, pre-issues round
+    N+1's HTTP /completion during round N's absorb. committed_ids_{N+1}
+    is known the moment round N's accept check completes, and HTTP is
+    deterministic (no rollback logic needed). This folds absorb and
+    next-round verify into a single wall-clock max(), so steady-state
+    per-round cost drops from max(draft, verify) + absorb to
+    ~draft + max(absorb, verify).
+
+    Two executors:
+      * npu_pool (1 worker) pins NPU work to one thread
+      * http_pool (1 worker) lets HTTP run concurrent with NPU
+    """
+    n_layers = cfg["num_hidden_layers"]
+
+    print(f"\n--- CPU prefill (P={len(prompt_ids)}) ---")
+    t0 = time.perf_counter()
+    cpu_past, first_candidate = cpu_prefill(cpu_sess, cfg, prompt_ids)
+    print(f"  elapsed           : {time.perf_counter() - t0:.2f} s")
+    print(f"  first candidate   : {first_candidate}  -> "
+          f"{_safe_repr(tok.decode([first_candidate]))}")
+
+    npu_past = pad_cpu_past_to_npu(cpu_past, len(prompt_ids), cfg)
+    committed_ids: list[int] = list(prompt_ids)
+    next_candidate = first_candidate
+    prompt_len = len(prompt_ids)
+
+    round_metrics: list[dict] = []
+    draft_wait_s = 0.0
+    verify_wait_s = 0.0
+    absorb_wall_s = 0.0
+    parallel_wall_s = 0.0
+    early_exits = 0
+    # Fraction of rounds where pending_verify was already done when we
+    # awaited it — this is the pipeline "cache hit" rate.
+    prewarmed_verify_count = 0
+
+    npu_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="npu")
+    http_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="http")
+
+    t_gen_start = time.perf_counter()
+    round_idx = 0
+
+    # Pre-issue the FIRST verify HTTP before any round starts. This
+    # bootstraps the pipeline so round 1 already benefits from the
+    # overlap.
+    pending_verify = http_pool.submit(verify_via_target, list(committed_ids), k)
+
+    try:
+        while (len(committed_ids) - prompt_len) < n_predict_target:
+            round_idx += 1
+            L = len(committed_ids)
+
+            if L + k + 1 > CONTEXT_MAX - 1:
+                print(f"  round {round_idx}: near context limit (L={L}, "
+                      f"CONTEXT_MAX-1={CONTEXT_MAX - 1}); stopping")
+                break
+
+            t_round_start = time.perf_counter()
+
+            # Fire round-N draft. Main thread awaits pending verify.
+            f_drafts = npu_pool.submit(
+                draft_k_tokens_pmin,
+                npu_sess, npu_past, next_candidate, L, k, n_layers, p_min,
+            )
+
+            t_v0 = time.perf_counter()
+            if pending_verify.done():
+                prewarmed_verify_count += 1
+            target_ids = pending_verify.result()
+            verify_wait_s += time.perf_counter() - t_v0
+
+            t_d0 = time.perf_counter()
+            drafts, past_snapshots = f_drafts.result()
+            draft_wait_s += time.perf_counter() - t_d0
+
+            parallel_wall_s += time.perf_counter() - t_round_start
+
+            actual_k = len(drafts)
+            if actual_k < k:
+                early_exits += 1
+
+            j = longest_common_prefix(drafts, target_ids)
+            bonus_id = target_ids[j]
+            new_commits = drafts[:j] + [bonus_id]
+            committed_ids_next = committed_ids + new_commits
+
+            # Pre-issue the NEXT round's verify concurrent with absorb.
+            # Skip if we're about to exit the loop (no need to pay HTTP
+            # for a round we won't run).
+            will_continue = (len(committed_ids_next) - prompt_len) < n_predict_target \
+                and (L + len(new_commits) + k + 1) <= (CONTEXT_MAX - 1)
+            if will_continue:
+                pending_verify = http_pool.submit(
+                    verify_via_target, list(committed_ids_next), k,
+                )
+            else:
+                pending_verify = None
+
+            # Absorb on npu_pool. Tested both routes: submitting to npu_pool
+            # beat main-thread-direct by ~5% empirically (11.14 vs 10.53 t/s
+            # at k=2 sweep). Counterintuitive but consistent — keeping NPU
+            # work on one dedicated thread seems to reduce GIL thrash with
+            # the http_pool's verify call. Main thread awaits via future
+            # (GIL released during wait).
+            t_a0 = time.perf_counter()
+            if j < actual_k:
+                pre_bonus_past = past_snapshots[j]
+            else:
+                pre_bonus_past = npu_pool.submit(
+                    materialize_snapshot_k,
+                    npu_sess, past_snapshots[actual_k - 1],
+                    drafts[actual_k - 1], L, actual_k, n_layers,
+                ).result()
+            f_absorb = npu_pool.submit(
+                absorb_bonus,
+                npu_sess, pre_bonus_past, bonus_id,
+                L + j, n_layers,
+            )
+            next_candidate, npu_past = f_absorb.result()
+            absorb_wall_s += time.perf_counter() - t_a0
+
+            committed_ids = committed_ids_next
+
+            accepted_drafts = drafts[:j]
+            round_metrics.append({
+                "round": round_idx,
+                "L_start": L,
+                "drafts": drafts,
+                "target": target_ids,
+                "j": j,
+                "bonus": bonus_id,
+                "committed_this_round": len(new_commits),
+                "early_exit": actual_k < k,
+            })
+            ee_mark = "*" if actual_k < k else " "
+            print(
+                f"  r{round_idx:03d} L={L:3d} drafts={drafts}{ee_mark} "
+                f"target={target_ids[:k]}+b={target_ids[k]} j={j} bonus={bonus_id} "
+                f"acc={_safe_repr(tok.decode(accepted_drafts)) if accepted_drafts else '<none>'} "
+                f"new={_safe_repr(tok.decode(new_commits))}"
+            )
+    finally:
+        # Flush any in-flight verify so the HTTP pool can shut down cleanly.
+        if pending_verify is not None and not pending_verify.done():
+            try:
+                pending_verify.result(timeout=30.0)
+            except Exception:
+                pass
+        http_pool.shutdown(wait=True)
+        npu_pool.shutdown(wait=True)
+
+    t_gen_elapsed = time.perf_counter() - t_gen_start
+    decoded = len(committed_ids) - prompt_len
+    decode_tps = decoded / t_gen_elapsed if t_gen_elapsed > 0 else 0.0
+
+    total_drafted = sum(len(r["drafts"]) for r in round_metrics)
+    total_accepted = sum(r["j"] for r in round_metrics)
+    mean_accept = total_accepted / total_drafted if total_drafted else 0.0
+
+    summary = {
+        "mode": "async-pipelined",
+        "prompt_len": prompt_len,
+        "decoded": decoded,
+        "rounds": len(round_metrics),
+        "k": k,
+        "p_min": p_min,
+        "total_drafted": total_drafted,
+        "total_accepted": total_accepted,
+        "mean_accept_rate": mean_accept,
+        "early_exits": early_exits,
+        "prewarmed_verify_rounds": prewarmed_verify_count,
+        "wall_generate_s": t_gen_elapsed,
+        "wall_draft_wait_s": draft_wait_s,
+        "wall_verify_wait_s": verify_wait_s,
+        "wall_parallel_s": parallel_wall_s,
+        "wall_absorb_s": absorb_wall_s,
+        "decode_tps": decode_tps,
+        "generated_text": tok.decode(committed_ids[prompt_len:]),
+    }
+    return summary
+
+
 def main() -> int:
     global print
     print = functools.partial(print, flush=True)
@@ -303,6 +497,8 @@ def main() -> int:
     parser.add_argument("-n", "--n-predict", type=int, default=64)
     parser.add_argument("--p-min", type=float, default=0.0,
                         help="R2 early-exit threshold on draft argmax prob (0 disables)")
+    parser.add_argument("--pipelined", action="store_true",
+                        help="Use design (2) pipelined variant (pre-issues next-round verify during absorb)")
     args = parser.parse_args()
 
     print(f"=== Phase 5.5 Lever A — async NPU-spec "
@@ -350,21 +546,27 @@ def main() -> int:
             print(f"ERROR: NPU session fell back: {providers}")
             return 2
 
-        print(f"\n--- async spec decode loop (k={args.draft_k}, "
+        mode_label = "async-pipelined (design 2)" if args.pipelined else "async (design 1)"
+        print(f"\n--- {mode_label} spec decode loop (k={args.draft_k}, "
               f"p_min={args.p_min}) ---")
-        summary = run_spec_decode_async(
+        runner = run_spec_decode_async_pipelined if args.pipelined else run_spec_decode_async
+        summary = runner(
             cpu_sess, npu_sess, cfg, tok, prompt_ids,
             k=args.draft_k, n_predict_target=args.n_predict,
             p_min=args.p_min,
         )
 
         print("\n=== summary ===")
-        print(f"  mode                  : async")
+        print(f"  mode                  : {summary.get('mode', 'async')}")
         print(f"  prompt tokens         : {summary['prompt_len']}")
         print(f"  decoded tokens        : {summary['decoded']}")
         print(f"  rounds                : {summary['rounds']}")
         print(f"  k / p_min             : {summary['k']} / {summary['p_min']}")
         print(f"  early exits (R2)      : {summary['early_exits']} / {summary['rounds']}")
+        if "prewarmed_verify_rounds" in summary:
+            print(f"  prewarmed verify hits : "
+                  f"{summary['prewarmed_verify_rounds']} / {summary['rounds']} "
+                  f"(higher = pipeline overlap working)")
         print(f"  mean accept rate      : "
               f"{summary['mean_accept_rate'] * 100:.1f}% "
               f"({summary['total_accepted']}/{summary['total_drafted']})")
