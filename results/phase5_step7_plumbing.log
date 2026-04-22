@@ -1,0 +1,48 @@
+=== step 7 - first NPU-drafted token into llama.cpp verify (patha) ===
+
+launching llama-server:
+    C:\Users\hotschmoe\Documents\GitHub\specula\llama.cpp\build-cpu\bin\llama-server.exe -m C:\Users\hotschmoe\Documents\GitHub\specula\models\Qwen3-8B-Q4_K_M.gguf --host 127.0.0.1 --port 8088 -c 576 -t 18 --no-warmup
+    log -> C:\Users\hotschmoe\Documents\GitHub\specula\results\phase5_step7_llama_server.log
+
+--- waiting for /health (timeout 180s) ---
+  server healthy
+
+--- tokenizer sanity probe (HF 0.6B vs server 8B) ---
+  probe text        : 'def fibonacci(n):\n    # Return the nth Fibonacci number'
+  HF ids (11)      : [750, 75698, 1445, 982, 262, 671, 3411, 279, 55129, 79683, 1372]
+  server ids (11)  : [750, 75698, 1445, 982, 262, 671, 3411, 279, 55129, 79683, 1372]
+  tokenizers agree  : True
+
+--- NPU draft ---
+
+--- loading CPU ONNX (FP32, dynamic past_len) ---
+  loaded in 2.8 s
+
+--- loading NPU Path A binary (FP16, fixed past_len=511) ---
+  loading wrapper ONNX qwen3_0_6b_draft_v81_ctx512.patha.wrapper.onnx via legacy QNN EP ...
+  loaded in 2.2 s
+
+--- CPU prefill + decode to past_len=511 ---
+  prompt = 'The Snapdragon X2 Elite Extreme is'
+  prompt tokens (7): [785, 82055, 1599, 17, 33764, 49395, 374]
+  CPU decode: growing past_len 7 -> 511 (504 steps)...
+  decoded 504 tokens in 30.5 s
+
+--- single NPU forward at position 511 ---
+  NPU draft id      : 264   -> ' a'
+  CPU 0.6B ref id   : 264   -> ' a'
+
+--- target verify (llama-server, Qwen3-8B-Q4_K_M) ---
+  elapsed           : 4.60 s (server: prompt_n=512, predicted_n=1)
+  target id         : 264   -> content=' a'
+
+=== accept/reject verdict ===
+  NPU draft (0.6B)           : 264   -> ' a'
+  CPU reference (0.6B)       : 264   -> ' a'
+  Target (8B via llama-srv)  : 264   -> ' a'
+  draft == target (accept)   : True
+  draft == 0.6B-CPU (sanity) : True
+  interpretation             : draft accepted - target would skip its own compute.
+
+=== STATUS: ok (one draft token + one target token + one accept/reject decision) ===
+shutting down llama-server...

@@ -576,6 +576,15 @@ token by step 7, end-to-end spec decode by step 10.
    accept/reject manually by comparing to target's greedy output.
    Exit: one drafted token returned, accept/reject decision made.
    (No end-to-end speedup yet; this is a plumbing checkpoint.)
+   **[DONE, session 11]** `scripts/npu_spec_step7_plumbing.py`:
+   at the step-6 511-token anchor, NPU Path A draft, CPU-ORT 0.6B
+   reference, and Qwen3-8B llama-server target all greedy-pick
+   token 264. Accept=True. Tokenizer sanity probe (HF Qwen3 BPE
+   vs llama.cpp GGUF vocab) agreed 11/11 ids. Key design find:
+   `/completion` accepts raw id arrays (`server-common.cpp:767`
+   `json_is_array_of_numbers`), so the comparison is purely at
+   the id level — no detok->retok in the middle. Log:
+   `results/phase5_step7_plumbing.log`.
 
 8. **llama.cpp spec-decode pipeline integration.** Investigate
    whether `llama-speculative` can accept an external drafter, or
@@ -608,10 +617,21 @@ token by step 7, end-to-end spec decode by step 10.
 - **(blocking step 3)** Does `optimum.onnxruntime` produce a
   Qwen3-0.6B ONNX export with KV cache that lowers cleanly on
   QAIRT 2.45? If not, we need a custom tracing wrapper.
-- **(blocking step 8)** Can `llama-server` accept externally-drafted
+- ~~**(blocking step 8)** Can `llama-server` accept externally-drafted
   tokens via its HTTP API, or do we need our own spec-decode
   outer loop that calls llama.cpp as a verifier? llama.cpp HEAD
-  `e365e658f…` behaviour unverified.
+  `e365e658f…` behaviour unverified.~~ **Answered session 11:**
+  llama-server does NOT expose a "verify these draft ids" endpoint.
+  `/completion` takes a prompt and emits its own greedy
+  continuation. Step 8 outer loop will run the sidecar as driver
+  and call `/completion` per round with `n_predict=k+1`, comparing
+  returned ids one-for-one to our drafted ids for the standard
+  greedy-accept rule. The `/completion` endpoint does accept
+  raw id arrays as `prompt`, which removes tokenizer round-trip
+  from the loop. Open sub-question: `cache_prompt=true` caches
+  the committed prefix KV across rounds so each verify pays only
+  the new-token cost — need to verify this works with id-array
+  prompts (string prompts definitely work).
 - **(blocking step 5)** Whole-model Qwen3-0.6B context binary total
   spill/fill -- does it fit on X2E HTP DMA in one context? trident's
   experience says yes for a single unified context, but 0.6B is

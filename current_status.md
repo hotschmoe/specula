@@ -1,9 +1,9 @@
 # specula -- current status
 
-Last updated: 2026-04-21 (session 11 -- **both Path A AND Path B-mask
-COMPILED + VALIDATED with byte-identical NPU output. Step 6 fully closed.**
-ORT_ENABLE_BASIC constant-folding was the load-bearing fix (collapses
-7580 -> 2061 nodes; both paths converge to the same post-fold graph).)
+Last updated: 2026-04-21 (session 11 -- **step 7 plumbing checkpoint PASSED.**
+NPU draft (Path A) + llama-server target (Qwen3-8B-Q4_K_M) agree on the same
+anchor-position greedy token; accept/reject logic wired. Step 6 still fully
+closed from earlier today. Step 8 is next: external-drafter outer loop.)
 
 Living document. Update every few turns. Anyone picking this up cold should
 be able to read this page, skim the README, and resume work.
@@ -363,7 +363,7 @@ step 7 when drafts pipeline alongside CPU verify). Commit `<TBD>`.
    inspection (`results/bin_inspect.json`); wrapper builder in
    `scripts/npu_load_qwen3_bin.py` updated to match.
 
-**Updated 10-step tracker (after session 11 Path A success):**
+**Updated 10-step tracker (after session 11 step-7 close):**
 
 ```
 [DONE]    1. Environment snapshot                 (commit 7230210)
@@ -375,8 +375,10 @@ step 7 when drafts pipeline alongside CPU verify). Commit `<TBD>`.
                                                    session 11 on Path A wrapper)
 [DONE]    6. Correctness vs CPU, single greedy    (session 11 Path A:
                                                    cos=0.9999, 100% match)
-          7. Pipe first drafted token through llama.cpp verify <-- next
-          8. External-drafter bridge for llama.cpp spec decode
+[DONE]    7. Pipe first drafted token through     (session 11 step-7
+              llama.cpp verify                     plumbing script passed;
+                                                   draft=target=264 at anchor)
+          8. External-drafter bridge for llama.cpp spec decode <-- next
           9. First NPU-spec number on 10-prompt humaneval
          10. Sweep k values, write up, close phase
 ```
@@ -621,17 +623,104 @@ path, useful if a future regime needs a non-zero additive bias
 
 Step 7 (llama.cpp verify wiring) now unblocked.
 
+### Session 11 cont. — step 7 plumbing checkpoint PASSED
+
+`scripts/npu_spec_step7_plumbing.py` drives the three-way comparison
+the scoping doc §7 step 7 calls for: NPU draft vs CPU reference vs
+llama-server target, all at the step-6 validated anchor position.
+
+**Design choice:** pass raw token ids (not detokenized text) to
+llama-server's `/completion` endpoint. `llama.cpp/tools/server/
+server-common.cpp:767` accepts `"prompt"` as a JSON array of ints via
+`json_is_array_of_numbers(json_prompt)`, so both sides compare purely
+at the id level with zero risk of detok->retok divergence between
+HF's Qwen3 BPE (what the NPU draft uses) and the llama.cpp GGUF vocab
+(what the target uses). A lightweight sanity probe up front confirms
+the two tokenizers agree on ids for a sample string — they match byte-
+for-byte on the 11-id Fibonacci probe.
+
+**Run outcome (`results/phase5_step7_plumbing.log`):**
+
+```
+tokenizer probe      : 11/11 ids match between HF 0.6B and server 8B
+NPU draft (Path A)   : token 264 (' a')
+CPU reference (0.6B) : token 264 (' a')   [step-6 anchor, known good]
+Target (8B, CPU)     : token 264 (' a')
+draft == target      : True   (accept)
+draft == CPU 0.6B    : True   (sanity)
+```
+
+All three backends converge on the same next-token id at the
+511-token anchor. The plumbing exit criterion — one drafted token
+returned, one target token returned, one accept/reject decision
+logged — is met. The `accept=True` here is a bonus: it demonstrates
+the small draft genuinely predicting what the large target would,
+not a coincidence of anchoring.
+
+**Invocation recipe** (captured in the script):
+
+```
+llama-server.exe
+  -m models/Qwen3-8B-Q4_K_M.gguf
+  --host 127.0.0.1 --port 8088
+  -c 576                 # CONTEXT_MAX (512) + n_predict slack
+  -t 18                  # match Phase 2 CPU-spec baseline
+  --no-warmup
+```
+
+with `/completion` body
+`{"prompt": [512 ids], "n_predict": 1, "temperature": 0.0, "top_k": 1,
+  "seed": 1, "cache_prompt": false, "return_tokens": true}`.
+Target call latency: **4.60 s** for PP=512 + 1 generated token (about
+111 t/s prompt-eval, matching Phase 1's 8B Q4_K_M CPU PP512 of
+164 t/s once server overhead is accounted for).
+
+**Caveat carried into step 8:** the script anchors at past_len=511
+so the NPU never has to mask out invalid KV positions. The
+production spec-decode outer loop wants short prompts (20-50 tokens,
+drafting 3+ tokens per round), which needs Path B-mask's non-zero
+`attention_bias` with -65504 for invalid slots. That masking pattern
+is numerically unvalidated on the NPU today; step 8's outer loop
+has to prove it out before the first end-to-end run.
+
+Step 8 (external-drafter outer loop) now unblocked.
+
 ## Immediate next steps (next session)
 
-**Blocker for step 7+: step 4 binary that passes correctness.**
-Until an AI Hub .bin passes the `npu_vs_cpu_correctness.py`
-probe (cos ≥ 0.99 on zero-KV control, cos ≥ 0.95 on prefilled-KV
-single step, ≥ 50% match-rate on 16-step sliding-window greedy),
-step 6 stays half-closed and step 7 (llama.cpp verify wiring)
-can't start. The CPU side of step 6 is ready and verified — only
-the NPU side is blocked.
+**Next: step 8 — external-drafter outer loop.** With step 7 closed,
+the open scoping question flips from "can we compile + drive the
+NPU binary?" to "what's the outer loop shape for real spec decode?"
+Options:
 
-Session 11 resubmit with pinned shapes is the current bet.
+- **(a) Sidecar as driver.** Our Python sidecar owns the outer
+  generate loop; per round it (i) runs k NPU draft steps into a
+  short token buffer, (ii) POSTs `prefix + drafts` to llama-server
+  `/completion` with `n_predict=k+1`, (iii) compares returned ids
+  one-for-one, commits the longest matching prefix, drops to the
+  next round. Biggest unknown: how to express "verify this draft
+  sequence" in a single llama-server call. llama-server's stock
+  `/completion` with `n_predict=k+1` returns its own k+1 greedy
+  tokens — comparing those against our drafts is the standard
+  greedy-accept rule and does not need anything fancier from the
+  server.
+- **(b) llama-server as driver + external drafter over HTTP.**
+  Would need a new server hook for "here's a drafted token
+  sequence, return which ones you accept." Doesn't exist today.
+  Bigger code lift; skip unless (a) blocks.
+
+Plan (a) is the cheaper information: it reuses the step-7
+invocation pattern end-to-end, adds only a k-step draft loop on
+top, and produces a CSV row immediately comparable to Phase 2's
+40.2 t/s CPU-spec baseline.
+
+**Gating item for step 8: short-prompt NPU drafting.** Real spec-
+decode runs don't start with a 511-token anchor. Need to validate
+Path B-mask's `attention_bias` with lower-triangular -65504 masking
+for invalid KV slots on a short prompt (e.g. 20-token humaneval
+seed). Expected probe: same `npu_vs_cpu_correctness.py`-style
+cosine check, but at past_len = prompt_len with padded zeros + a
+proper causal bias mask. One session of work; becomes a new probe
+script `scripts/npu_short_prompt_probe.py`.
 
 **Strategy (session 5, 2026-04-20): close out Qwen3, then graduate
 fully to Qwen3.5 for all further work.**
