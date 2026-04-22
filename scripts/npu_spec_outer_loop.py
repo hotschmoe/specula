@@ -90,12 +90,16 @@ def draft_k_tokens(
     k: int,
     n_layers: int,
 ) -> tuple[list[int], list[dict]]:
-    """Draft k tokens on the NPU, returning drafts and k+1 past snapshots.
+    """Draft k tokens on the NPU, returning k drafts and k past snapshots.
 
     `past_snapshots[i]` is the NPU past after absorbing drafts[0..i-1]
     (valid_past_len = round_start_committed + i). Index 0 is the input
-    past (no drafts absorbed); index k is after all k drafts absorbed,
-    which the outer loop needs when j == k (all accepted).
+    past (no drafts absorbed); index k-1 has absorbed drafts[0..k-2]
+    and is the deepest rollback the outer loop can do directly.
+
+    The j == k case (all drafts accepted) needs one more snapshot that
+    has absorbed drafts[k-1]; the outer loop materialises it lazily via
+    `materialize_snapshot_k` so we don't pay that NPU call when j < k.
     """
     L = round_start_committed
     drafts: list[int] = [next_candidate]
@@ -114,20 +118,34 @@ def draft_k_tokens(
         ))
         drafts.append(int(np.argmax(logits)))
 
-    # Final step: absorb drafts[k-1] so we have past_snapshots[k] for the
-    # j == k case. Its logits would be a "k+1-th draft" — we discard them.
+    return drafts, past_snapshots
+
+
+def materialize_snapshot_k(
+    npu_sess,
+    snapshot_k_minus_1: dict,
+    draft_k_minus_1: int,
+    round_start_committed: int,
+    k: int,
+    n_layers: int,
+) -> dict:
+    """Produce past_snapshots[k] on demand (only called when j == k).
+
+    Absorbs drafts[k-1] into past_snapshots[k-1] so its valid_past_len
+    grows from L+k-1 to L+k. Logits produced by this step are the
+    "k+1-th draft" — discarded since the outer loop only uses k drafts.
+    """
+    pos = round_start_committed + k - 1
     _, outputs, out_names = npu_single_step_short_prompt(
         npu_sess,
-        past_snapshots[-1],
-        drafts[k - 1],
-        position=L + k - 1,
-        valid_past_len=L + k - 1,
+        snapshot_k_minus_1,
+        draft_k_minus_1,
+        position=pos,
+        valid_past_len=pos,
     )
-    past_snapshots.append(npu_rearrange_present_to_past(
-        outputs, out_names, n_layers, old_valid_past_len=L + k - 1,
-    ))
-
-    return drafts, past_snapshots
+    return npu_rearrange_present_to_past(
+        outputs, out_names, n_layers, old_valid_past_len=pos,
+    )
 
 
 def verify_via_target(committed_ids: list[int], k: int) -> list[int]:
@@ -253,10 +271,17 @@ def run_spec_decode(
         new_commits = drafts[:j] + [bonus_id]
 
         # 6. Update state: absorb bonus into past, pick up next_candidate.
+        #    Lazy: only pay the snapshot-k NPU call when j == k.
         t0 = time.perf_counter()
+        if j < k:
+            pre_bonus_past = past_snapshots[j]
+        else:
+            pre_bonus_past = materialize_snapshot_k(
+                npu_sess, past_snapshots[k - 1], drafts[k - 1], L, k, n_layers
+            )
         next_candidate, npu_past = absorb_bonus(
             npu_sess,
-            past_snapshots[j],
+            pre_bonus_past,
             bonus_id,
             bonus_position=L + j,
             n_layers=n_layers,

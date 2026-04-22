@@ -9,7 +9,7 @@ common_init_result: fitting params to device memory, for bugs during this step t
 llama_params_fit_impl: projected to use 755 MiB of host memory vs. 48758 MiB of total host memory
 llama_params_fit_impl: will leave 48002 >= 1024 MiB of system memory, no changes needed
 llama_params_fit: successfully fit params to free device memory
-llama_params_fit: fitting params to free memory took 0.14 seconds
+llama_params_fit: fitting params to free memory took 0.16 seconds
 llama_model_loader: loaded meta data with 28 key-value pairs and 399 tensors from C:\Users\hotschmoe\Documents\GitHub\specula\models\Qwen3-8B-Q4_K_M.gguf (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
 llama_model_loader: - kv   0:                       general.architecture str              = qwen3
@@ -194,9 +194,9 @@ slot update_slots: id  3 | task 0 | n_tokens = 0, memory_seq_rm [0, end)
 slot init_sampler: id  3 | task 0 | init sampler, took 0.00 ms, tokens: text = 16, total = 16
 slot update_slots: id  3 | task 0 | prompt processing done, n_tokens = 16, batch.n_tokens = 16
 slot print_timing: id  3 | task 0 | 
-prompt eval time =     118.34 ms /    16 tokens (    7.40 ms per token,   135.20 tokens per second)
-       eval time =     113.34 ms /     4 tokens (   28.34 ms per token,    35.29 tokens per second)
-      total time =     231.69 ms /    20 tokens
+prompt eval time =     106.24 ms /    16 tokens (    6.64 ms per token,   150.60 tokens per second)
+       eval time =     107.08 ms /     4 tokens (   26.77 ms per token,    37.35 tokens per second)
+      total time =     213.32 ms /    20 tokens
 slot      release: id  3 | task 0 | stop processing: n_tokens = 19, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -207,12 +207,12 @@ slot update_slots: id  3 | task 5 | new prompt, n_ctx_slot = 768, n_keep = 0, ta
 slot update_slots: id  3 | task 5 | need to evaluate at least 1 token for each active slot (n_past = 19, task.n_tokens() = 19)
 slot update_slots: id  3 | task 5 | n_past was set to 18
 slot update_slots: id  3 | task 5 | n_tokens = 18, memory_seq_rm [18, end)
-slot init_sampler: id  3 | task 5 | init sampler, took 0.01 ms, tokens: text = 19, total = 19
+slot init_sampler: id  3 | task 5 | init sampler, took 0.00 ms, tokens: text = 19, total = 19
 slot update_slots: id  3 | task 5 | prompt processing done, n_tokens = 19, batch.n_tokens = 1
 slot print_timing: id  3 | task 5 | 
-prompt eval time =      39.78 ms /     1 tokens (   39.78 ms per token,    25.14 tokens per second)
-       eval time =     117.33 ms /     4 tokens (   29.33 ms per token,    34.09 tokens per second)
-      total time =     157.12 ms /     5 tokens
+prompt eval time =      36.54 ms /     1 tokens (   36.54 ms per token,    27.37 tokens per second)
+       eval time =     106.81 ms /     4 tokens (   26.70 ms per token,    37.45 tokens per second)
+      total time =     143.35 ms /     5 tokens
 slot      release: id  3 | task 5 | stop processing: n_tokens = 22, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -223,12 +223,12 @@ slot update_slots: id  3 | task 10 | new prompt, n_ctx_slot = 768, n_keep = 0, t
 slot update_slots: id  3 | task 10 | need to evaluate at least 1 token for each active slot (n_past = 20, task.n_tokens() = 20)
 slot update_slots: id  3 | task 10 | n_past was set to 19
 slot update_slots: id  3 | task 10 | n_tokens = 19, memory_seq_rm [19, end)
-slot init_sampler: id  3 | task 10 | init sampler, took 0.01 ms, tokens: text = 20, total = 20
+slot init_sampler: id  3 | task 10 | init sampler, took 0.00 ms, tokens: text = 20, total = 20
 slot update_slots: id  3 | task 10 | prompt processing done, n_tokens = 20, batch.n_tokens = 1
 slot print_timing: id  3 | task 10 | 
-prompt eval time =      38.14 ms /     1 tokens (   38.14 ms per token,    26.22 tokens per second)
-       eval time =     112.23 ms /     4 tokens (   28.06 ms per token,    35.64 tokens per second)
-      total time =     150.37 ms /     5 tokens
+prompt eval time =      36.92 ms /     1 tokens (   36.92 ms per token,    27.09 tokens per second)
+       eval time =     107.45 ms /     4 tokens (   26.86 ms per token,    37.22 tokens per second)
+      total time =     144.37 ms /     5 tokens
 slot      release: id  3 | task 10 | stop processing: n_tokens = 23, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -242,9 +242,9 @@ slot update_slots: id  3 | task 15 | n_tokens = 20, memory_seq_rm [20, end)
 slot init_sampler: id  3 | task 15 | init sampler, took 0.00 ms, tokens: text = 21, total = 21
 slot update_slots: id  3 | task 15 | prompt processing done, n_tokens = 21, batch.n_tokens = 1
 slot print_timing: id  3 | task 15 | 
-prompt eval time =      38.65 ms /     1 tokens (   38.65 ms per token,    25.87 tokens per second)
-       eval time =     115.11 ms /     4 tokens (   28.78 ms per token,    34.75 tokens per second)
-      total time =     153.77 ms /     5 tokens
+prompt eval time =      37.64 ms /     1 tokens (   37.64 ms per token,    26.56 tokens per second)
+       eval time =     109.29 ms /     4 tokens (   27.32 ms per token,    36.60 tokens per second)
+      total time =     146.93 ms /     5 tokens
 slot      release: id  3 | task 15 | stop processing: n_tokens = 24, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -258,9 +258,9 @@ slot update_slots: id  3 | task 20 | n_tokens = 21, memory_seq_rm [21, end)
 slot init_sampler: id  3 | task 20 | init sampler, took 0.00 ms, tokens: text = 22, total = 22
 slot update_slots: id  3 | task 20 | prompt processing done, n_tokens = 22, batch.n_tokens = 1
 slot print_timing: id  3 | task 20 | 
-prompt eval time =      37.61 ms /     1 tokens (   37.61 ms per token,    26.59 tokens per second)
-       eval time =     112.82 ms /     4 tokens (   28.20 ms per token,    35.46 tokens per second)
-      total time =     150.42 ms /     5 tokens
+prompt eval time =      35.75 ms /     1 tokens (   35.75 ms per token,    27.98 tokens per second)
+       eval time =     106.35 ms /     4 tokens (   26.59 ms per token,    37.61 tokens per second)
+      total time =     142.10 ms /     5 tokens
 slot      release: id  3 | task 20 | stop processing: n_tokens = 25, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -271,12 +271,12 @@ slot update_slots: id  3 | task 25 | new prompt, n_ctx_slot = 768, n_keep = 0, t
 slot update_slots: id  3 | task 25 | need to evaluate at least 1 token for each active slot (n_past = 23, task.n_tokens() = 23)
 slot update_slots: id  3 | task 25 | n_past was set to 22
 slot update_slots: id  3 | task 25 | n_tokens = 22, memory_seq_rm [22, end)
-slot init_sampler: id  3 | task 25 | init sampler, took 0.01 ms, tokens: text = 23, total = 23
+slot init_sampler: id  3 | task 25 | init sampler, took 0.00 ms, tokens: text = 23, total = 23
 slot update_slots: id  3 | task 25 | prompt processing done, n_tokens = 23, batch.n_tokens = 1
 slot print_timing: id  3 | task 25 | 
-prompt eval time =      40.34 ms /     1 tokens (   40.34 ms per token,    24.79 tokens per second)
-       eval time =     113.17 ms /     4 tokens (   28.29 ms per token,    35.35 tokens per second)
-      total time =     153.51 ms /     5 tokens
+prompt eval time =      38.95 ms /     1 tokens (   38.95 ms per token,    25.68 tokens per second)
+       eval time =     107.19 ms /     4 tokens (   26.80 ms per token,    37.32 tokens per second)
+      total time =     146.13 ms /     5 tokens
 slot      release: id  3 | task 25 | stop processing: n_tokens = 26, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -285,12 +285,12 @@ slot launch_slot_: id  3 | task -1 | sampler chain: logits -> ?penalties -> ?dry
 slot launch_slot_: id  3 | task 30 | processing task, is_child = 0
 slot update_slots: id  3 | task 30 | new prompt, n_ctx_slot = 768, n_keep = 0, task.n_tokens = 27
 slot update_slots: id  3 | task 30 | n_tokens = 26, memory_seq_rm [26, end)
-slot init_sampler: id  3 | task 30 | init sampler, took 0.01 ms, tokens: text = 27, total = 27
+slot init_sampler: id  3 | task 30 | init sampler, took 0.00 ms, tokens: text = 27, total = 27
 slot update_slots: id  3 | task 30 | prompt processing done, n_tokens = 27, batch.n_tokens = 1
 slot print_timing: id  3 | task 30 | 
-prompt eval time =      40.48 ms /     1 tokens (   40.48 ms per token,    24.71 tokens per second)
-       eval time =     114.42 ms /     4 tokens (   28.60 ms per token,    34.96 tokens per second)
-      total time =     154.89 ms /     5 tokens
+prompt eval time =      37.49 ms /     1 tokens (   37.49 ms per token,    26.67 tokens per second)
+       eval time =     106.81 ms /     4 tokens (   26.70 ms per token,    37.45 tokens per second)
+      total time =     144.30 ms /     5 tokens
 slot      release: id  3 | task 30 | stop processing: n_tokens = 30, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -304,9 +304,9 @@ slot update_slots: id  3 | task 35 | n_tokens = 28, memory_seq_rm [28, end)
 slot init_sampler: id  3 | task 35 | init sampler, took 0.00 ms, tokens: text = 29, total = 29
 slot update_slots: id  3 | task 35 | prompt processing done, n_tokens = 29, batch.n_tokens = 1
 slot print_timing: id  3 | task 35 | 
-prompt eval time =      35.69 ms /     1 tokens (   35.69 ms per token,    28.02 tokens per second)
-       eval time =     107.56 ms /     4 tokens (   26.89 ms per token,    37.19 tokens per second)
-      total time =     143.25 ms /     5 tokens
+prompt eval time =      36.37 ms /     1 tokens (   36.37 ms per token,    27.50 tokens per second)
+       eval time =     107.79 ms /     4 tokens (   26.95 ms per token,    37.11 tokens per second)
+      total time =     144.16 ms /     5 tokens
 slot      release: id  3 | task 35 | stop processing: n_tokens = 32, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -315,12 +315,12 @@ slot launch_slot_: id  3 | task -1 | sampler chain: logits -> ?penalties -> ?dry
 slot launch_slot_: id  3 | task 40 | processing task, is_child = 0
 slot update_slots: id  3 | task 40 | new prompt, n_ctx_slot = 768, n_keep = 0, task.n_tokens = 33
 slot update_slots: id  3 | task 40 | n_tokens = 32, memory_seq_rm [32, end)
-slot init_sampler: id  3 | task 40 | init sampler, took 0.01 ms, tokens: text = 33, total = 33
+slot init_sampler: id  3 | task 40 | init sampler, took 0.00 ms, tokens: text = 33, total = 33
 slot update_slots: id  3 | task 40 | prompt processing done, n_tokens = 33, batch.n_tokens = 1
 slot print_timing: id  3 | task 40 | 
-prompt eval time =      35.54 ms /     1 tokens (   35.54 ms per token,    28.14 tokens per second)
-       eval time =     111.71 ms /     4 tokens (   27.93 ms per token,    35.81 tokens per second)
-      total time =     147.25 ms /     5 tokens
+prompt eval time =      36.44 ms /     1 tokens (   36.44 ms per token,    27.44 tokens per second)
+       eval time =     109.59 ms /     4 tokens (   27.40 ms per token,    36.50 tokens per second)
+      total time =     146.03 ms /     5 tokens
 slot      release: id  3 | task 40 | stop processing: n_tokens = 36, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -332,9 +332,9 @@ slot update_slots: id  3 | task 45 | n_tokens = 36, memory_seq_rm [36, end)
 slot init_sampler: id  3 | task 45 | init sampler, took 0.01 ms, tokens: text = 37, total = 37
 slot update_slots: id  3 | task 45 | prompt processing done, n_tokens = 37, batch.n_tokens = 1
 slot print_timing: id  3 | task 45 | 
-prompt eval time =      36.28 ms /     1 tokens (   36.28 ms per token,    27.57 tokens per second)
-       eval time =     106.89 ms /     4 tokens (   26.72 ms per token,    37.42 tokens per second)
-      total time =     143.16 ms /     5 tokens
+prompt eval time =      35.95 ms /     1 tokens (   35.95 ms per token,    27.82 tokens per second)
+       eval time =     109.13 ms /     4 tokens (   27.28 ms per token,    36.65 tokens per second)
+      total time =     145.08 ms /     5 tokens
 slot      release: id  3 | task 45 | stop processing: n_tokens = 40, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -346,9 +346,9 @@ slot update_slots: id  3 | task 50 | n_tokens = 40, memory_seq_rm [40, end)
 slot init_sampler: id  3 | task 50 | init sampler, took 0.01 ms, tokens: text = 41, total = 41
 slot update_slots: id  3 | task 50 | prompt processing done, n_tokens = 41, batch.n_tokens = 1
 slot print_timing: id  3 | task 50 | 
-prompt eval time =      35.34 ms /     1 tokens (   35.34 ms per token,    28.29 tokens per second)
-       eval time =     105.45 ms /     4 tokens (   26.36 ms per token,    37.93 tokens per second)
-      total time =     140.79 ms /     5 tokens
+prompt eval time =      37.27 ms /     1 tokens (   37.27 ms per token,    26.83 tokens per second)
+       eval time =     107.67 ms /     4 tokens (   26.92 ms per token,    37.15 tokens per second)
+      total time =     144.94 ms /     5 tokens
 slot      release: id  3 | task 50 | stop processing: n_tokens = 44, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -362,9 +362,9 @@ slot update_slots: id  3 | task 55 | n_tokens = 43, memory_seq_rm [43, end)
 slot init_sampler: id  3 | task 55 | init sampler, took 0.01 ms, tokens: text = 44, total = 44
 slot update_slots: id  3 | task 55 | prompt processing done, n_tokens = 44, batch.n_tokens = 1
 slot print_timing: id  3 | task 55 | 
-prompt eval time =      35.43 ms /     1 tokens (   35.43 ms per token,    28.23 tokens per second)
-       eval time =     106.47 ms /     4 tokens (   26.62 ms per token,    37.57 tokens per second)
-      total time =     141.89 ms /     5 tokens
+prompt eval time =      36.05 ms /     1 tokens (   36.05 ms per token,    27.74 tokens per second)
+       eval time =     106.82 ms /     4 tokens (   26.71 ms per token,    37.44 tokens per second)
+      total time =     142.87 ms /     5 tokens
 slot      release: id  3 | task 55 | stop processing: n_tokens = 47, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -376,9 +376,9 @@ slot update_slots: id  3 | task 60 | n_tokens = 47, memory_seq_rm [47, end)
 slot init_sampler: id  3 | task 60 | init sampler, took 0.01 ms, tokens: text = 48, total = 48
 slot update_slots: id  3 | task 60 | prompt processing done, n_tokens = 48, batch.n_tokens = 1
 slot print_timing: id  3 | task 60 | 
-prompt eval time =      36.31 ms /     1 tokens (   36.31 ms per token,    27.54 tokens per second)
-       eval time =     105.88 ms /     4 tokens (   26.47 ms per token,    37.78 tokens per second)
-      total time =     142.20 ms /     5 tokens
+prompt eval time =      36.52 ms /     1 tokens (   36.52 ms per token,    27.38 tokens per second)
+       eval time =     108.31 ms /     4 tokens (   27.08 ms per token,    36.93 tokens per second)
+      total time =     144.83 ms /     5 tokens
 slot      release: id  3 | task 60 | stop processing: n_tokens = 51, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -392,9 +392,9 @@ slot update_slots: id  3 | task 65 | n_tokens = 48, memory_seq_rm [48, end)
 slot init_sampler: id  3 | task 65 | init sampler, took 0.01 ms, tokens: text = 49, total = 49
 slot update_slots: id  3 | task 65 | prompt processing done, n_tokens = 49, batch.n_tokens = 1
 slot print_timing: id  3 | task 65 | 
-prompt eval time =      35.85 ms /     1 tokens (   35.85 ms per token,    27.89 tokens per second)
-       eval time =     106.52 ms /     4 tokens (   26.63 ms per token,    37.55 tokens per second)
-      total time =     142.37 ms /     5 tokens
+prompt eval time =      36.20 ms /     1 tokens (   36.20 ms per token,    27.63 tokens per second)
+       eval time =     108.28 ms /     4 tokens (   27.07 ms per token,    36.94 tokens per second)
+      total time =     144.48 ms /     5 tokens
 slot      release: id  3 | task 65 | stop processing: n_tokens = 52, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -406,9 +406,9 @@ slot update_slots: id  3 | task 70 | n_tokens = 52, memory_seq_rm [52, end)
 slot init_sampler: id  3 | task 70 | init sampler, took 0.01 ms, tokens: text = 53, total = 53
 slot update_slots: id  3 | task 70 | prompt processing done, n_tokens = 53, batch.n_tokens = 1
 slot print_timing: id  3 | task 70 | 
-prompt eval time =      36.44 ms /     1 tokens (   36.44 ms per token,    27.44 tokens per second)
-       eval time =     108.29 ms /     4 tokens (   27.07 ms per token,    36.94 tokens per second)
-      total time =     144.73 ms /     5 tokens
+prompt eval time =      35.86 ms /     1 tokens (   35.86 ms per token,    27.89 tokens per second)
+       eval time =     106.55 ms /     4 tokens (   26.64 ms per token,    37.54 tokens per second)
+      total time =     142.40 ms /     5 tokens
 slot      release: id  3 | task 70 | stop processing: n_tokens = 56, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -422,9 +422,9 @@ slot update_slots: id  3 | task 75 | n_tokens = 53, memory_seq_rm [53, end)
 slot init_sampler: id  3 | task 75 | init sampler, took 0.01 ms, tokens: text = 54, total = 54
 slot update_slots: id  3 | task 75 | prompt processing done, n_tokens = 54, batch.n_tokens = 1
 slot print_timing: id  3 | task 75 | 
-prompt eval time =      36.46 ms /     1 tokens (   36.46 ms per token,    27.43 tokens per second)
-       eval time =     106.45 ms /     4 tokens (   26.61 ms per token,    37.58 tokens per second)
-      total time =     142.91 ms /     5 tokens
+prompt eval time =      35.64 ms /     1 tokens (   35.64 ms per token,    28.06 tokens per second)
+       eval time =     110.06 ms /     4 tokens (   27.51 ms per token,    36.34 tokens per second)
+      total time =     145.70 ms /     5 tokens
 slot      release: id  3 | task 75 | stop processing: n_tokens = 57, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -436,9 +436,9 @@ slot update_slots: id  3 | task 80 | n_tokens = 57, memory_seq_rm [57, end)
 slot init_sampler: id  3 | task 80 | init sampler, took 0.01 ms, tokens: text = 58, total = 58
 slot update_slots: id  3 | task 80 | prompt processing done, n_tokens = 58, batch.n_tokens = 1
 slot print_timing: id  3 | task 80 | 
-prompt eval time =      36.25 ms /     1 tokens (   36.25 ms per token,    27.58 tokens per second)
-       eval time =     112.37 ms /     4 tokens (   28.09 ms per token,    35.60 tokens per second)
-      total time =     148.62 ms /     5 tokens
+prompt eval time =      36.73 ms /     1 tokens (   36.73 ms per token,    27.22 tokens per second)
+       eval time =     109.18 ms /     4 tokens (   27.29 ms per token,    36.64 tokens per second)
+      total time =     145.91 ms /     5 tokens
 slot      release: id  3 | task 80 | stop processing: n_tokens = 61, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -450,9 +450,9 @@ slot update_slots: id  3 | task 85 | n_tokens = 61, memory_seq_rm [61, end)
 slot init_sampler: id  3 | task 85 | init sampler, took 0.01 ms, tokens: text = 62, total = 62
 slot update_slots: id  3 | task 85 | prompt processing done, n_tokens = 62, batch.n_tokens = 1
 slot print_timing: id  3 | task 85 | 
-prompt eval time =      37.66 ms /     1 tokens (   37.66 ms per token,    26.55 tokens per second)
-       eval time =     107.23 ms /     4 tokens (   26.81 ms per token,    37.30 tokens per second)
-      total time =     144.89 ms /     5 tokens
+prompt eval time =      36.08 ms /     1 tokens (   36.08 ms per token,    27.72 tokens per second)
+       eval time =     107.89 ms /     4 tokens (   26.97 ms per token,    37.08 tokens per second)
+      total time =     143.96 ms /     5 tokens
 slot      release: id  3 | task 85 | stop processing: n_tokens = 65, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -464,9 +464,9 @@ slot update_slots: id  3 | task 90 | n_tokens = 65, memory_seq_rm [65, end)
 slot init_sampler: id  3 | task 90 | init sampler, took 0.01 ms, tokens: text = 66, total = 66
 slot update_slots: id  3 | task 90 | prompt processing done, n_tokens = 66, batch.n_tokens = 1
 slot print_timing: id  3 | task 90 | 
-prompt eval time =      35.76 ms /     1 tokens (   35.76 ms per token,    27.97 tokens per second)
-       eval time =     106.00 ms /     4 tokens (   26.50 ms per token,    37.74 tokens per second)
-      total time =     141.75 ms /     5 tokens
+prompt eval time =      36.99 ms /     1 tokens (   36.99 ms per token,    27.04 tokens per second)
+       eval time =     107.33 ms /     4 tokens (   26.83 ms per token,    37.27 tokens per second)
+      total time =     144.32 ms /     5 tokens
 slot      release: id  3 | task 90 | stop processing: n_tokens = 69, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -478,9 +478,9 @@ slot update_slots: id  3 | task 95 | n_tokens = 69, memory_seq_rm [69, end)
 slot init_sampler: id  3 | task 95 | init sampler, took 0.01 ms, tokens: text = 70, total = 70
 slot update_slots: id  3 | task 95 | prompt processing done, n_tokens = 70, batch.n_tokens = 1
 slot print_timing: id  3 | task 95 | 
-prompt eval time =      39.56 ms /     1 tokens (   39.56 ms per token,    25.28 tokens per second)
-       eval time =     107.44 ms /     4 tokens (   26.86 ms per token,    37.23 tokens per second)
-      total time =     147.00 ms /     5 tokens
+prompt eval time =      37.26 ms /     1 tokens (   37.26 ms per token,    26.84 tokens per second)
+       eval time =     109.28 ms /     4 tokens (   27.32 ms per token,    36.60 tokens per second)
+      total time =     146.55 ms /     5 tokens
 slot      release: id  3 | task 95 | stop processing: n_tokens = 73, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -492,9 +492,9 @@ slot update_slots: id  3 | task 100 | n_tokens = 73, memory_seq_rm [73, end)
 slot init_sampler: id  3 | task 100 | init sampler, took 0.01 ms, tokens: text = 74, total = 74
 slot update_slots: id  3 | task 100 | prompt processing done, n_tokens = 74, batch.n_tokens = 1
 slot print_timing: id  3 | task 100 | 
-prompt eval time =      35.64 ms /     1 tokens (   35.64 ms per token,    28.06 tokens per second)
-       eval time =     105.95 ms /     4 tokens (   26.49 ms per token,    37.75 tokens per second)
-      total time =     141.59 ms /     5 tokens
+prompt eval time =      36.23 ms /     1 tokens (   36.23 ms per token,    27.60 tokens per second)
+       eval time =     108.56 ms /     4 tokens (   27.14 ms per token,    36.85 tokens per second)
+      total time =     144.79 ms /     5 tokens
 slot      release: id  3 | task 100 | stop processing: n_tokens = 77, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200
@@ -508,9 +508,9 @@ slot update_slots: id  3 | task 105 | n_tokens = 76, memory_seq_rm [76, end)
 slot init_sampler: id  3 | task 105 | init sampler, took 0.01 ms, tokens: text = 77, total = 77
 slot update_slots: id  3 | task 105 | prompt processing done, n_tokens = 77, batch.n_tokens = 1
 slot print_timing: id  3 | task 105 | 
-prompt eval time =      36.40 ms /     1 tokens (   36.40 ms per token,    27.47 tokens per second)
-       eval time =     110.95 ms /     4 tokens (   27.74 ms per token,    36.05 tokens per second)
-      total time =     147.36 ms /     5 tokens
+prompt eval time =      35.71 ms /     1 tokens (   35.71 ms per token,    28.00 tokens per second)
+       eval time =     112.93 ms /     4 tokens (   28.23 ms per token,    35.42 tokens per second)
+      total time =     148.64 ms /     5 tokens
 slot      release: id  3 | task 105 | stop processing: n_tokens = 80, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: done request: POST /completion 127.0.0.1 200

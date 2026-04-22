@@ -1,11 +1,12 @@
 # specula -- current status
 
-Last updated: 2026-04-21 (session 11 -- **step 8 end-to-end PASSED.**
-First NPU-drafted spec-decode run landed: 22 rounds, 65 coherent tokens
-of a memoized Fibonacci, 65.2% accept, **6.23 t/s**. That's 6.5x slower
-than Phase 2 CPU-spec (40.2 t/s) — NPU per-step latency is the
-bottleneck (~63 ms/call × 110 calls = 6.9 s of 10.4 s wall). Step 9
-(sweep k + multi-prompt) next.)
+Last updated: 2026-04-21 (session 11 -- **Phase 5 CLOSED.** Full sweep
+landed: 40 cells (k ∈ {2,3,4,8} × 10 humaneval prompts, n_predict=256)
+in 25.9 min. **k=2 wins with 7.98 t/s mean, 81.0% accept (best cell
+8.44 t/s at p8).** Structural regression vs Phase 2 CPU-spec 40.2 t/s,
+driven by NPU per-step latency; accept rate matches CPU-spec exactly.
+Writeup in `docs/npu_results.md`. w4a16 quantisation identified as
+biggest Phase 5.5 lever.)
 
 Living document. Update every few turns. Anyone picking this up cold should
 be able to read this page, skim the README, and resume work.
@@ -384,8 +385,14 @@ step 7 when drafts pipeline alongside CPU verify). Commit `<TBD>`.
               llama.cpp spec decode                probe + outer loop;
                                                    6.23 t/s, 65% accept on
                                                    humaneval p0, coherent text)
-          9. First NPU-spec number on 10-prompt humaneval <-- next
-         10. Sweep k values, write up, close phase
+[DONE]    9. First NPU-spec number on 10-prompt   (session 11: 40-cell sweep,
+              humaneval                            k=2 optimal at 7.98 t/s
+                                                   mean, 81.0% accept; best
+                                                   cell 8.44 t/s at p8)
+[DONE]   10. Sweep k values, write up, close      (session 11: docs/npu_results.md
+              phase                                — documented loss, 0.31× of
+                                                   CPU-alone TG, w4a16 lever
+                                                   flagged for Phase 5.5)
 ```
 
 ### Step 6 diagnosis (session 10, 2026-04-21)
@@ -797,30 +804,57 @@ explicitly out-of-scope for Phase 5 close; noted for Phase 6.
 
 ## Immediate next steps (next session)
 
-**Next: step 9 — sweep k + 10-prompt humaneval.** Exit criterion
-per scoping doc §7 step 9: CSV row written to
-`results/spec-npu-...csv` with schema comparable to Phase 2's
-`spec-cpu-...csv`. Plan:
+**Phase 5 is CLOSED.** 40-cell sweep banked, writeup in
+`docs/npu_results.md`. Headline: k=2, 7.98 t/s mean (8.44 best),
+81.0% accept — a 5× structural regression vs Phase 2 CPU-spec
+40.2 t/s, with accept rate identical to CPU-spec (81.0% NPU vs
+82.3% CPU at k=2). NPU per-step latency is the root cause, not
+drafter quality.
 
-1. Land lever (1) above — lazy final-snapshot. ~20 LOC tweak to
-   `draft_k_tokens`. Re-run on humaneval p0 to confirm no
-   regression; expect ~7.2 t/s.
-2. Wrap the outer-loop script with a sweep harness (port
-   `scripts/sweep_speculative.ps1` or write a Python equivalent).
-   Sweep k ∈ {2, 3, 4, 8} × all 10 humaneval prompts. Greedy,
-   n_predict=256 to match Phase 2 directly.
-3. Emit CSV with columns matching Phase 2's schema: prompt_idx,
-   k, accept_rate, mean_decode_tps, n_predict, wall_generate_s.
-4. If any config is within 20% of 25.91 t/s CPU-alone TG, diagnose
-   where the overhead went. If NOT (likely), step 10 writes it up
-   as "NPU-draft on Qwen3-0.6B + CPU target Qwen3-8B via
-   llama-server HTTP is a structural regression vs CPU-spec on
-   this hardware, driven by NPU per-step latency."
+Two branches open next. Both can be pursued independently; the
+Qwen3 close-out items have priority so Qwen3.5 graduation
+(Phase 4) is unblocked.
 
-Phase 5 closes either way in step 10. The numerically negative
-outcome is itself a publishable result per the scoping doc's
-§7 step 10 exit: "Phase 5 closes with either a win, tie, or
-documented loss with root cause."
+**(A) Phase 5.5 — NPU performance levers (if we want a better
+NPU-spec number before graduation).** Ranked by impact × effort:
+
+1. **W4A16 quantisation** — biggest per-step lever. Qualcomm's own
+   Qwen3-4B Genie bundle ships W4A16 (`models/qualcomm-qwen3-4b-ref/`);
+   expected ~2-3× NPU per-step speedup + 4× weight BW reduction.
+   Would push decode to ~20 t/s (model). Cost: AIMET or AI Hub
+   quant pipeline run against humaneval + structured_json as
+   calibration set. ~1 session.
+2. **Async NPU-draft ↔ target-verify overlap.** Makes wall =
+   max(NPU_round, verify_round) rather than sum. Expected ~11 t/s
+   at FP16 (57% improvement); stacks with W4A16 to ~28 t/s.
+   Cost: ~200 LOC async rework. ~1 session.
+3. **Smaller past_len compile tier.** Our binary bakes
+   past_len=511. For code drafting at ~256-token generation, a
+   past_len=256 tier would ~halve attention FLOPs per step.
+   Cost: one AI Hub recompile + tiered loader. ~half session.
+4. **Zero-copy KV handoff** via `cl_qcom_ion_host_ptr`. Small
+   (~10%) NPU-side win but unblocks DFlash-on-OpenCL's later
+   Phase-4 perf tuning. Phase 6 territory.
+
+**(B) Qwen3 close-out before graduation** (the stashed Phase-2
+items that become orphaned at Qwen3.5 cutover):
+
+- [ ] `--draft-p-min` tightening at k=3 on CPU-spec (kept; cheap
+      data point to sharpen our CPU-spec baseline).
+- [ ] `prompts/prose_longform.jsonl` + `prompts/chat_multiturn.jsonl`
+      stub content (fill the four-workload matrix before writing up).
+- [ ] Ngram spec (`--spec-type ngram-*`) A/B on JSON (floor
+      baseline for "dumbest draft").
+- [ ] Negative-result upstream contribution to llama.cpp — the
+      NPU-spec + OpenCL-spec stories together are publishable data
+      on the Snapdragon X2 heterogeneous-exec question.
+
+**Recommended order:** (B) close-out items first (cheap, graduates
+Qwen3 cleanly), then decide whether (A) W4A16 is worth chasing
+on Qwen3 or save for Qwen3.5. Given production-target is Qwen3.5/6
+and Phase 4 DFlash on Qwen3.5 is the next big milestone, the
+W4A16 lever probably lands on Qwen3.5's draft directly rather than
+Qwen3's.
 
 **Strategy (session 5, 2026-04-20): close out Qwen3, then graduate
 fully to Qwen3.5 for all further work.**

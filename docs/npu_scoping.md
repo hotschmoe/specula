@@ -611,6 +611,13 @@ token by step 7, end-to-end spec decode by step 10.
    Exit: CSV row written to `results/spec-npu-...csv` with
    comparable schema to the Phase 2 outputs. First headline
    number known.
+   **[DONE, session 11]** Full 40-cell sweep
+   (`scripts/sweep_npu_spec.py`): k ∈ {2, 3, 4, 8} × 10 humaneval
+   prompts × n_predict=256, 25.9 min wall. k=2 wins:
+   **7.98 t/s mean, 81.0% accept** (best cell p8 at 8.44 t/s,
+   92.2% accept). Phase 2's k=3 optimum shifts to k=2 on NPU
+   because NPU per-step is 7× CPU-draft's cost, so fewer draft
+   calls per round wins.
 
 10. **Sweep + writeup.** If step 9 is within 20% of Phase 2's
     40.2 t/s (i.e. 32-48 t/s), sweep k ∈ {2, 3, 4, 8} and include
@@ -621,6 +628,17 @@ token by step 7, end-to-end spec decode by step 10.
     fast; bridge IPC is the most likely culprit.
     Exit: Phase 5 closes with either a win, tie, or documented
     loss with root cause. Qwen3 graduates.
+    **[DONE, session 11]** `docs/npu_results.md` landed:
+    documented loss with root cause (NPU per-step latency ~63 ms,
+    4 calls/round, sequential with target verify; 5.86 s NPU of
+    9.32 s wall on humaneval p0). Draft quality is fine (cos
+    0.999960, accept 81.0% matches CPU-spec's 82.3% at k=2). JSON
+    workload NOT added — deferred to post-W4A16 rerun since the
+    numerical story is already clear. w4a16 identified as biggest
+    Phase 5.5 lever (2-3× NPU per-step speedup per Qualcomm's
+    Qwen3-4B reference pattern). Phase 5 CLOSED; Qwen3 graduates
+    after the stashed close-out items land (see
+    `current_status.md`).
 
 ## 8. Open questions
 
