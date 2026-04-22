@@ -65,9 +65,12 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from npu_load_qwen3_bin import (  # noqa: E402
     CONTEXT_MAX,
     LOGITS_OUTPUT_NAME,
+    VARIANT,
     build_ep_context_wrapper,
     load_wrapper,
 )
+
+_VARIANT_SUFFIX = f".{VARIANT}" if VARIANT else ""
 
 # Use the optimum export, NOT the `qwen3-0.6b-onnx/` community export.
 # The community export uses com.microsoft::GroupQueryAttention +
@@ -86,11 +89,11 @@ CONFIG_JSON = CPU_ONNX_DIR / "config.json"
 
 
 def _npu_bin(path_key: str) -> Path:
-    return REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.{path_key}.bin"
+    return REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.{path_key}{_VARIANT_SUFFIX}.bin"
 
 
 def _npu_wrapper(path_key: str) -> Path:
-    return REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.{path_key}.wrapper.onnx"
+    return REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.{path_key}{_VARIANT_SUFFIX}.wrapper.onnx"
 
 
 PROMPT = "The Snapdragon X2 Elite Extreme is"

@@ -38,6 +38,26 @@ NPU time (draft + absorb): 5.86 s = 63% of wall. Target verify is
 below attacks one of these two budgets or the dependency between
 them.
 
+## Status snapshot — 2026-04-21
+
+Running tally of closed levers. Full per-lever detail lives in
+each lever's **Result** subsection below.
+
+| lever | state | k=2 mean t/s | vs baseline | accept | notes |
+|-------|-------|-------------:|------------:|-------:|-------|
+| Phase 5 baseline (7e10670) | — | 7.98 | — | 81.03% | ctx=512, fp16, sync outer loop |
+| Lever A (64de69f) | CLOSED | 10.93 | +37.0% | ~81% | async draft∥verify, battery |
+| Lever A step 2 pipelined (56b375b) | CLOSED | — | +39.6% wall | — | pipelined verify-ahead stacks on A |
+| Lever B ctx=256 + pipelined (f755d6d) | CLOSED | 14.28 | +79.0% | ~76% (battery) | best cell 17.78, 10-humaneval, battery+CAD |
+| Lever B AC rerun (this session) | CLOSED | **18.12** | **+127%** | **81.91%** | same sweep, AC+idle; best cell 19.07 |
+| R4 zero-copy / shared-mem (557c59e) | NEGATIVE | — | no win | — | per-step cost already dominated by compute not copy |
+| Lever C W4A16 (in flight) | WIP | — | — | — | Bundle A compile submitted, see §Lever C Progress |
+
+Battery→AC delta on the same binary is ~+27% — a reminder that all
+lever comparisons must be AC-vs-AC to avoid thermal-confound swamping
+the signal. The AC baseline (18.12 t/s mean) is the reference for
+Lever C's comparison.
+
 ## Measurement protocol (every lever)
 
 Each lever produces one artifact:
@@ -113,6 +133,17 @@ background NPU-draft task feeding into the main loop. llama-server
 (below the model's predicted 37%), something is serialising
 unexpectedly — probably GIL. Investigate before sweeping.
 
+**Result (commits 56b375b → 64de69f, battery).**
+Closed +37% over baseline on the 40-cell sweep at k=2 (10.93 t/s mean
+vs 7.98). Step 1 was the naive async overlap (+20% wall); step 2
+added pipelined verify-ahead (verify round N while NPU drafts round
+N+1) for a cumulative +39.6% wall reduction. GIL was not a blocker —
+ORT-QNN releases it during `session.run()`. Prediction (11 t/s) and
+observation (10.93) land within 1%, validating the per-round wall
+decomposition. `run_spec_decode_async_pipelined` in
+`scripts/npu_spec_outer_loop_async.py` is the winning driver; the
+sync loop remains for regression A/B.
+
 ---
 
 ### Lever B — Smaller past_len compile tier (past_len=256 or 128)
@@ -159,6 +190,25 @@ re-validate via `npu_short_prompt_probe.py` at the new tier.
 prediction of 35%), attention is NOT the dominant per-step cost
 and the MLP/linears are — then lever A and C become the only
 paths forward, skip further past_len work.
+
+**Result (commit f755d6d, battery).** Closed +79% over Phase 5
+baseline and +31% over Lever A alone. ctx=256 recompile (`--ctx 256`
+on `compile_qwen3_ai_hub.py`, runtime switch via `SPECULA_NPU_CTX=256`
+env var) stacked with Lever A's pipelined async driver to reach
+**14.28 t/s mean, 17.78 t/s best cell** at k=2 on the 10-humaneval
+sweep at n_predict=200 (battery + light CAD load). Attention
+was ~40% of per-step cost as modelled; halving seq_k brought
+per-step latency down consistent with prediction. No accept-rate
+regression on humaneval; structured_json prompts >128 tokens are
+ctx=256-safe (max observed prompt = 86 tokens).
+
+**Result (AC rerun, this session, 2026-04-21).** Same sweep on AC
+power with other programs closed: **18.12 t/s mean, 19.07 t/s best,
+16.92 worst, 81.91% accept**. +26.9% over the battery number on an
+identical binary — the battery-vs-AC delta is larger than any
+individual lever's gain. CSV:
+`results/spec-npu-Qwen3-8B-Q4_K_M-vs-Qwen3-0.6B-pathbmask-async-pipelined-20260421-213621.csv`.
+This is the reference baseline for Lever C.
 
 ---
 
@@ -226,6 +276,52 @@ ceiling (finally in the range of Phase 2 CPU-spec 40.2 t/s).
 - Accept rate at k=2 drops >10 pp: drafter is too noisy; retry at
   W8A16 (smaller weight savings, less accept loss). W8A16 is
   trident's fallback per `npu_path_back.md`.
+
+**Progress (this session, 2026-04-21).**
+
+Research refinement: running TWO calibration bundles (not one) to
+answer a second-order question for the Qwen3.5 graduation — does
+cheap calibration suffice, or is realistic multi-position capture
+necessary?
+
+| bundle | samples | decode positions per prompt | past_kv content | local size |
+|--------|--------:|-----------------------------|-----------------|-----------:|
+| **A (realistic)** | 60 | [5, 25, 60] | CPU FP32 snapshots | 3.27 GB |
+| **B (step-0 only)** | 20 | [0] | real step-0 (prompt-prefilled, padded with zeros) | 1.09 GB |
+
+Execution order: compile + sweep A first. If A fails accept gate,
+skip B and fall back to W8A16 — B under weaker calibration can't
+rescue a fundamentally-marginal quant. If A passes, compile B and
+compare the delta. Writeup reports both; if B matches A, future
+calibration work is much simpler.
+
+Infrastructure landed this session:
+
+- `scripts/capture_calibration_samples.py` — runs CPU FP32 ONNX
+  prefill + greedy decode on the 20-prompt humaneval + structured_json
+  fixtures, snapshots model inputs at selected decode positions,
+  saves stacked-per-input `.npz` in the exact shape AI Hub's
+  `calibration_data` kwarg expects. Reusable for future quant work
+  including the Qwen3.5 cutover.
+- `scripts/compile_qwen3_ai_hub.py` extended: `--quant {float16,w4a16,w8a16}`,
+  `--calibration-npz PATH`, `--calibration-dataset-id ID`,
+  `--quant-tag` for disambiguating output filenames. Existing fp16
+  path is unchanged (backward-compatible default).
+- `SPECULA_NPU_VARIANT` env var added to `npu_load_qwen3_bin.py`
+  + `npu_vs_cpu_correctness.py` so probe / outer_loop / sweep can
+  target a variant binary (e.g. `SPECULA_NPU_VARIANT=w4a16-a`)
+  without code changes to downstream callers. Mirrors
+  `SPECULA_NPU_CTX`'s pattern.
+- Calibration artifacts on disk (gitignored): `models/calibration/bundle_a_ctx256.npz`
+  (3.27 GB, 60 samples) and `.../bundle_b_ctx256.npz` (1.09 GB, 20
+  samples), each with a `.manifest.json` describing shapes, dtypes,
+  source prompts, and capture positions.
+
+**In flight.** Bundle A compile submitted to AI Hub. Upload phase
+(~2.8 GB model + calibration, home-connection-bound at ~1.7 MB/s)
+dominates the first ~25 min; compile itself then takes 25-40 min.
+Output will be `models/qwen3_0_6b_draft_v81_ctx256.pathbmask.w4a16-a.bin`.
+Correctness probe + sweep flow pending compile completion.
 
 ---
 
@@ -311,6 +407,13 @@ session.run() calls instead of re-uploading each step. Check
 if the EP options list supports this. Low-effort if yes, free
 10-20% win. High-effort if not exposed (need raw QNN path).
 Probe before W4A16.
+
+**Result (commit 557c59e): NEGATIVE.** The
+`shared_session_memory` EP option is exposed but the probe did
+not find a measurable per-step win — per-step cost is dominated
+by compute-on-the-NPU, not numpy↔ORT plumbing. Matches Lever D's
+5-10% ceiling estimate. Parking until a Phase-4 OpenCL-target
+pipeline actually needs zero-copy NPU↔GPU handoff.
 
 ## Suggested investigation order
 

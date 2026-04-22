@@ -55,17 +55,25 @@ HTP_ARCH = "81"
 # what the binary expects.
 CONTEXT_MAX = int(os.environ.get("SPECULA_NPU_CTX", 512))
 
+# Quant-variant suffix appended before ".bin" / ".wrapper.onnx". Unset (or
+# empty) targets the legacy fp16 baseline binary. Set e.g. SPECULA_NPU_VARIANT=w4a16-a
+# before invoking the outer loop / sweep / probe to switch to a Lever C
+# W4A16 calibration-bundle binary. Value must match the suffix passed as
+# --quant-tag at compile time (see scripts/compile_qwen3_ai_hub.py).
+VARIANT = os.environ.get("SPECULA_NPU_VARIANT", "")
+_VARIANT_SUFFIX = f".{VARIANT}" if VARIANT else ""
+
 # Logits live on the first compiled output ('output_0'). Capture this so
 # downstream analysis code stays robust to the qairt naming convention.
 LOGITS_OUTPUT_NAME = "output_0"
 
 
 def _bin_path(path_key: str) -> Path:
-    return REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.{path_key}.bin"
+    return REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.{path_key}{_VARIANT_SUFFIX}.bin"
 
 
 def _wrapper_path(path_key: str) -> Path:
-    return REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.{path_key}.wrapper.onnx"
+    return REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.{path_key}{_VARIANT_SUFFIX}.wrapper.onnx"
 
 
 def _config_json(path_key: str) -> Path:

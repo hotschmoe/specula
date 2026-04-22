@@ -43,6 +43,7 @@ import time
 import traceback
 from pathlib import Path
 
+import numpy as np
 import onnxruntime as ort
 
 
@@ -56,9 +57,11 @@ DEVICE = "Snapdragon X2 Elite CRD"
 #   --compute_unit npu                   Hexagon v81 only
 #   --truncate_64bit_io                  attempts 4 error: int64 input
 #                                        dtypes not accepted on HTP IO
-#   --quantize_full_type float16         attempt 5 error: HTP Gather op
+#   --quantize_full_type <T>             attempt 5 error: HTP Gather op
 #                                        rejected FP32 dtype. Force the
-#                                        whole graph to FP16 at compile.
+#                                        whole graph to T at compile.
+#                                        T in {float16, w4a16, w8a16}.
+#                                        w4/w8 require calibration data.
 #   --qairt_version 2.42                 session-9 finding: AI Hub
 #                                        defaults to QAIRT 2.45, but the
 #                                        only ORT-QNN version that loads
@@ -67,22 +70,39 @@ DEVICE = "Snapdragon X2 Elite CRD"
 #                                        2.42 so the binary matches
 #                                        onnxruntime-qnn 1.24.4's bundle.
 #                                        See docs/npu_ort_qnn_version_match.md
-COMPILE_OPTIONS = (
-    "--target_runtime qnn_context_binary "
-    "--compute_unit npu "
-    "--truncate_64bit_io "
-    "--quantize_full_type float16 "
-    "--qairt_version 2.42"
-)
+QUANT_CHOICES = ("float16", "w4a16", "w8a16")
+
+QAIRT_VERSION = "2.42"
 
 
-def build_paths(path_key: str, ctx: int) -> dict:
+def build_compile_options(quant: str) -> str:
+    if quant not in QUANT_CHOICES:
+        raise ValueError(f"unknown quant {quant!r}; expected one of {QUANT_CHOICES}")
+    return (
+        "--target_runtime qnn_context_binary "
+        "--compute_unit npu "
+        "--truncate_64bit_io "
+        f"--quantize_full_type {quant} "
+        f"--qairt_version {QAIRT_VERSION}"
+    )
+
+
+# Legacy alias. Phase 5 baseline compiles used the fp16 string directly.
+COMPILE_OPTIONS = build_compile_options("float16")
+
+
+def build_paths(path_key: str, ctx: int, quant_tag: str = "") -> dict:
     """Return the ctx-specific source / staging / output paths for a path_key.
 
     Source dir is ctx-independent (the unpinned ONNX is shared between
     ctx tiers — `prep_onnx_for_ai_hub.py` pins dims per-ctx downstream).
     Staging dir, output bin, and job name are ctx-specific so parallel
     tiers can coexist on disk (e.g. ctx=512 baseline + ctx=256 Lever B).
+
+    `quant_tag` disambiguates output filenames when multiple quant flavors
+    share the same ctx + path (e.g. 'w4a16-a' vs 'w4a16-b' for Lever C's
+    two calibration bundles). Empty tag preserves the Phase-5/5.5-Lever-B
+    naming pattern for the fp16 baseline binaries.
     """
     if path_key not in ("patha", "pathbmask"):
         raise ValueError(f"unknown path_key {path_key!r}")
@@ -94,11 +114,13 @@ def build_paths(path_key: str, ctx: int) -> dict:
         extra_input_specs = {
             "attention_bias": ((1, 1, 1, ctx), "float32"),
         }
+    tag_suffix = f".{quant_tag}" if quant_tag else ""
+    job_quant_suffix = f"-{quant_tag}" if quant_tag else "-fp16"
     return {
         "source_dir": REPO_ROOT / "models" / f"qwen3-0.6b-{path_key}",
         "staging_dir": REPO_ROOT / "models" / f"qwen3-0.6b-{path_key}{staging_suffix}",
-        "output_bin": REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_{ctx_suffix}.{path_key}.bin",
-        "job_name": f"qwen3-0.6b-draft-v81-{ctx_suffix}-{path_key}-fp16",
+        "output_bin": REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_{ctx_suffix}.{path_key}{tag_suffix}.bin",
+        "job_name": f"qwen3-0.6b-draft-v81-{ctx_suffix}-{path_key}{job_quant_suffix}",
         "extra_input_specs": extra_input_specs,
         "ctx": ctx,
     }
@@ -187,8 +209,66 @@ def summarize_specs(specs: dict) -> None:
         print(f"    layers={n_layers}, entries={len(kv_keys)}, total past-KV IO = {total_kv_mb:.1f} MB/call")
 
 
-def check_mode(path_cfg: dict) -> int:
-    print("=== step 4 dry-run: AI Hub compile plan ===\n")
+def validate_calibration_npz(
+    npz_path: Path,
+    specs: dict,
+) -> tuple[int, list[str]]:
+    """Load an npz saved by capture_calibration_samples.py and check its
+    schema matches compile input_specs. Returns (n_samples, issues).
+    """
+    if not npz_path.exists():
+        return 0, [f"calibration npz not found at {npz_path}"]
+
+    issues: list[str] = []
+    loaded = np.load(str(npz_path))
+    npz_keys = set(loaded.files)
+    spec_keys = set(specs.keys())
+
+    missing = spec_keys - npz_keys
+    extra = npz_keys - spec_keys
+    if missing:
+        issues.append(
+            f"npz missing inputs required by specs: {sorted(missing)[:3]} "
+            f"({len(missing)} total)"
+        )
+    if extra:
+        issues.append(
+            f"npz has inputs not in specs: {sorted(extra)[:3]} "
+            f"({len(extra)} total)"
+        )
+
+    n_samples_set: set[int] = set()
+    dtype_map = {"int64": "int64", "float32": "float32", "float16": "float16"}
+    for key in spec_keys & npz_keys:
+        arr = loaded[key]
+        n_samples_set.add(arr.shape[0])
+        # Per-sample shape = arr.shape[1:], compare with spec shape.
+        spec_shape, spec_dtype = specs[key]
+        if tuple(arr.shape[1:]) != tuple(spec_shape):
+            issues.append(
+                f"shape mismatch '{key}': npz per-sample={arr.shape[1:]} "
+                f"spec={spec_shape}"
+            )
+        if dtype_map.get(str(arr.dtype), str(arr.dtype)) != spec_dtype:
+            issues.append(
+                f"dtype mismatch '{key}': npz={arr.dtype} spec={spec_dtype}"
+            )
+
+    if len(n_samples_set) > 1:
+        issues.append(f"inconsistent n_samples across inputs: {sorted(n_samples_set)}")
+
+    n_samples = n_samples_set.pop() if n_samples_set else 0
+    return n_samples, issues
+
+
+def check_mode(
+    path_cfg: dict,
+    quant: str,
+    calibration_npz: Path | None = None,
+    calibration_dataset_id: str | None = None,
+) -> int:
+    print("=== AI Hub compile dry-run ===\n")
+    print(f"quant               : {quant}")
 
     source_dir = path_cfg["source_dir"]
     staging_dir = path_cfg["staging_dir"]
@@ -227,6 +307,30 @@ def check_mode(path_cfg: dict) -> int:
         return 1
     print("all onnx inputs have matching specs, dtypes align")
 
+    compile_options = build_compile_options(quant)
+
+    if quant != "float16":
+        print(f"\n--- validating calibration data ({quant} requires PTQ) ---")
+        if calibration_npz is None and calibration_dataset_id is None:
+            print("ERROR: --quant w4a16/w8a16 requires --calibration-npz "
+                  "or --calibration-dataset-id")
+            return 2
+        if calibration_npz is not None:
+            n_samples, cal_issues = validate_calibration_npz(calibration_npz, specs)
+            if cal_issues:
+                print("calibration npz issues:")
+                for i in cal_issues:
+                    print(f"  - {i}")
+                return 1
+            npz_gb = calibration_npz.stat().st_size / (1024**3)
+            print(f"  npz path         : {calibration_npz}")
+            print(f"  npz size         : {npz_gb:.2f} GB")
+            print(f"  n_samples        : {n_samples}")
+            print(f"  schema match     : ok (all {len(specs)} inputs present, "
+                  f"shapes + dtypes align)")
+        if calibration_dataset_id is not None:
+            print(f"  dataset_id       : {calibration_dataset_id}")
+
     print("\n--- AI Hub auth probe ---")
     import qai_hub as hub
 
@@ -247,7 +351,10 @@ def check_mode(path_cfg: dict) -> int:
     print(f"      name='{path_cfg['job_name']}',")
     print(f"      device=hub.Device('{DEVICE}'),")
     print(f"      input_specs=<{len(specs)} entries>,")
-    print(f"      options='{COMPILE_OPTIONS}',")
+    print(f"      options='{compile_options}',")
+    if quant != "float16":
+        src = calibration_dataset_id or f"<DatasetEntries from {calibration_npz.name}>"
+        print(f"      calibration_data={src},")
     print(f"  )")
     print(f"  job.wait()")
     print(f"  job.get_target_model().download('{path_cfg['output_bin'].name}')")
@@ -256,7 +363,25 @@ def check_mode(path_cfg: dict) -> int:
     return 0
 
 
-def submit_mode(path_cfg: dict, reuse_upload: str | None = None) -> int:
+def _load_calibration_entries(npz_path: Path) -> dict[str, list[np.ndarray]]:
+    """Read a calibration .npz (written by capture_calibration_samples.py),
+    return the DatasetEntries dict qai_hub.submit_compile_job expects.
+    """
+    loaded = np.load(str(npz_path))
+    entries: dict[str, list[np.ndarray]] = {}
+    for key in loaded.files:
+        arr = loaded[key]
+        entries[key] = [arr[i] for i in range(arr.shape[0])]
+    return entries
+
+
+def submit_mode(
+    path_cfg: dict,
+    quant: str,
+    reuse_upload: str | None = None,
+    calibration_npz: Path | None = None,
+    calibration_dataset_id: str | None = None,
+) -> int:
     import qai_hub as hub
 
     source_dir = path_cfg["source_dir"]
@@ -270,9 +395,27 @@ def submit_mode(path_cfg: dict, reuse_upload: str | None = None) -> int:
         print(f"ERROR: ONNX not found at {model_onnx}")
         return 2
 
+    if quant != "float16" and calibration_npz is None and calibration_dataset_id is None:
+        print(f"ERROR: quant={quant} requires --calibration-npz or --calibration-dataset-id")
+        return 2
+
     with config_json.open() as f:
         cfg = json.load(f)
     specs = build_input_specs(cfg, path_cfg["extra_input_specs"], ctx=path_cfg["ctx"])
+    compile_options = build_compile_options(quant)
+
+    calibration_data = None
+    if calibration_dataset_id is not None:
+        print(f"reusing AI Hub dataset_id={calibration_dataset_id}")
+        calibration_data = calibration_dataset_id
+    elif calibration_npz is not None:
+        npz_gb = calibration_npz.stat().st_size / (1024**3)
+        print(f"loading calibration npz {calibration_npz} ({npz_gb:.2f} GB) ...")
+        t0 = time.perf_counter()
+        calibration_data = _load_calibration_entries(calibration_npz)
+        n_samples = len(next(iter(calibration_data.values())))
+        print(f"  loaded {n_samples} samples × {len(calibration_data)} inputs "
+              f"in {time.perf_counter() - t0:.1f} s")
 
     if reuse_upload:
         print(f"reusing uploaded model_id={reuse_upload} (skipping ~15 min upload)")
@@ -286,14 +429,17 @@ def submit_mode(path_cfg: dict, reuse_upload: str | None = None) -> int:
         t_upload = time.perf_counter() - t0
         print(f"uploaded in {t_upload:.1f} s, model_id={model_handle.model_id}")
 
-    print(f"\nsubmitting compile job '{job_name}' ...")
-    job = hub.submit_compile_job(
+    print(f"\nsubmitting compile job '{job_name}' (quant={quant}) ...")
+    submit_kwargs = dict(
         model=model_handle,
         name=job_name,
         device=hub.Device(DEVICE),
         input_specs=specs,
-        options=COMPILE_OPTIONS,
+        options=compile_options,
     )
+    if calibration_data is not None:
+        submit_kwargs["calibration_data"] = calibration_data
+    job = hub.submit_compile_job(**submit_kwargs)
     print(f"job submitted: id={job.job_id} url={job.url}")
 
     print("\npolling for completion ...")
@@ -332,6 +478,16 @@ def main() -> int:
     parser.add_argument("--path", choices=("patha", "pathbmask"), required=True)
     parser.add_argument("--ctx", type=int, default=DEFAULT_CONTEXT_MAX,
                         help=f"compiled context window size (default: {DEFAULT_CONTEXT_MAX})")
+    parser.add_argument(
+        "--quant", choices=QUANT_CHOICES, default="float16",
+        help="quantization mode. w4a16/w8a16 require --calibration-npz or "
+             "--calibration-dataset-id. Default: float16 (no calibration).",
+    )
+    parser.add_argument(
+        "--quant-tag", default=None,
+        help="override output-binary suffix (e.g. 'w4a16-a'). Default: "
+             "'' for float16, otherwise matches --quant value.",
+    )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--check", action="store_true", help="validate + print plan, no upload")
     group.add_argument("--submit", action="store_true", help="upload + compile + download")
@@ -341,13 +497,41 @@ def main() -> int:
         default=None,
         help="skip upload, reuse an already-uploaded AI Hub model_id (e.g. mn1goxe4n)",
     )
+    cal_group = parser.add_mutually_exclusive_group()
+    cal_group.add_argument(
+        "--calibration-npz", type=Path, default=None,
+        help="path to .npz from capture_calibration_samples.py",
+    )
+    cal_group.add_argument(
+        "--calibration-dataset-id", default=None,
+        help="reuse a pre-uploaded AI Hub dataset_id instead of the local npz",
+    )
     args = parser.parse_args()
-    path_cfg = build_paths(args.path, args.ctx)
+
+    if args.quant_tag is not None:
+        quant_tag = args.quant_tag
+    elif args.quant == "float16":
+        quant_tag = ""
+    else:
+        quant_tag = args.quant
+
+    path_cfg = build_paths(args.path, args.ctx, quant_tag=quant_tag)
     try:
         if args.check:
-            return check_mode(path_cfg)
+            return check_mode(
+                path_cfg,
+                quant=args.quant,
+                calibration_npz=args.calibration_npz,
+                calibration_dataset_id=args.calibration_dataset_id,
+            )
         if args.submit:
-            return submit_mode(path_cfg, reuse_upload=args.reuse_upload)
+            return submit_mode(
+                path_cfg,
+                quant=args.quant,
+                reuse_upload=args.reuse_upload,
+                calibration_npz=args.calibration_npz,
+                calibration_dataset_id=args.calibration_dataset_id,
+            )
     except Exception:
         traceback.print_exc()
         return 2
