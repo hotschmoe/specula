@@ -37,6 +37,7 @@ import argparse
 import functools
 import json
 import subprocess
+import os
 import sys
 import time
 import traceback
@@ -75,7 +76,11 @@ from npu_vs_cpu_correctness import (  # noqa: E402
 from npu_short_prompt_probe import cpu_prefill  # noqa: E402
 
 
-PATH_KEY = "pathbmask"
+# Runtime path selector. Defaults to the fp16 pathbmask baseline; set
+# SPECULA_NPU_PATH=pathb to target the rotary-hoisted Path B binary
+# (w4a16-ready). Must be consistent with whatever compile --path value
+# produced the currently-loaded .bin (see SPECULA_NPU_VARIANT).
+PATH_KEY = os.environ.get("SPECULA_NPU_PATH", "pathbmask")
 
 
 def _safe_repr(s: str) -> str:
@@ -112,6 +117,7 @@ def draft_k_tokens(
             drafts[i],
             position=L + i,
             valid_past_len=L + i,
+            path_key=PATH_KEY,
         )
         past_snapshots.append(npu_rearrange_present_to_past(
             outputs, out_names, n_layers, old_valid_past_len=L + i,
@@ -142,6 +148,7 @@ def materialize_snapshot_k(
         draft_k_minus_1,
         position=pos,
         valid_past_len=pos,
+        path_key=PATH_KEY,
     )
     return npu_rearrange_present_to_past(
         outputs, out_names, n_layers, old_valid_past_len=pos,
@@ -199,6 +206,7 @@ def absorb_bonus(
         bonus_id,
         position=bonus_position,
         valid_past_len=bonus_position,
+        path_key=PATH_KEY,
     )
     next_past = npu_rearrange_present_to_past(
         outputs, out_names, n_layers, old_valid_past_len=bonus_position

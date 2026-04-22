@@ -114,6 +114,7 @@ def draft_k_tokens_pmin(
             drafts[i],
             position=L + i,
             valid_past_len=L + i,
+            path_key=PATH_KEY,
         )
         past_snapshots.append(
             npu_rearrange_present_to_past(

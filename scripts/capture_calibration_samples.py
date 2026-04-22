@@ -2,7 +2,7 @@
 
 Runs CPU FP32 ONNX (Qwen3-0.6B, dynamic past_len) on the existing prompt
 fixtures, snapshots model inputs at selected decode positions, and saves
-them in the exact shape AI Hub's pathbmask compile expects for its
+them in the exact shape AI Hub's pathbmask/pathb compile expects for its
 `calibration_data` kwarg on `submit_compile_job`.
 
 Two bundles (research question: does cheap step-0-only calibration match
@@ -14,6 +14,13 @@ realistic multi-position calibration?):
     --bundle B    1 decode position per prompt (step 0 only).
                   20 samples total. ~1.1 GB at ctx=256.
 
+Path variants (must match the compile-time --path):
+
+    --path pathbmask  59 inputs. attention_bias as the trailing input.
+    --path pathb      61 inputs. attention_bias + position_ids_cos +
+                      position_ids_sin (rotary hoisted). Required for
+                      w4a16 PTQ (inline rotary fails QNN op-validation).
+
 Output format: single .npz with each ONNX input key as a stacked array of
 shape [n_samples, ...]. Reconstruct the DatasetEntries dict via
 `load_dataset_entries(npz_path)` at upload time.
@@ -23,8 +30,9 @@ Shapes are driven by --ctx (= CONTEXT_MAX) to match what the AI Hub
 compile will see in `input_specs`.
 
 Run:
-    .venv\\Scripts\\python.exe scripts\\capture_calibration_samples.py --bundle A --ctx 256 --out models\\calibration\\bundle_a_ctx256.npz
-    .venv\\Scripts\\python.exe scripts\\capture_calibration_samples.py --bundle B --ctx 256 --out models\\calibration\\bundle_b_ctx256.npz
+    .venv\\Scripts\\python.exe scripts\\capture_calibration_samples.py --bundle A --path pathbmask --ctx 256 --out models\\calibration\\bundle_a_ctx256.npz
+    .venv\\Scripts\\python.exe scripts\\capture_calibration_samples.py --bundle A --path pathb     --ctx 256 --out models\\calibration\\bundle_a_pathb_ctx256.npz
+    .venv\\Scripts\\python.exe scripts\\capture_calibration_samples.py --bundle B --path pathb     --ctx 256 --out models\\calibration\\bundle_b_pathb_ctx256.npz
 
 Add --upload to push to AI Hub as a named dataset after local save.
 """
@@ -63,6 +71,36 @@ BUNDLE_STEPS = {
     "A": [5, 25, 60],
     "B": [0],
 }
+
+# Qwen3-0.6B rotary params. Source of truth: models/qwen3-0.6b-optimum/config.json
+# (head_dim=128, rope_theta=1e6, rope_scaling=null, attention_scaling=1.0).
+# The formula must stay in sync with scripts/rewrite_qwen3_pathb.py's seam —
+# Cast_4/5 in the source graph compute cos/sin from position_ids via
+# Unsqueeze(position_ids) -> Cast(fp32) -> Concat([freqs, freqs]) -> Cos/Sin,
+# with inv_freq = 1 / rope_theta^(arange(0, head_dim, 2) / head_dim).
+ROPE_THETA = 1_000_000.0
+HEAD_DIM = 128
+
+
+def rope_tables(position_id: int,
+                head_dim: int = HEAD_DIM,
+                rope_theta: float = ROPE_THETA) -> tuple[np.ndarray, np.ndarray]:
+    """cos/sin for one decode step. Shape [1, 1, head_dim] float32 each.
+
+    Verified end-to-end on x86: swapping the inline /model/rotary_emb/*
+    subgraph for these two tensors produced cos=1.000000 on both
+    pos=0 zero-KV and pos=5 synthetic-past_kv probes against the optimum
+    source ONNX (see `status_x86.md` session 2 and
+    `scripts/probe_pathb_equivalence.py`).
+    """
+    inv_freq = 1.0 / (
+        rope_theta ** (np.arange(0, head_dim, 2, dtype=np.float32) / head_dim)
+    )
+    freqs = position_id * inv_freq                     # [head_dim / 2]
+    emb = np.concatenate([freqs, freqs], axis=-1)      # [head_dim]
+    cos = np.cos(emb)[None, None, :].astype(np.float32)  # [1, 1, head_dim]
+    sin = np.sin(emb)[None, None, :].astype(np.float32)
+    return cos, sin
 
 
 def _safe_repr(s: str) -> str:
@@ -215,6 +253,7 @@ def capture_for_prompt(
     prompt: str,
     decode_steps: list[int],
     ctx: int,
+    path_key: str,
 ) -> dict[int, dict[str, np.ndarray]]:
     """Prefill prompt, greedy-decode up to max(decode_steps), snapshot inputs
     at each requested step. Returns {step_idx: {input_name: ndarray}}.
@@ -256,6 +295,14 @@ def capture_for_prompt(
             }
             sample.update(pad_past_to_npu_ctx(cur_past, valid_past_len, ctx, cfg))
             sample["attention_bias"] = build_attention_bias(valid_past_len, ctx)
+            if path_key == "pathb":
+                # Rotary hoisted: feed cos/sin as graph inputs. Must sit
+                # AFTER attention_bias to match build_input_specs' trailing
+                # dict order, which is in turn locked to the ONNX graph's
+                # declared input order by the rewrite script.
+                cos, sin = rope_tables(cur_pos)
+                sample["position_ids_cos"] = cos
+                sample["position_ids_sin"] = sin
             samples[step] = sample
         if step == max_step:
             break
@@ -351,6 +398,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle", choices=("A", "B"), required=True)
     parser.add_argument("--ctx", type=int, default=256)
+    parser.add_argument(
+        "--path", choices=("pathbmask", "pathb"), default="pathbmask",
+        help="compile graph variant. pathb adds position_ids_cos/sin samples.",
+    )
     parser.add_argument("--out", type=Path, required=True, help="output .npz path")
     parser.add_argument(
         "--upload", action="store_true",
@@ -365,6 +416,7 @@ def main() -> int:
     decode_steps = BUNDLE_STEPS[args.bundle]
     print(f"=== Lever C calibration capture ===")
     print(f"  bundle       : {args.bundle}")
+    print(f"  path         : {args.path}")
     print(f"  ctx          : {args.ctx}  (past_len={args.ctx - 1})")
     print(f"  decode_steps : {decode_steps}")
     print(f"  out          : {args.out}")
@@ -393,7 +445,9 @@ def main() -> int:
     t_start = time.perf_counter()
     for i, (src, prompt) in enumerate(prompts):
         t0 = time.perf_counter()
-        per_prompt = capture_for_prompt(sess, cfg, tok, prompt, decode_steps, args.ctx)
+        per_prompt = capture_for_prompt(
+            sess, cfg, tok, prompt, decode_steps, args.ctx, args.path,
+        )
         elapsed = time.perf_counter() - t0
         P = len(tok.encode(prompt).ids)
         for step_idx in sorted(per_prompt):

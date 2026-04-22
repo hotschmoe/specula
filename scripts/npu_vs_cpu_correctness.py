@@ -43,6 +43,7 @@ Numerical expectations (informational, not strict tolerances):
 Run:
     .venv\\Scripts\\python.exe scripts\\npu_vs_cpu_correctness.py --path patha
     .venv\\Scripts\\python.exe scripts\\npu_vs_cpu_correctness.py --path pathbmask
+    SPECULA_NPU_VARIANT=w4a16-a .venv\\Scripts\\python.exe scripts\\npu_vs_cpu_correctness.py --path pathb
 """
 
 from __future__ import annotations
@@ -68,6 +69,7 @@ from npu_load_qwen3_bin import (  # noqa: E402
     VARIANT,
     build_ep_context_wrapper,
     load_wrapper,
+    rope_tables,
 )
 
 _VARIANT_SUFFIX = f".{VARIANT}" if VARIANT else ""
@@ -193,13 +195,21 @@ def npu_build_feed(
     the bias is all zeros; the causal / padding cases would use a
     lower-triangular 0.0 / -65504.0 matrix but that's not needed for
     the current sd.npu draft path.
+
+    Path B also requires position_ids_cos / position_ids_sin — the
+    rotary rotation is hoisted out of the compiled graph, so the host
+    computes cos/sin each step from position via rope_tables().
     """
     feed: dict[str, np.ndarray] = {
         "input_ids": np.array([[input_id]], dtype=np.int32),
         "position_ids": np.array([[position]], dtype=np.int32),
     }
-    if path_key == "pathbmask":
+    if path_key in ("pathbmask", "pathb"):
         feed["attention_bias"] = np.zeros((1, 1, 1, CONTEXT_MAX), dtype=np.float32)
+    if path_key == "pathb":
+        cos, sin = rope_tables(position)
+        feed["position_ids_cos"] = cos
+        feed["position_ids_sin"] = sin
     feed.update(npu_past)
     return feed
 
@@ -492,7 +502,7 @@ def main() -> int:
     print = functools.partial(print, flush=True)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--path", choices=("patha", "pathbmask"), required=True)
+    parser.add_argument("--path", choices=("patha", "pathbmask", "pathb"), required=True)
     args = parser.parse_args()
     path_key = args.path
 

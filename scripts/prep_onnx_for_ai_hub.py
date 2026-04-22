@@ -26,6 +26,11 @@ Multiple source variants are supported via --path; each comes from
                BOOL tensors remain downstream. Drops attention_mask input.
     pathbmask  entire BOOL mask subgraph deleted + new FP32 attention_bias
                input spliced into 28 Add_2 nodes. Zero BOOL tensors.
+    pathb      pathbmask + rotary_emb hoisted out of the graph. Adds
+               position_ids_cos / position_ids_sin as the trailing two
+               graph inputs. Required for w4a16 PTQ (inline rotary fails
+               QNN op-validation — see `docs/qwen3_perf_levers_investigation.md`
+               Lever C). Source handoff: `status_x86.md` session 2.
 
 The session 7-9 `nomask` variant is quarantined (onnxsim corruption) and
 not selectable here.
@@ -33,6 +38,7 @@ not selectable here.
 Run:
     .venv\\Scripts\\python.exe scripts\\prep_onnx_for_ai_hub.py --path patha
     .venv\\Scripts\\python.exe scripts\\prep_onnx_for_ai_hub.py --path pathbmask
+    .venv\\Scripts\\python.exe scripts\\prep_onnx_for_ai_hub.py --path pathb --ctx 256
 """
 
 import argparse
@@ -188,15 +194,28 @@ def stage(path_key: str, ctx: int = DEFAULT_CONTEXT_MAX) -> int:
     source_dir = path_cfg["source_dir"]
     staging = path_cfg["staging_dir"]
     source_onnx = source_dir / "model.onnx"
-    source_data = source_dir / "model.onnx_data"
+    # Two possible source-data names. The optimum export always emits
+    # `model.onnx_data`; the pathb rewrite emits `model.data` directly
+    # (see scripts/rewrite_qwen3_pathb.py: save_as_external_data with
+    # location="model.data"). Either is fine — staging always renames
+    # to `model.data` and `patch_external_data_refs` below is a no-op
+    # when the rename is already done upstream.
+    source_data_optimum = source_dir / "model.onnx_data"
+    source_data_prerenamed = source_dir / "model.data"
+    if source_data_optimum.exists():
+        source_data = source_data_optimum
+    elif source_data_prerenamed.exists():
+        source_data = source_data_prerenamed
+    else:
+        print(f"ERROR: external-data file missing; looked for "
+              f"{source_data_optimum.name} and {source_data_prerenamed.name} "
+              f"in {source_dir}")
+        return 2
     staged_onnx = staging / "model.onnx"
     staged_data = staging / "model.data"
 
     if not source_onnx.exists():
         print(f"ERROR: source ONNX missing at {source_onnx}")
-        return 2
-    if not source_data.exists():
-        print(f"ERROR: external-data file missing at {source_data}")
         return 2
 
     staging.mkdir(parents=True, exist_ok=True)
@@ -328,7 +347,7 @@ def stage(path_key: str, ctx: int = DEFAULT_CONTEXT_MAX) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--path", choices=("patha", "pathbmask"), required=True)
+    parser.add_argument("--path", choices=("patha", "pathbmask", "pathb"), required=True)
     parser.add_argument("--ctx", type=int, default=DEFAULT_CONTEXT_MAX,
                         help=f"compiled context window size (default: {DEFAULT_CONTEXT_MAX})")
     args = parser.parse_args()

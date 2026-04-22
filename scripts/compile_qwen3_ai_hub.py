@@ -7,18 +7,26 @@ Two-mode script:
     --submit  upload the model + submit a compile job + wait for result
               + download the .bin.
 
-Two source variants supported (session 11 handoff from x86):
+Three source variants supported:
 
     --path patha       58 inputs (input_ids, position_ids, 56 past_kv).
                        attention_mask promoted to initializer; BOOL casts
                        folded out. BOOL tensors remain downstream.
                        Hypothesis: HTP rejects Cast-to-BOOL, not BOOL
                        tensors in general.
-    --path pathbmask   59 inputs (input_ids, position_ids, attention_bias,
-                       56 past_kv). Entire BOOL mask subgraph deleted;
-                       additive FP32 bias spliced into 28 Add_2 nodes.
-                       Zero BOOL tensors anywhere. Matches Qualcomm zoo
-                       Qwen3-4B production pattern.
+    --path pathbmask   59 inputs (input_ids, position_ids, 56 past_kv,
+                       attention_bias). Entire BOOL mask subgraph
+                       deleted; additive FP32 bias spliced into 28 Add_2
+                       nodes. Zero BOOL tensors anywhere. Matches
+                       Qualcomm zoo Qwen3-4B fp16 production pattern.
+    --path pathb       61 inputs (pathbmask + position_ids_cos +
+                       position_ids_sin appended last). Rotary_emb
+                       hoisted out of the graph so cos/sin arrive as
+                       top-level float32 inputs — matches Qualcomm's
+                       w4a16 Qwen3-4B reference exactly and avoids the
+                       `rotary_emb/MatMul incorrect Value 0, expected
+                       equal to -32768` failure that blocked pathbmask
+                       at w4a16 (job j563xme75).
 
 Shape decisions (both paths, CONTEXT_MAX=512, decode-only):
     input_ids               [1, 1]            int64
@@ -34,6 +42,9 @@ Run:
     .venv\\Scripts\\python.exe scripts\\compile_qwen3_ai_hub.py --path patha --check
     .venv\\Scripts\\python.exe scripts\\compile_qwen3_ai_hub.py --path patha --submit
     .venv\\Scripts\\python.exe scripts\\compile_qwen3_ai_hub.py --path pathbmask --submit
+    .venv\\Scripts\\python.exe scripts\\compile_qwen3_ai_hub.py --path pathb --ctx 256 \\
+        --quant w4a16 --calibration-npz models/calibration/bundle_a_pathb_ctx256.npz \\
+        --quant-tag w4a16-a --submit
 """
 
 import argparse
@@ -104,16 +115,26 @@ def build_paths(path_key: str, ctx: int, quant_tag: str = "") -> dict:
     two calibration bundles). Empty tag preserves the Phase-5/5.5-Lever-B
     naming pattern for the fp16 baseline binaries.
     """
-    if path_key not in ("patha", "pathbmask"):
+    if path_key not in ("patha", "pathbmask", "pathb"):
         raise ValueError(f"unknown path_key {path_key!r}")
     ctx_suffix = f"ctx{ctx}"
     # ctx=512 keeps legacy naming to preserve existing artifacts + docs.
     staging_suffix = "-ai-hub" if ctx == DEFAULT_CONTEXT_MAX else f"-ai-hub-{ctx_suffix}"
     extra_input_specs: dict = {}
-    if path_key == "pathbmask":
+    if path_key in ("pathbmask", "pathb"):
+        # Dict insertion order defines the tail of build_input_specs; must
+        # match the graph's input ordering (attention_bias before cos/sin).
         extra_input_specs = {
             "attention_bias": ((1, 1, 1, ctx), "float32"),
         }
+    if path_key == "pathb":
+        # Rotary hoisted: cos/sin are trailing graph inputs, shape
+        # [batch_size, sequence_length, head_dim]. For the decode tier we
+        # pin batch=seq_q=1; head_dim=128 on Qwen3-0.6B (see config.json
+        # head_dim, not hidden_size // num_attention_heads — they agree
+        # for this model but the explicit field is the source of truth).
+        extra_input_specs["position_ids_cos"] = ((1, 1, 128), "float32")
+        extra_input_specs["position_ids_sin"] = ((1, 1, 128), "float32")
     tag_suffix = f".{quant_tag}" if quant_tag else ""
     job_quant_suffix = f"-{quant_tag}" if quant_tag else "-fp16"
     return {
@@ -128,7 +149,7 @@ def build_paths(path_key: str, ctx: int, quant_tag: str = "") -> dict:
 
 # Legacy alias: module-level PATHS stays for backward compatibility with
 # any caller that still imports it. Points at the default (ctx=512) tier.
-PATHS: dict[str, dict] = {k: build_paths(k, DEFAULT_CONTEXT_MAX) for k in ("patha", "pathbmask")}
+PATHS: dict[str, dict] = {k: build_paths(k, DEFAULT_CONTEXT_MAX) for k in ("patha", "pathbmask", "pathb")}
 
 
 def build_input_specs(cfg: dict, extra_input_specs: dict, ctx: int = DEFAULT_CONTEXT_MAX) -> dict:
@@ -140,7 +161,11 @@ def build_input_specs(cfg: dict, extra_input_specs: dict, ctx: int = DEFAULT_CON
     input_specs matches the order of graph.input in the uploaded ONNX.
     For pathbmask, the x86-side rewrite appends `attention_bias` as the
     LAST graph input (after 56 past_kv entries), so we have to append
-    `extra_input_specs` at the end, not insert it near the top.
+    `extra_input_specs` at the end, not insert it near the top. For
+    pathb the tail grows by two more (`position_ids_cos`,
+    `position_ids_sin`) — the rewrite inserts them right after
+    attention_bias, and extra_input_specs's dict-insertion order here
+    must match that exactly.
     """
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]
@@ -489,7 +514,7 @@ def submit_mode(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--path", choices=("patha", "pathbmask"), required=True)
+    parser.add_argument("--path", choices=("patha", "pathbmask", "pathb"), required=True)
     parser.add_argument("--ctx", type=int, default=DEFAULT_CONTEXT_MAX,
                         help=f"compiled context window size (default: {DEFAULT_CONTEXT_MAX})")
     parser.add_argument(

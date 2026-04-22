@@ -54,7 +54,8 @@ each lever's **Result** subsection below.
 | Lever C W4A16 attempt 1 (jp4x74ll5) | FAILED | — | — | — | calibration_data order bug, fixed 372e17a |
 | Lever C W4A16 attempt 2 (j563xme75) | FAILED | — | — | — | rotary_emb op-lowering; needs Path B graph rewrite |
 | Lever C W4A16 — pathb x86 surgery | DELIVERED | — | — | — | x86 produced `models/qwen3-0.6b-pathb/`, cos=1.0 vs source, rotary hoisted |
-| Lever C W4A16 retry on pathb | PENDING X2E | — | — | — | calibration regen + compile + sweep |
+| Lever C W4A16 — pathb X2E plumbing | DELIVERED | — | — | — | 61-input schema + cos/sin runtime wiring landed; Bundle A calibration captured (60 samples × 61 inputs, 3.27 GB); `--check` dry-run clean |
+| Lever C W4A16 retry on pathb | PENDING AI HUB | — | — | — | submit + probe + sweep |
 
 Battery→AC delta on the same binary is ~+27% — a reminder that all
 lever comparisons must be AC-vs-AC to avoid thermal-confound swamping
@@ -452,19 +453,29 @@ def rope_tables(position_id, head_dim=128, rope_theta=1_000_000.0):
 
 1. Extend `scripts/compile_qwen3_ai_hub.py::build_input_specs` for
    pathb to append the two new inputs; add `pathb` to the path_key
-   choices.
+   choices. **[done this session]**
 2. Regenerate calibration bundles via
    `scripts/capture_calibration_samples.py` targeting pathb's 61-input
    schema (add cos/sin samples per decode step, computed from
    position_ids with Qwen3's rope_theta=1e6, attention_scaling
    preserved if kept in-graph per option (b) in the export doc).
+   **[done this session — `models/calibration/bundle_a_pathb_ctx256.npz`,
+   60 samples × 61 inputs, 3.27 GB]**
 3. Submit `--quant w4a16 --calibration-npz bundle_a_pathb_ctx256.npz`.
+   `--check` dry-run green (schema match 61/61, specs align with
+   uploaded ONNX header after ORT-BASIC fold 7131→2054 nodes).
+   **[submit pending]**
 4. Extend `scripts/npu_load_qwen3_bin.py::describe_inputs` and the
    runtime probe / outer loop to compute cos/sin each decode step
    and feed them to `session.run()`. Shape / ordering in the feed
-   dict must match input_specs.
+   dict must match input_specs. **[done this session — shared
+   `rope_tables(position, head_dim=128, rope_theta=1e6)` helper in
+   `npu_load_qwen3_bin.py`; threaded through `npu_single_step_short_prompt`,
+   `npu_build_feed`, the sync + async outer loops via `SPECULA_NPU_PATH`
+   env var; sweep CSV filename picks up the active PATH_KEY]**
 5. Re-run the correctness probe (cos ≥ 0.95 post-quant tolerated)
    and the AC sweep; compare against the 18.12 t/s fp16 baseline.
+   **[blocked on step 3]**
 
 **Budget estimate.** ~0.5 session x86 side (ONNX surgery is scoped and
 verification is cheap on x86). ~1.5 sessions X2E side (regenerate

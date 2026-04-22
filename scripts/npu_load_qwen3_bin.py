@@ -10,10 +10,12 @@ The .bin AI Hub downloaded is a RAW QNN context binary (header bytes
 hand-build a tiny ONNX whose single node is an EPContext referencing
 the .bin, then load that.
 
-Two source variants supported (matches scripts/compile_qwen3_ai_hub.py):
+Three source variants supported (matches scripts/compile_qwen3_ai_hub.py):
 
     --path patha       58 inputs: input_ids + position_ids + 56 past_kv.
     --path pathbmask   59 inputs: above + attention_bias (FP32 additive).
+    --path pathb       61 inputs: pathbmask + position_ids_cos +
+                        position_ids_sin (rotary hoisted out of graph).
 
 ORT-QNN version dance (see docs/npu_ort_qnn_version_match.md):
 
@@ -28,6 +30,7 @@ ORT-QNN version dance (see docs/npu_ort_qnn_version_match.md):
 Run:
     .venv\\Scripts\\python.exe scripts\\npu_load_qwen3_bin.py --path patha
     .venv\\Scripts\\python.exe scripts\\npu_load_qwen3_bin.py --path pathbmask
+    SPECULA_NPU_VARIANT=w4a16-a .venv\\Scripts\\python.exe scripts\\npu_load_qwen3_bin.py --path pathb
 """
 
 import argparse
@@ -67,6 +70,30 @@ _VARIANT_SUFFIX = f".{VARIANT}" if VARIANT else ""
 # downstream analysis code stays robust to the qairt naming convention.
 LOGITS_OUTPUT_NAME = "output_0"
 
+# Qwen3-0.6B RoPE params (config.json: head_dim=128, rope_theta=1e6,
+# attention_scaling=1.0). Path B hoists the rotary_emb subgraph out of
+# the compiled binary — callers feed pre-computed cos/sin per decode
+# step. Formula matches the optimum export's seam precisely; verified
+# cos=1.000000 vs the source graph on x86 (see status_x86.md session 2
+# and scripts/probe_pathb_equivalence.py). For Qwen3.5 with non-1.0
+# attention_scaling, fold the scalar into cos/sin here.
+ROPE_THETA = 1_000_000.0
+ROPE_HEAD_DIM = 128
+
+
+def rope_tables(position_id: int,
+                head_dim: int = ROPE_HEAD_DIM,
+                rope_theta: float = ROPE_THETA) -> tuple[np.ndarray, np.ndarray]:
+    """cos/sin for one decode step. Shape [1, 1, head_dim] float32 each."""
+    inv_freq = 1.0 / (
+        rope_theta ** (np.arange(0, head_dim, 2, dtype=np.float32) / head_dim)
+    )
+    freqs = position_id * inv_freq
+    emb = np.concatenate([freqs, freqs], axis=-1)
+    cos = np.cos(emb)[None, None, :].astype(np.float32)
+    sin = np.sin(emb)[None, None, :].astype(np.float32)
+    return cos, sin
+
 
 def _bin_path(path_key: str) -> Path:
     return REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.{path_key}{_VARIANT_SUFFIX}.bin"
@@ -92,7 +119,8 @@ def describe_inputs(cfg: dict, path_key: str) -> list[tuple[str, list[int], int]
       * `--truncate_64bit_io` casts INT64 IO to INT32.
 
     Path B-mask additionally has `attention_bias` (FP32, additive)
-    as an input.
+    as an input. Path B extends that with `position_ids_cos` +
+    `position_ids_sin` (rotary hoisted out of the graph).
     """
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]
@@ -108,9 +136,12 @@ def describe_inputs(cfg: dict, path_key: str) -> list[tuple[str, list[int], int]
     # Order matters for the EPContext wrapper's declared IO to align with the
     # compiled binary. Path B-mask's ONNX has `attention_bias` as the last
     # graph input (after all past_kv entries) — see compile_qwen3_ai_hub's
-    # build_input_specs comment.
-    if path_key == "pathbmask":
+    # build_input_specs comment. Path B then appends cos/sin after that.
+    if path_key in ("pathbmask", "pathb"):
         inputs.append(("attention_bias", [1, 1, 1, CONTEXT_MAX], TensorProto.FLOAT))
+    if path_key == "pathb":
+        inputs.append(("position_ids_cos", [1, 1, head_dim], TensorProto.FLOAT))
+        inputs.append(("position_ids_sin", [1, 1, head_dim], TensorProto.FLOAT))
     return inputs
 
 
@@ -256,7 +287,7 @@ def main() -> int:
     print = functools.partial(print, flush=True)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--path", choices=("patha", "pathbmask"), required=True)
+    parser.add_argument("--path", choices=("patha", "pathbmask", "pathb"), required=True)
     args = parser.parse_args()
 
     bin_path = _bin_path(args.path)

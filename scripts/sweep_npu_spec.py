@@ -158,7 +158,7 @@ def run_sweep(
                 row = {
                     "timestamp": _ts(),
                     "target": "Qwen3-8B-Q4_K_M.gguf",
-                    "draft": "qwen3_0_6b_draft_v81_ctx512.pathbmask.bin",
+                    "draft": f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.{PATH_KEY}.bin",
                     "backend": "npu-draft+cpu-target",
                     "threads": 18,
                     "draft_max": k,
@@ -259,7 +259,7 @@ def main() -> int:
     mode_tag = args.mode if args.p_min == 0.0 else f"{args.mode}-pmin{args.p_min:g}"
     csv_path = (
         REPO_ROOT / "results"
-        / f"spec-npu-Qwen3-8B-Q4_K_M-vs-Qwen3-0.6B-pathbmask-{mode_tag}-{ts}.csv"
+        / f"spec-npu-Qwen3-8B-Q4_K_M-vs-Qwen3-0.6B-{PATH_KEY}-{mode_tag}-{ts}.csv"
     )
     print(f"  csv out    : {csv_path}")
 

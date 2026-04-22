@@ -61,7 +61,7 @@ from tokenizers import Tokenizer
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from npu_load_qwen3_bin import CONTEXT_MAX, LOGITS_OUTPUT_NAME  # noqa: E402
+from npu_load_qwen3_bin import CONTEXT_MAX, LOGITS_OUTPUT_NAME, rope_tables  # noqa: E402
 from npu_vs_cpu_correctness import (  # noqa: E402
     CONFIG_JSON,
     CPU_ONNX,
@@ -206,13 +206,16 @@ def npu_single_step_short_prompt(
     input_id: int,
     position: int,
     valid_past_len: int,
+    path_key: str = "pathbmask",
 ) -> tuple[np.ndarray, list[np.ndarray], list[str]]:
-    """Single decode step on NPU Path B-mask with masked bias.
+    """Single decode step on NPU Path B-mask / Path B with masked bias.
 
     Feeds a 511-slot past (zero-padded beyond `valid_past_len`) and an
-    attention_bias that -65504's out the padding slots. Returns
-    (logits, present_outputs, output_names) so the caller can reshape
-    the present KV for the next step.
+    attention_bias that -65504's out the padding slots. For path_key
+    == "pathb", additionally feeds rope_tables(position) as
+    position_ids_cos / position_ids_sin. Returns (logits,
+    present_outputs, output_names) so the caller can reshape the
+    present KV for the next step.
     """
     out_names = [o.name for o in sess.get_outputs()]
     logits_idx = out_names.index(LOGITS_OUTPUT_NAME)
@@ -221,6 +224,10 @@ def npu_single_step_short_prompt(
         "position_ids": np.array([[position]], dtype=np.int32),
         "attention_bias": build_masked_bias(valid_past_len),
     }
+    if path_key == "pathb":
+        cos, sin = rope_tables(position)
+        feed["position_ids_cos"] = cos
+        feed["position_ids_sin"] = sin
     feed.update(npu_past)
     outputs = sess.run(None, feed)
     return outputs[logits_idx][0, -1], outputs, out_names
@@ -278,9 +285,13 @@ def main() -> int:
         "--prompt-idx", type=int, default=0,
         help="humaneval fixture row index (default: 0 = fibonacci)",
     )
+    parser.add_argument(
+        "--path", choices=("pathbmask", "pathb"), default="pathbmask",
+        help="compile graph variant (must match the loaded .bin).",
+    )
     args = parser.parse_args()
 
-    path_key = "pathbmask"
+    path_key = args.path
     print(f"=== step 8 gate - short-prompt NPU probe ({path_key}) ===\n")
 
     if not CPU_ONNX.exists():
@@ -333,7 +344,8 @@ def main() -> int:
     npu_past = pad_cpu_past_to_npu(cpu_past, prompt_len, cfg)
     t0 = time.perf_counter()
     npu_logits, npu_outputs, npu_out_names = npu_single_step_short_prompt(
-        npu_sess, npu_past, next_id, prompt_len, valid_past_len=prompt_len
+        npu_sess, npu_past, next_id, prompt_len,
+        valid_past_len=prompt_len, path_key=path_key,
     )
     elapsed_ms = (time.perf_counter() - t0) * 1000
     npu_argmax = int(np.argmax(npu_logits))
@@ -408,7 +420,8 @@ def main() -> int:
     npu_valid = prompt_len + 1
     for _ in range(n_multi - 1):
         step_logits, step_outputs, step_out_names = npu_single_step_short_prompt(
-            npu_sess, next_past, npu_input, npu_pos, valid_past_len=npu_valid
+            npu_sess, next_past, npu_input, npu_pos,
+            valid_past_len=npu_valid, path_key=path_key,
         )
         nxt = int(np.argmax(step_logits))
         npu_stream.append(nxt)
