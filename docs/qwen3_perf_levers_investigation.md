@@ -55,7 +55,8 @@ each lever's **Result** subsection below.
 | Lever C W4A16 attempt 2 (j563xme75) | FAILED | — | — | — | rotary_emb op-lowering; needs Path B graph rewrite |
 | Lever C W4A16 — pathb x86 surgery | DELIVERED | — | — | — | x86 produced `models/qwen3-0.6b-pathb/`, cos=1.0 vs source, rotary hoisted |
 | Lever C W4A16 — pathb X2E plumbing | DELIVERED | — | — | — | 61-input schema + cos/sin runtime wiring landed; Bundle A calibration captured (60 samples × 61 inputs, 3.27 GB); `--check` dry-run clean |
-| Lever C W4A16 retry on pathb | PENDING AI HUB | — | — | — | submit + probe + sweep |
+| Lever C W4A16 pathb compile job `jg93r1jqg` | SUCCESS | — | — | — | 100 min total (937s upload + 517s dataset + ~4600s PTQ); .bin 876 MB; rotary fix worked (no op-validation failure). **BUT binary is unusable — see next row.** |
+| Lever C W4A16 pathb runtime load | BLOCKED (AI HUB BUG) | — | — | — | ORT-QNN forward pass fails with "ORT Tensor data size does not match QNN tensor data size". Root cause: AI Hub's driver drops `past_key_values.0.key` from the qairt-quantizer `--preserve_io_datatype` list (converter list has 116 names, quantizer list has 115 — first name silently omitted). Layer-0 key is uint8-quantized unintentionally; rest of preserved IO is fp32. See bug report detail below. |
 
 Battery→AC delta on the same binary is ~+27% — a reminder that all
 lever comparisons must be AC-vs-AC to avoid thermal-confound swamping
@@ -492,6 +493,66 @@ options, in decreasing order of appeal:
 - **Close Lever C negative, pivot to R2 (draft-p-min).**
 - **Genie pivot for larger draft.** Phase 6 territory; Qwen3-4B is
   too big as a draft of 8B target (ratio < 2× kills spec-decode math).
+
+**AI Hub compile bug surfaced by pathb w4a16 (2026-04-22, job
+`jg93r1jqg`).** Compile succeeded structurally — rotary_emb hoisting
+cleared the op-validation failure that blocked j563xme75 — but the
+resulting `.bin` is unusable at runtime. ORT-QNN 1.24.4 rejects the
+forward pass with:
+
+```
+qnn_model.cc:476 onnxruntime::qnn::QnnModel::ExecuteGraph
+  ORT Tensor data size does not match QNN tensor data size.
+```
+
+**Root cause** (reproducible from
+`results/aihub-compile-jg93r1jqg-pathb-w4a16-a/jg93r1jqg.log`): AI
+Hub's compile driver mis-formats the `--preserve_io_datatype` list
+for the qairt-quantizer step. The qairt-CONVERTER invocation receives
+116 names (correct — all 56 past_kv + attention_bias + cos/sin + 57
+outputs, starting with `past_key_values.0.key`). The qairt-QUANTIZER
+invocation receives **115 names** (starting with
+`past_key_values.0.value`). **`past_key_values.0.key` is silently
+dropped from the preserve list** and therefore gets uint8-quantized
+at IO boundary while every other past_kv slot stays fp32. At runtime
+the wrapper declares layer-0 key as float32 (4 bytes/elem); the
+binary expects uint8 (1 byte/elem) → 4× size mismatch → ExecuteGraph
+fails.
+
+Evidence (both commands grep'd straight from the log):
+- converter: `grep past_key_values.0.key` → found
+- quantizer: `grep past_key_values.0.key` (same log) → not found in
+  its preserve list; first past_kv name is `past_key_values.0.value`
+
+**Why fp16 binaries are unaffected:** the fp16 path skips the
+qairt-quantizer step entirely (no PTQ needed), so the bug has no
+way to fire. That's why the pathbmask-fp16 baseline works and pathb-
+w4a16 doesn't — same compile options, different code path
+server-side.
+
+**Workaround options** (escalating, none yet tried):
+1. **Prepend a sacrificial preserve-first input**: add an unused
+   float32 dummy input (e.g. `_preserve_guard`) as the lexicographic
+   first preserve candidate. If AI Hub's `.pop(0)`-equivalent strips
+   the dummy, our real inputs survive. Requires an extra x86
+   ONNX-surgery pass.
+2. **ORT-side quantization of layer-0 key only.** Recover the uint8
+   scale/offset from the binary's embedded encodings, quantize
+   float32 layer-0 key at decode time, dequantize layer-0 key's
+   present output. Single-tensor correction; ~50 LOC but needs
+   encoding extraction from the `.bin` (not trivial without
+   `qairt-dlc-to-json` locally).
+3. **File a bug with Qualcomm AI Hub** and wait. Correct long-term
+   fix; not bounded for this session.
+
+**Decision for this session (2026-04-22):** document and commit the
+finding, close Phase 5.5 Lever C as BLOCKED on AI Hub compile bug.
+Next session can pick option 1 (cheapest workaround), option 2
+(pure runtime), or file the bug and retry with a future AI Hub
+release. The 18.12 t/s fp16 baseline (Lever B) remains the current
+Phase 5.5 high-water mark; the compile pipeline is proven end-to-end
+for the pathb schema so a clean retry is a day's work once the bug
+is resolved or a workaround is chosen.
 
 ---
 

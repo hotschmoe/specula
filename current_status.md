@@ -1,5 +1,31 @@
 # specula -- current status
 
+Last updated: 2026-04-22 (session 14 -- **Phase 5.5 Lever C — pathb
+w4a16 compile SUCCEEDED but runtime blocked by an AI Hub compile
+driver bug.** Rotary hoisting cleared the op-validation failure that
+killed j563xme75 (job `jg93r1jqg` reached SUCCESS in 100 min; .bin
+876 MB at `models/qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-a.bin`).
+But the ORT-QNN forward pass fails with *"ORT Tensor data size does
+not match QNN tensor data size"*: AI Hub's driver mis-formats the
+`--preserve_io_datatype` list for qairt-quantizer, dropping exactly
+the first entry (`past_key_values.0.key`) — the converter gets 116
+names, the quantizer gets 115. Layer-0 key is therefore uint8-quantized
+at the IO boundary while every other past_kv stays fp32, causing a
+4× byte-count mismatch at runtime. Evidence: direct grep of both
+invocations in `results/aihub-compile-jg93r1jqg-pathb-w4a16-a/jg93r1jqg.log`.
+fp16 binaries are unaffected (no quantizer step invoked).
+Session-14 X2E plumbing is still sound and reusable: 61-input schema
+wired through `compile_qwen3_ai_hub.py`, `prep_onnx_for_ai_hub.py`,
+`capture_calibration_samples.py` (+ `rope_tables(pos)` with
+rope_theta=1e6), `npu_load_qwen3_bin.py`, probes + sweep (commit
+1423f6c). Bundle A calibration captured (60 samples × 61 inputs,
+3.27 GB). Lever B's 18.12 t/s AC baseline remains Phase 5.5's high-
+water mark. Next session picks a workaround from
+`docs/qwen3_perf_levers_investigation.md` §Lever C: prepend a
+sacrificial preserve-guard input, do ORT-side uint8 quant of just
+past_kv.0.key, or file a Qualcomm AI Hub bug ticket. See commit
+{pending} and the same doc for the full workaround matrix.)
+
 Last updated: 2026-04-22 (session 13 -- **x86 delivered Path B
 (rotary hoisted).** `models/qwen3-0.6b-pathb/`: 61 inputs (was 59),
 7,131 nodes, **zero `/model/rotary_emb/*` nodes**. CPU-equivalence
