@@ -1,0 +1,35 @@
+=== R4 zero-copy probe (ORT 1.24.4, path=patha) ===
+
+label                                             status       median_ms    p95_ms    min_ms
+----------------------------------------------------------------------------------------------------
+baseline                                          OK               72.72     74.80     71.98
++enable_htp_weight_sharing=1                      OK               73.69     74.45     70.88
++htp_graph_finalization_optimization_mode=3       OK               73.63     74.61     72.41
++rpc_control_latency=100                          OK               72.00     74.50     70.89
++rpc_control_latency=10                           OK               74.04     77.36     72.20
++vtcm_mb=8                                        OK               72.17     74.49     70.92
++qnn_context_priority=high                        OK               72.36     74.29     70.76
++htp_shared_memory=1                              OK               73.76     75.21     71.02
++enable_htp_shared_memory_allocator=1             OK               72.13     73.84     70.81
+
+--- IOBinding probe (baseline config + run_with_iobinding) ---
+mode                               median_ms    p95_ms    min_ms
+----------------------------------------------------------------------
+plain sess.run                         72.36     75.50     71.47
+run_with_iobinding                     72.15     73.47     70.71
+
+  iobinding delta: -0.3% median
+  VERDICT: within noise — likely no real-world win.
+
+=== summary ===
+baseline median: 72.72 ms
+label                                                delta
+------------------------------------------------------------
++enable_htp_weight_sharing=1                        +0.97
++htp_graph_finalization_optimization_mode=3         +0.90
++rpc_control_latency=100                            -0.72
++rpc_control_latency=10                             +1.32
++vtcm_mb=8                                          -0.56
++qnn_context_priority=high                          -0.36
++htp_shared_memory=1                                +1.03
++enable_htp_shared_memory_allocator=1               -0.59
