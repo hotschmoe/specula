@@ -244,12 +244,18 @@ def capture_for_prompt(
     for step in range(max_step + 1):
         valid_past_len = cur_past["past_key_values.0.key"].shape[2]
         if step in decode_steps:
+            # Order MUST match compile_qwen3_ai_hub.py::build_input_specs
+            # (input_ids, position_ids, past_key_values.*.{key,value},
+            # attention_bias). AI Hub's PTQ validator iterates
+            # calibration_data positionally — a dict-order drift here
+            # surfaces later as "Calibration data set has input X but
+            # expected Y" and rejects the compile.
             sample: dict[str, np.ndarray] = {
                 "input_ids": np.array([[cur_input]], dtype=np.int64),
                 "position_ids": np.array([[cur_pos]], dtype=np.int64),
-                "attention_bias": build_attention_bias(valid_past_len, ctx),
             }
             sample.update(pad_past_to_npu_ctx(cur_past, valid_past_len, ctx, cfg))
+            sample["attention_bias"] = build_attention_bias(valid_past_len, ctx)
             samples[step] = sample
         if step == max_step:
             break

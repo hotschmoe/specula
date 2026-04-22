@@ -363,13 +363,26 @@ def check_mode(
     return 0
 
 
-def _load_calibration_entries(npz_path: Path) -> dict[str, list[np.ndarray]]:
+def _load_calibration_entries(
+    npz_path: Path,
+    specs: dict,
+) -> dict[str, list[np.ndarray]]:
     """Read a calibration .npz (written by capture_calibration_samples.py),
-    return the DatasetEntries dict qai_hub.submit_compile_job expects.
+    return a DatasetEntries dict in ONNX-graph-input order.
+
+    AI Hub's PTQ validator iterates calibration_data positionally and
+    checks each slot's name against the graph's input order. If order
+    drifts — e.g. attention_bias appears before past_key_values.0.key —
+    compile fails with "Calibration data set has input 'attention_bias'
+    but expected 'past_key_values.0.key'." Rebuilding the dict keyed by
+    `specs` (which is already in the right order via build_input_specs)
+    locks correctness regardless of how the npz was saved.
     """
     loaded = np.load(str(npz_path))
     entries: dict[str, list[np.ndarray]] = {}
-    for key in loaded.files:
+    for key in specs:
+        if key not in loaded.files:
+            raise ValueError(f"calibration npz missing required input '{key}'")
         arr = loaded[key]
         entries[key] = [arr[i] for i in range(arr.shape[0])]
     return entries
@@ -412,10 +425,11 @@ def submit_mode(
         npz_gb = calibration_npz.stat().st_size / (1024**3)
         print(f"loading calibration npz {calibration_npz} ({npz_gb:.2f} GB) ...")
         t0 = time.perf_counter()
-        calibration_data = _load_calibration_entries(calibration_npz)
+        calibration_data = _load_calibration_entries(calibration_npz, specs)
         n_samples = len(next(iter(calibration_data.values())))
         print(f"  loaded {n_samples} samples × {len(calibration_data)} inputs "
-              f"in {time.perf_counter() - t0:.1f} s")
+              f"in {time.perf_counter() - t0:.1f} s (reordered to match "
+              f"ONNX graph input order)")
 
     if reuse_upload:
         print(f"reusing uploaded model_id={reuse_upload} (skipping ~15 min upload)")

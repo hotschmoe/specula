@@ -317,10 +317,23 @@ Infrastructure landed this session:
   samples), each with a `.manifest.json` describing shapes, dtypes,
   source prompts, and capture positions.
 
-**In flight.** Bundle A compile submitted to AI Hub. Upload phase
-(~2.8 GB model + calibration, home-connection-bound at ~1.7 MB/s)
-dominates the first ~25 min; compile itself then takes 25-40 min.
-Output will be `models/qwen3_0_6b_draft_v81_ctx256.pathbmask.w4a16-a.bin`.
+**Gotcha learned this session (commit TBD).** AI Hub's PTQ validator
+iterates `calibration_data` positionally and checks each slot against
+the ONNX graph's `graph.input[i].name` — key-set equality is not
+enough, ordering matters. First submit failed at ~120s with
+*"Calibration data set has input 'attention_bias' but expected
+'past_key_values.0.key'"* because the capture script built per-sample
+dicts as (input_ids, position_ids, **attention_bias**, past_kv…),
+but the ONNX graph has attention_bias LAST (after all 56 past_kv
+entries, per build_input_specs). Fix: rebuild DatasetEntries by
+iterating `specs` (already in graph order) in the compile script;
+also fixed `capture_for_prompt` to save in the right order.
+
+**In flight (retry).** Bundle A compile resubmitted with
+`--reuse-upload mq23729wn` (model already on AI Hub from the first
+failed attempt, ~15 min upload skipped). Calibration re-upload in
+progress (~32 min at ~1.7 MB/s for 3.27 GB); compile itself 25-40
+min thereafter. Output: `models/qwen3_0_6b_draft_v81_ctx256.pathbmask.w4a16-a.bin`.
 Correctness probe + sweep flow pending compile completion.
 
 ---
