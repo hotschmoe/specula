@@ -3,10 +3,12 @@
 **Status:** in-progress 2026-04-23. Phases 0-2 complete; Phase 3 hit the
 single-bin HTP ceiling (structural, not a bug); Phase 5 converter +
 quantizer + ctx-bin-gen + wrapper + HTP-load all green end to end.
-Oracle runs but cos vs Qualcomm is ~0 (gibberish output) because the
-per-part calibration is mis-matched across seams — see Phase 5g
-below. Fix path: iterative calibration using upstream's quantized
-output as downstream's calibration input.
+Phase 5h implemented position-spread + chat-template calibration
+(per Phase 5g fix path) and discovered the seam clipping was only
+the *surface* bug — output now varies per step instead of looping,
+but cos is still random (-0.027). Internal per-layer quantization
+appears under-calibrated despite min-max asymmetric flags. Next
+candidates enumerated at end of Phase 5h.
 
 ## Goal
 
@@ -457,6 +459,90 @@ L11's calibrated range widens to cover ±16000.
 compiling-in-the-loop (runs upstream HTP sessions to stage
 downstream calibration); useful for future iterations but NOT the
 fix for this specific bug.
+
+### 5h. Position-spread + chat-template calibration — RED, deeper issue surfaced
+
+Implemented the Phase 5g fix path and extended it:
+
+1. `capture_calibration_qwen3_4b.py` now snapshots at positions
+   `{0, 1, 5, 10, 20}` via a single forward per prompt of length
+   `max(positions)+1` (efficient — one prefill, multi-slice).
+2. `prompts/calibration_chat.jsonl` provides 10 chat-templated
+   prompts whose position-0 token is **151644** (`<|im_start|>`),
+   matching the runtime prompt distribution instead of humaneval's
+   `def`-token (750) preamble.
+3. `qairt_quantize_4b_parts.py` now passes explicit
+   `--act_quantizer_calibration min-max --act_quantizer_schema
+   asymmetric`. The bare default silently applies outlier-rejection
+   despite the help text claiming `min-max` is default — a
+   diagnostic `--dump_encoding_json` run on part 2 showed L11 OUT
+   at **±11.5** even when position-0 samples in the raws contained
+   ±4000 values.
+
+Effect on seam encodings (part 2 → part 3, L11):
+
+| run | part2 OUT scale/range | part3 IN scale/range |
+|---|---|---|
+| 5g (humaneval pos=10 only, default flags) | 2.9e-04 / [-7.5, +11.5] | 2.9e-04 / [-7.5, +11.5] |
+| 5h (chat, 5 positions, min-max asymmetric) | 2.8e-02 / [-402, +1444] | **3.2e-01 / [-4596, +16136]** ✓ |
+| 5h + part2 L11 OUT encoding override | 3.2e-01 / [-4596, +16136] ✓ | 3.2e-01 / [-4596, +16136] ✓ |
+
+Part 3's INPUT encoding correctly widened to ±16000 (min-max on
+raw calibration files). Part 2's OUTPUT did NOT, despite
+`--act_quantizer_calibration min-max`. Worked around by passing
+`--quantization_overrides` at convert time to force the L11 OUT
+encoding to match part 3's IN (see
+`results/phase5_qwen3_4b_bundle/part2_encoding_overrides.json`).
+
+Oracle result per stage:
+
+| run | first-decode cos | decode | gate (≥0.95) |
+|---|---:|---|---|
+| 5g baseline | -0.005 | stuck `'Ġcls Ġcls Ġcls'` | RED |
+| 5h humaneval × 5 positions (default flags) | -0.011 | stuck `'Ped Ped Ped'` | RED |
+| 5h chat × 5 positions + min-max asym (stale dlc.json) | -0.010 | stuck `'Ped Ped Ped'` | RED |
+| 5h chat × 5 positions + min-max asym (fresh dlc.json) | -0.018 | varied `' carr iza arily cheduling'` | RED |
+| 5h + L11 seam override (matched ±16000) | -0.027 | varied `' carrivist kotities onic'` | RED |
+
+**Finding:** Widening L11 seam encoding removed the stuck-argmax
+pathology (output now varies per step) but cos is still random.
+That means the remaining clipping is at *internal* tensors within
+each part — attention Q/K/V projections, softmax outputs, MLP
+gate/up/down projections, o_proj outputs — each with its own
+encoding. qairt-quantizer's internal QNN_CPU calibration forward
+appears to under-count the runtime activation range even for
+intermediate tensors despite `min-max asymmetric` being set.
+
+Part 3's IN worked because the encoding was computed from the raw
+calibration file directly (true min-max on bytes). Part 2's OUT
+and internal tensors are computed from the quantizer's internal
+forward, which gives narrower ranges. We don't know yet whether
+this is an fp16 intermediate-precision quirk in QNN_CPU backend or
+a systemic calibration algorithm behavior.
+
+`--quantization_overrides` scales per-tensor and isn't feasible
+for the hundreds of internal tensors involved. Likely next paths
+(each a distinct Phase 5i candidate):
+
+1. **Per-channel / per-row quantization** for Matmul weights
+   (`--use_per_channel_quantization --use_per_row_quantization`)
+   — reduces weight quantization error, doesn't help calibration
+   range issue directly but should improve coherence.
+2. **Cross-Layer Equalization** (`--apply_algorithms cle`) —
+   redistributes weight magnitudes across layers to reduce peak
+   activation magnitudes, which might bring internal tensors into
+   a range the quantizer can correctly calibrate.
+3. **Iterative / compile-in-the-loop calibration**
+   (`scripts/recalibrate_4b_iterative.py`): run upstream HTP
+   sessions to stage downstream part calibration from the actual
+   quantized upstream output, not CPU-ORT. This fixes the
+   observation asymmetry between "graph input" and "internal
+   output" tensors.
+4. **Localize the divergence**: write a part-N CPU-ORT vs HTP
+   comparison probe that feeds a fixed BOS + empty past_kv input
+   through each part in isolation and reports per-output cosine
+   & max-abs-diff. Whichever part first diverges is where to
+   focus the override / recalibration effort.
 
 ### Follow-up: generalize the splitter (deferred)
 

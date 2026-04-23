@@ -13,6 +13,15 @@ prefills each prompt, then snapshots the inputs that PATHB expects:
 
 Saved as one npz with each tensor stacked along a sample-leading axis.
 
+Snapshots a configurable set of decode positions per prompt (default
+{0, 1, 5, 10, 20}) from a single forward pass covering max(positions)+1
+tokens. Wide position coverage — especially position 0 (BOS + empty
+past_kv) — exposes qairt-quantizer to the true first-decode-step
+activation ranges. Prior to this, single-position-10 calibration
+produced a ±11.5 encoding at the part2/3 seam while runtime step-0
+activations hit ±16000, saturating ~99% of the signal (see
+docs/qualcomm_reproduction_4b.md Phase 5g).
+
 Source ONNX: models/qwen3-4b-arm-optimum/model.onnx (37 hf inputs:
 input_ids + position_ids + attention_mask + 36 layers x 2 past_kv).
 Pathb ONNX: same logical model, just rotary hoisted + attention_bias
@@ -70,15 +79,30 @@ def main() -> int:
     parser.add_argument("--tokenizer", type=Path,
                         default=REPO / "models" / "qwen3-4b-arm-optimum" / "tokenizer.json")
     parser.add_argument("--prompts", type=Path,
-                        default=REPO / "prompts" / "humaneval_subset.jsonl")
+                        default=REPO / "prompts" / "calibration_chat.jsonl",
+                        help="JSONL file with a 'prompt' field per line. Default is "
+                             "chat-templated prompts whose position-0 token is 151644 "
+                             "(<|im_start|>), matching the runtime prompt distribution. "
+                             "Pass --prompts prompts/humaneval_subset.jsonl for the "
+                             "old humaneval calibration.")
     parser.add_argument("--n-prompts", type=int, default=10,
-                        help="Number of prompts to use (one calibration sample per prompt at the chosen capture position).")
-    parser.add_argument("--capture-position", type=int, default=10,
-                        help="Decode step at which to snapshot the model state. "
-                             "10 = capture mid-prefill state for typical-length prompts.")
+                        help="Number of prompts to use. One calibration sample is emitted "
+                             "per (prompt, capture-position) pair.")
+    parser.add_argument("--capture-positions", type=str, default="0,1,5,10,20",
+                        help="Comma-separated decode positions to snapshot per prompt. "
+                             "Default covers BOS (0), early-decode (1), short-prefill (5), "
+                             "mid-prefill (10), long-prefill (20) so the quantizer sees "
+                             "the full activation range at each pathb seam.")
     parser.add_argument("--out", type=Path,
                         default=REPO / "models" / "calibration" / "qwen3_4b_ctx512_a.npz")
     args = parser.parse_args()
+
+    positions = sorted({int(p) for p in args.capture_positions.split(",") if p.strip()})
+    if not positions or positions[0] < 0:
+        print(f"FATAL: invalid --capture-positions {args.capture_positions!r}")
+        return 2
+    max_position = positions[-1]
+    print(f"capture positions: {positions} (max={max_position})")
 
     print(f"loading source ONNX: {args.source_onnx}")
     t0 = time.perf_counter()
@@ -116,17 +140,12 @@ def main() -> int:
 
     for pi, prompt in enumerate(prompts):
         ids = tok.encode(prompt).ids
-        if len(ids) <= args.capture_position:
-            print(f"  skipping prompt {pi}: only {len(ids)} tokens (need > {args.capture_position})")
+        if len(ids) <= max_position:
+            print(f"  skipping prompt {pi}: only {len(ids)} tokens (need > {max_position})")
             continue
-        # Run prefill up to capture_position; we want the past_kv state AT
-        # that position (i.e. positions 0..position-1 already in cache),
-        # and the input at position itself is what gets captured.
-        # Build feed for a single forward of `capture_position+1` tokens
-        # with empty past, so present_kv outputs give us positions 0..position.
-        # Then sliced past_kv[..., :position, :] is what pathb expects at
-        # the next decode step (position).
-        run_ids = ids[: args.capture_position + 1]
+        # One forward of length max_position+1 produces present_kv for
+        # positions 0..max_position; we then slice per target position.
+        run_ids = ids[: max_position + 1]
         L = len(run_ids)
         feed = {
             "input_ids": np.array([run_ids], dtype=np.int64),
@@ -143,42 +162,35 @@ def main() -> int:
         t0 = time.perf_counter()
         outs = sess.run(None, feed)
         elapsed = time.perf_counter() - t0
-        # Map outputs by name.
         out_names = [o.name for o in sess.get_outputs()]
         out_map = dict(zip(out_names, outs))
 
-        # Build the calibration sample for the NEXT decode step (position).
-        position = args.capture_position
-        # KV cache after the prefill: present.{li}.key has shape
-        # [1, 8, position+1, 128]. pathb's pinned shape is [1, 8, 511, 128]
-        # — we right-pad with zeros (future slots are masked anyway).
         pad_to = PAST_LEN
-        for li in range(NUM_LAYERS):
-            kv_k_full = out_map[f"present.{li}.key"]      # [1,8,L,128]
-            kv_v_full = out_map[f"present.{li}.value"]    # [1,8,L,128]
-            assert kv_k_full.shape == (1, NUM_KV_HEADS, L, HEAD_DIM)
-            # We use the FIRST `position` positions (0..position-1) as past.
-            kv_k_past = kv_k_full[:, :, :position, :]
-            kv_v_past = kv_v_full[:, :, :position, :]
-            # Pad to PAST_LEN with zeros.
-            pad_k = np.zeros((1, NUM_KV_HEADS, pad_to - position, HEAD_DIM), dtype=np.float32)
-            samples[f"past_key_values.{li}.key"].append(
-                np.concatenate([kv_k_past, pad_k], axis=2).astype(np.float32)
-            )
-            samples[f"past_key_values.{li}.value"].append(
-                np.concatenate([kv_v_past, pad_k], axis=2).astype(np.float32)
-            )
+        for position in positions:
+            # past_kv = first `position` slots of present_kv, right-padded
+            # to PAST_LEN with zeros (future slots masked by attention_bias).
+            for li in range(NUM_LAYERS):
+                kv_k_full = out_map[f"present.{li}.key"]      # [1,8,L,128]
+                kv_v_full = out_map[f"present.{li}.value"]    # [1,8,L,128]
+                kv_k_past = kv_k_full[:, :, :position, :]
+                kv_v_past = kv_v_full[:, :, :position, :]
+                pad_k = np.zeros((1, NUM_KV_HEADS, pad_to - position, HEAD_DIM), dtype=np.float32)
+                samples[f"past_key_values.{li}.key"].append(
+                    np.concatenate([kv_k_past, pad_k], axis=2).astype(np.float32)
+                )
+                samples[f"past_key_values.{li}.value"].append(
+                    np.concatenate([kv_v_past, pad_k], axis=2).astype(np.float32)
+                )
 
-        # The token at this position = ids[position]
-        samples["input_ids"].append(np.array([[ids[position]]], dtype=np.int64))
-        samples["position_ids"].append(np.array([[position]], dtype=np.int64))
-        samples["attention_bias"].append(attention_bias_at(position, CTX_LEN))
-        cos, sin = rope_full_dim(position)
-        samples["position_ids_cos"].append(cos)
-        samples["position_ids_sin"].append(sin)
+            samples["input_ids"].append(np.array([[ids[position]]], dtype=np.int64))
+            samples["position_ids"].append(np.array([[position]], dtype=np.int64))
+            samples["attention_bias"].append(attention_bias_at(position, CTX_LEN))
+            cos, sin = rope_full_dim(position)
+            samples["position_ids_cos"].append(cos)
+            samples["position_ids_sin"].append(sin)
 
-        print(f"  sample {pi}: prompt_tokens={len(ids)}, prefill_len={L}, "
-              f"capture_pos={position}, prefill {elapsed:.1f}s")
+        print(f"  prompt {pi}: prompt_tokens={len(ids)}, prefill_len={L}, "
+              f"captured {len(positions)} positions in {elapsed:.1f}s")
 
     # Stack all samples and save.
     n_kept = len(samples["input_ids"])

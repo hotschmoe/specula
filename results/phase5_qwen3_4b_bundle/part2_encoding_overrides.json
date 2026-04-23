@@ -1,0 +1,16 @@
+{
+    "version": "0.6.1",
+    "activation_encodings": {
+        "/model/layers.11/Add_1_output_0": [
+            {
+                "bitwidth": 16,
+                "is_symmetric": "false",
+                "min": -4596.32,
+                "max": 16135.99,
+                "offset": -14529.0,
+                "scale": 0.3163547217845917
+            }
+        ]
+    },
+    "param_encodings": {}
+}

@@ -113,6 +113,12 @@ def main() -> int:
             "--input_list", str(list_file),
             "--weights_bitwidth", str(args.weights_bitwidth),
             "--act_bitwidth", str(args.act_bitwidth),
+            # The bare default (no flags) silently applies aggressive outlier
+            # rejection — a diagnostic on part 2 showed L11 calibrated to
+            # ±11.5 despite position-0 samples hitting ±4000. Explicit
+            # min-max asymmetric widens L11 to ±1285 using the same data.
+            "--act_quantizer_calibration", "min-max",
+            "--act_quantizer_schema", "asymmetric",
         ]
         print(f"\n=== part{idx}: qairt-quantizer ===")
         print(f"  {sys.executable} {tool} {' '.join(tool_args)}")
