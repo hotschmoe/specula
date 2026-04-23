@@ -1,5 +1,52 @@
 # specula -- current status
 
+Last updated: 2026-04-22 (session 19 — **Phase 5.5 Lever C closes
+NEGATIVE as a product: w8a16-local AC sweep mean 12.83 t/s k=2 vs
+Lever B's 18.12 t/s (−29%), 71.65% vs 81.91% accept.** Correctness
+pipeline is fully delivered (every stage works, local QAIRT compile
+bypasses AI Hub's preserve-list bug entirely) but PTQ noise on a
+0.6B draft costs ~10 pp of accept rate, and per-step latency savings
+don't compensate. Lever B's 18.12 t/s fp16 pathbmask AC remains
+Phase 5.5's high-water mark.
+
+Sessions 15-18 delivered the entire Lever C runtime stack via x86
+local QAIRT (plan `docs/phase5_local_qairt_compile.md`, findings
+`docs/phase5_local_qairt_compile_findings.md`): pathb rotary-hoisted
+w4a16 binaries load cleanly on ORT-QNN 1.24.4, quant formula
+validated (RMS 0.001%), IS_LOCAL_COMPILE dispatcher pattern-matches
+any `*-local` variant, quant_specs threaded through sync + async
+outer loops + sweep. Session 17 differential probe localised the
+w4 PTQ collapse to layer-1+ V-projection weights (value tensor cos
+0.957 at layer 0 → 0.130 at layer 1 → <0.2 all the way through
+layer 27; keys degrade gracefully via rotary smoothing). Session 18
+shotgun (7 variants, 6 distinct MD5s): **w8a16-local = first full
+gate pass** (cos 0.963/0.979, argmax ✓, multi-step 100%);
+**w4a16-local-pr soft pass** (cos 0.888, 100% greedy match, 620 MB
+— 32% smaller binary); w4a16 mse/tfe/cle all confirmed negative
+(activation-cal not the lever; CLE is a no-op on MatMul graphs);
+w8a16-local-pr soft pass (per-row hurts at w8). Session 19 on AC:
+steady-state latency (`scripts/probe_npu_steady_state_latency.py`,
+5 warmup + 25 measured per variant) shows all quantized variants
+cluster 21-24 ms/step (w4a16-local-pr fastest at 21.4 ms),
+fp16-local at ~50 ms — session-18's uniform "50 ms on battery" was
+cold-HTP + thermal noise. The 40-cell AC sweep on w8a16-local
+(async-pipelined, n_predict=200, 14.2 min) broke out as k=2 mean
+12.83 / k=3 11.79 / k=4 10.12 / k=8 6.74 t/s. Best cell p2 k=2 =
+14.39 t/s / 78.2% accept. Worst p6 k=8 = 4.73 / 26.9%.
+
+Decision: ship Lever B's 18.12 t/s AC baseline as Phase 5.5's
+final number. Document Lever C as a structurally-working PTQ
+pipeline that didn't clear the throughput bar at 0.6B draft size —
+forward-compatible with Qwen3.5 graduation where the draft is
+larger (per-step costs grow, per-step savings become worth more
+vs fixed HTTP verify overhead) and where the same local-QAIRT
+toolchain drops in unchanged. w4a16-local-pr AC sweep queued in
+background (may close some of the gap via 11% faster per-step +
+100% greedy match); results append below when complete. Commits
+48301d9 (quant_specs plumbing + steady-state probe), 435abf1
+(session-18 shotgun probes), {pending} for session-19 sweep
+writeups.)
+
 Last updated: 2026-04-22 (session 14 -- **Phase 5.5 Lever C — pathb
 w4a16 compile SUCCEEDED but runtime blocked by an AI Hub compile
 driver bug.** Rotary hoisting cleared the op-validation failure that

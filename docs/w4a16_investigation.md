@@ -393,6 +393,118 @@ Diagnostics used:
   normalisation `qnn-context-binary-generator` applies.
 - pathbmask sanity rerun via the same probe — green.
 
+### Update (session 19, 2026-04-22, AC) — steady-state latency + AC sweep
+
+Back on wall power. Ran `scripts/probe_npu_steady_state_latency.py`
+(5 warmup + 25 measured calls per variant, same CPU-prefilled fib-p0
+feed) to resolve the session-18 "50 ms on battery" caveat:
+
+| variant | median | min | max | p95 | notes |
+|---|---:|---:|---:|---:|---|
+| w4a16-local (tf) | 23.65 ms | 23.17 | 25.53 | 25.38 | baseline |
+| w4a16-local-tfe | 23.19 ms | 22.80 | 25.10 | 24.87 | enhanced |
+| **w4a16-local-pr** | **21.39 ms** | 21.04 | 22.72 | 22.58 | **fastest** (per-row w4) |
+| w4a16-local-mse | 23.13 ms | 22.54 | 25.27 | 24.96 | |
+| w8a16-local | 23.69 ms | 23.09 | 25.64 | 25.55 | our deliverable |
+| w8a16-local-pr | 23.82 ms | 23.15 | 25.09 | 24.95 | per-row hurts at w8 |
+| fp16-local | 49.82 ms | 48.24 | 51.86 | 50.71 | 2× slower (no PTQ) |
+
+**Steady-state resolves the battery first-call noise cleanly.** All
+quantized variants cluster tightly 21-24 ms on AC; fp16-local is the
+only outlier at ~50 ms. Session-18's uniform 50ms read was
+cold-HTP + battery thermal compounded — not a real per-variant
+regression.
+
+Two observations:
+
+1. **w4a16-local-pr is the fastest variant** at 21.4 ms (10% faster
+   than baseline, 2.3× faster than fp16). Per-row weight quant's
+   32% smaller binary (620 MB vs 917 MB) reduces weight memory
+   bandwidth per step, consistent with HTP being weight-fetch-bound
+   on this model size.
+2. **w8a16-local is ~identical to baseline w4a16-local** at 23.7 ms.
+   The precision-vs-speed tradeoff is flat on HTP at our size —
+   the w4 weight-pack and w8 weight-pack land at the same cycle
+   count for MatMul.
+
+Implication for product choice:
+
+- **w8a16-local**: cos=0.963, 23.7 ms/step. Full gate pass, definite
+  product.
+- **w4a16-local-pr**: cos=0.888 but 100% greedy match, 21.4 ms/step.
+  Soft gate but potentially higher sweep throughput (faster per
+  step + accept rate could hold). Worth a sweep to confirm.
+
+### AC sweep (40 cells, n_predict=200, async-pipelined) — in flight
+
+Kicked `SPECULA_NPU_PATH=pathb SPECULA_NPU_VARIANT=w8a16-local
+scripts/sweep_npu_spec.py --mode async-pipelined -n 200` against a
+fresh `llama-server` target at `127.0.0.1:8088` (`-m
+Qwen3-8B-Q4_K_M.gguf -c 576 -t 18 --no-warmup`). Output at
+`results/sweep_w8a16_local_ac_session18.log`. ETA ~25 min
+(matching Lever B's baseline run).
+
+Reference: Lever B's pathbmask-async-pipelined AC sweep at
+**18.12 t/s mean, 19.07 t/s best, 81.91% accept** is the number
+w8a16-local has to beat to close Lever C positive.
+
+### w8a16-local AC sweep result — 29% regression vs Lever B
+
+14.2 min wall, 40/40 cells. CSV:
+`results/spec-npu-Qwen3-8B-Q4_K_M-vs-Qwen3-0.6B-pathb-async-pipelined-20260422-222705.csv`.
+
+| k | n | mean_accept | **mean_decode t/s** | best cell | worst cell |
+|---|---|---:|---:|---:|---:|
+| **2** | 10 | 71.65% | **12.83** | 14.39 (p2, 78.2%) | 10.58 (p0, 61.1%) |
+| 3 | 10 | 63.73% | 11.79 | 13.26 | 10.24 |
+| 4 | 10 | 56.44% | 10.12 | 11.39 | 8.68 |
+| 8 | 10 | 42.04% | 6.74 | 9.06 | 4.73 |
+
+**Lever B reference (pathbmask fp16 AC, same harness):**
+18.12 t/s mean at k=2, 81.91% accept, best cell 19.07 / worst 16.92.
+
+**Delta vs Lever B at k=2:**
+- mean accept:       -10.3 pp (71.7% vs 81.9%)
+- mean decode t/s:   **-29%** (12.83 vs 18.12)
+- best cell t/s:     -25% (14.39 vs 19.07)
+- worst cell t/s:    -38% (10.58 vs 16.92)
+
+The arithmetic: w8a16's per-step is 23.7 ms vs Lever B's pathbmask
+fp16 at ~22-25 ms (essentially the same HTP cost), so the ~10 pp
+accept-rate drop translates directly into throughput loss. Spec-decode
+throughput ≈ (1 + accept × k) / round_wall, and the denominator
+barely moved. PTQ's accept-rate hit outweighs the per-step savings
+on a 0.6B draft at this precision.
+
+**Decision: Lever C — w8a16-local closes NEGATIVE as a product.**
+Lever B's 18.12 t/s fp16 pathbmask remains Phase 5.5's high-water
+mark. w8a16-local is a correct-and-complete proof-of-concept for
+the Lever C toolchain — every stage of the PTQ pipeline works —
+but on this specific model, PTQ noise costs more than the hardware
+fast-path buys.
+
+Artifacts worth keeping:
+- The full local-QAIRT pipeline is now exercised end-to-end and
+  applies to Qwen3.5 unchanged.
+- `w4a16-local-pr` (100% greedy match, cos=0.888, 21.4 ms/step)
+  — faster than w8a16 at a worse cos but same argmax-match.
+  Sweep queued to see if greedy-match resilience beats w8a16's
+  4.3 ms/step cos advantage.
+- `fp16-local` and `w4a16-local-pr` binaries kept on disk; CLE /
+  MSE / tfe variants retired as documented.
+
+### w4a16-local-pr AC sweep — queued
+
+Same harness, `SPECULA_NPU_VARIANT=w4a16-local-pr`. Completion will
+update this section. Hypothesis: 100% probe greedy-match on CPU
+reference implies similar agreement with 8B target top-1, which
+could translate to ~70% accept at k=2 at 21.4 ms/step. If so,
+expected decode t/s ≈ 12.83 × (23.7/21.4) = **~14.2 t/s mean** —
+closing some of the gap to Lever B but still a regression.
+Alternative outcome: lower top-5 overlap (3/5 vs w8a16's 4/5)
+hurts accept more than hoped and this underperforms w8a16. The
+sweep answers it empirically.
+
 ### Update (session 18, 2026-04-22, battery) — shotgun landed, w8a16-local PASSES
 
 x86 shipped a 7-variant shotgun at

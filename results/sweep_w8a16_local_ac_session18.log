@@ -1,0 +1,1324 @@
+=== NPU-spec sweep ===
+  prompts    : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  k-values   : [2, 3, 4, 8]
+  n_predict  : 200
+  mode       : async-pipelined  p_min=0.0
+  csv out    : C:\Users\hotschmoe\Documents\GitHub\specula\results\spec-npu-Qwen3-8B-Q4_K_M-vs-Qwen3-0.6B-pathb-async-pipelined-20260422-222239.csv
+launching llama-server:
+    C:\Users\hotschmoe\Documents\GitHub\specula\llama.cpp\build-cpu\bin\llama-server.exe -m C:\Users\hotschmoe\Documents\GitHub\specula\models\Qwen3-8B-Q4_K_M.gguf --host 127.0.0.1 --port 8088 -c 320 -t 18 --no-warmup
+    log -> C:\Users\hotschmoe\Documents\GitHub\specula\results\spec-npu-server-20260422-222239.log
+
+--- waiting for /health (timeout 180s) ---
+  server healthy
+
+--- loading CPU ONNX (FP32, dynamic past_len) ---
+  loaded in 2.8 s
+
+--- loading NPU Path B-mask binary ---
+  loading wrapper ONNX qwen3_0_6b_draft_v81_ctx256.pathb.w8a16-local.wrapper.onnx via legacy QNN EP ...
+  loaded in 1.6 s
+
+==== prompt p0 (16 toks): 'def fibonacci(n):\n    # Return the nth Fibona...' ====
+
+-- cell 1/40: p0 k=2 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=16) ---
+  elapsed           : 0.05 s
+  first candidate   : 198  -> '\n'
+   cell FAILED - continuing sweep
+
+-- cell 2/40: p0 k=3 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=16) ---
+  elapsed           : 0.06 s
+  first candidate   : 198  -> '\n'
+   cell FAILED - continuing sweep
+
+-- cell 3/40: p0 k=4 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=16) ---
+  elapsed           : 0.07 s
+  first candidate   : 198  -> '\n'
+   cell FAILED - continuing sweep
+
+-- cell 4/40: p0 k=8 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=16) ---
+  elapsed           : 0.04 s
+  first candidate   : 198  -> '\n'
+   cell FAILED - continuing sweep
+
+==== prompt p1 (25 toks): 'def binary_search(arr, target):\n    # Return ...' ====
+
+-- cell 5/40: p1 k=2 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=25) ---
+  elapsed           : 0.07 s
+  first candidate   : 3347  -> ' low'
+   cell FAILED - continuing sweep
+
+-- cell 6/40: p1 k=3 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=25) ---
+  elapsed           : 0.04 s
+  first candidate   : 3347  -> ' low'
+   cell FAILED - continuing sweep
+
+-- cell 7/40: p1 k=4 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=25) ---
+  elapsed           : 0.04 s
+  first candidate   : 3347  -> ' low'
+   cell FAILED - continuing sweep
+
+-- cell 8/40: p1 k=8 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=25) ---
+  elapsed           : 0.04 s
+  first candidate   : 3347  -> ' low'
+   cell FAILED - continuing sweep
+
+==== prompt p2 (29 toks): 'def is_palindrome(s):\n    # Return True if s ...' ====
+
+-- cell 9/40: p2 k=2 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=29) ---
+  elapsed           : 0.05 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+-- cell 10/40: p2 k=3 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=29) ---
+  elapsed           : 0.05 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+-- cell 11/40: p2 k=4 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=29) ---
+  elapsed           : 0.04 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+-- cell 12/40: p2 k=8 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=29) ---
+  elapsed           : 0.07 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+==== prompt p3 (20 toks): 'def merge_sorted(a, b):\n    # Merge two sorte...' ====
+
+-- cell 13/40: p3 k=2 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=20) ---
+  elapsed           : 0.05 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+-- cell 14/40: p3 k=3 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=20) ---
+  elapsed           : 0.04 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+-- cell 15/40: p3 k=4 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=20) ---
+  elapsed           : 0.04 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+-- cell 16/40: p3 k=8 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=20) ---
+  elapsed           : 0.04 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+==== prompt p4 (22 toks): 'def quicksort(arr):\n    # Return a new list c...' ====
+
+-- cell 17/40: p4 k=2 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=22) ---
+  elapsed           : 0.07 s
+  first candidate   : 421  -> ' if'
+   cell FAILED - continuing sweep
+
+-- cell 18/40: p4 k=3 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=22) ---
+  elapsed           : 0.05 s
+  first candidate   : 421  -> ' if'
+   cell FAILED - continuing sweep
+
+-- cell 19/40: p4 k=4 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=22) ---
+  elapsed           : 0.06 s
+  first candidate   : 421  -> ' if'
+   cell FAILED - continuing sweep
+
+-- cell 20/40: p4 k=8 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=22) ---
+  elapsed           : 0.04 s
+  first candidate   : 421  -> ' if'
+   cell FAILED - continuing sweep
+
+==== prompt p5 (21 toks): 'def count_words(text):\n    # Return a dict ma...' ====
+
+-- cell 21/40: p5 k=2 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=21) ---
+  elapsed           : 0.05 s
+  first candidate   : 4244  -> ' words'
+   cell FAILED - continuing sweep
+
+-- cell 22/40: p5 k=3 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=21) ---
+  elapsed           : 0.04 s
+  first candidate   : 4244  -> ' words'
+   cell FAILED - continuing sweep
+
+-- cell 23/40: p5 k=4 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=21) ---
+  elapsed           : 0.04 s
+  first candidate   : 4244  -> ' words'
+   cell FAILED - continuing sweep
+
+-- cell 24/40: p5 k=8 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=21) ---
+  elapsed           : 0.07 s
+  first candidate   : 4244  -> ' words'
+   cell FAILED - continuing sweep
+
+==== prompt p6 (21 toks): 'def flatten(nested):\n    # Flatten an arbitra...' ====
+
+-- cell 25/40: p6 k=2 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=21) ---
+  elapsed           : 0.07 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+-- cell 26/40: p6 k=3 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=21) ---
+  elapsed           : 0.05 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+-- cell 27/40: p6 k=4 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=21) ---
+  elapsed           : 0.04 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+-- cell 28/40: p6 k=8 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=21) ---
+  elapsed           : 0.04 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+==== prompt p7 (22 toks): 'def matrix_multiply(A, B):\n    # Multiply two...' ====
+
+-- cell 29/40: p7 k=2 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=22) ---
+  elapsed           : 0.04 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+-- cell 30/40: p7 k=3 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=22) ---
+  elapsed           : 0.04 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+-- cell 31/40: p7 k=4 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=22) ---
+  elapsed           : 0.04 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+-- cell 32/40: p7 k=8 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=22) ---
+  elapsed           : 0.06 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+==== prompt p8 (24 toks): 'class LinkedList:\n    def __init__(self):\n  ...' ====
+
+-- cell 33/40: p8 k=2 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=24) ---
+  elapsed           : 0.06 s
+  first candidate   : 501  -> ' new'
+   cell FAILED - continuing sweep
+
+-- cell 34/40: p8 k=3 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=24) ---
+  elapsed           : 0.07 s
+  first candidate   : 501  -> ' new'
+   cell FAILED - continuing sweep
+
+-- cell 35/40: p8 k=4 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=24) ---
+  elapsed           : 0.06 s
+  first candidate   : 501  -> ' new'
+   cell FAILED - continuing sweep
+
+-- cell 36/40: p8 k=8 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=24) ---
+  elapsed           : 0.06 s
+  first candidate   : 501  -> ' new'
+   cell FAILED - continuing sweep
+
+==== prompt p9 (26 toks): 'def parse_ini(text):\n    # Parse an INI-forma...' ====
+
+-- cell 37/40: p9 k=2 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=26) ---
+  elapsed           : 0.04 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+-- cell 38/40: p9 k=3 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=26) ---
+  elapsed           : 0.08 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+-- cell 39/40: p9 k=4 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=26) ---
+  elapsed           : 0.06 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+-- cell 40/40: p9 k=8 n_predict=200 --
+Traceback (most recent call last):
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\sweep_npu_spec.py", line 144, in run_sweep
+    summary = run_spec_decode_async_pipelined(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 381, in run_spec_decode_async_pipelined
+    drafts, past_snapshots = f_drafts.result()
+                             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_spec_outer_loop_async.py", line 111, in draft_k_tokens_pmin
+    logits, outputs, out_names = npu_single_step_short_prompt(
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\scripts\npu_short_prompt_probe.py", line 261, in npu_single_step_short_prompt
+    outputs = sess.run(None, feed)
+              ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime\capi\onnxruntime_inference_collection.py", line 296, in run
+    return self._sess.run(output_names, input_feed, run_options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+onnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(float)) , expected: (tensor(uint16))
+
+--- CPU prefill (P=26) ---
+  elapsed           : 0.04 s
+  first candidate   : 671  -> ' #'
+   cell FAILED - continuing sweep
+
+==== sweep complete: 0/40 cells in 0.2 min ====
+
+(no rows, nothing to summarise)
+shutting down llama-server...
