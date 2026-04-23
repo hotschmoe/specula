@@ -1,12 +1,12 @@
 # Specula Qwen3-4B 4-part w4a16 oracle
 
 - prompt: 30 tokens, gen: 16
-- prefill mean: 249.9 ms
-- gen mean: 245.3 ms
-- vs Qualcomm oracle first-decode cos: 0.2824464251235227
+- prefill mean: 222.8 ms
+- gen mean: 224.0 ms
+- vs Qualcomm oracle first-decode cos: 0.6107271145515075
 
 ## Decoded
 ```
 
-Okay, theuser is asking, " what is gravity? keep the answer
+Okay, the user is asking, " What is gravity? Keep the answer
 ```
