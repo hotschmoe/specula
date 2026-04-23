@@ -366,6 +366,59 @@ No `encodings.json` — the DLC declares fp32 IO, so no per-tensor
 quant params exist to extract. ARM64 runtime contract is float32 in,
 float32 logits out (same as the working fp16 pathbmask binary).
 
+## Update 2026-04-22 (later still) — A.2 enhanced-calibration w4a16 rebuild
+
+Ask: `docs/phase5_lever_c_x86_ask.md` § "Primary ask now — A.2
+`tf_enhanced` w4a16 rebuild". Same pipeline as w4a16-local-qairt242,
+only change is the activation quantizer calibration algorithm.
+
+Terminology note — `tf_enhanced` is pre-2.42 SDK syntax. In QAIRT 2.42,
+`--act_quantizer` accepts `{tf, enhanced, adjusted, symmetric}`. First
+attempt with `--act_quantizer tf_enhanced` failed with
+`modeltools::IrQuantizer: Invalid activation quantizer type: tf_enhanced`.
+Retried with `--act_quantizer enhanced`, which 2.42 documents in-source
+as "an algorithm useful for quantizing models with long tails present in
+the weight distribution" — exact match for the ask's intent.
+
+Modern 2.42 alternative (not used here, for future iteration):
+`--act_quantizer_calibration {sqnr, entropy, mse, percentile}` with
+`--act_quantizer_schema {asymmetric, symmetric, unsignedsymmetric,
+signedasymmetric}` — these replace the legacy flag with finer control.
+
+### Pipeline executed
+
+| step | tool | duration |
+|---|---|---:|
+| 3 | `qairt-quantizer --weights_bitwidth 4 --act_bitwidth 16 --act_quantizer enhanced` | ~49 s (≈42 s QNN_CPU sim × 60 samples) |
+| 4 | `qnn-context-binary-generator` (same config_main.json, full DLL paths) | ~9.6 s |
+| 5 | `qairt-dlc-info` + `qairt-dlc-to-json` | <1 s |
+
+DLC metadata echo confirms `act_quantizer=enhanced` took effect.
+Binary-gen log is quieter than baseline — no
+`q::rms_normvals_temp` / `q::Add_flat` "no properties registered"
+warnings this time, implying the `enhanced` calibration assigned
+scales to a couple of scratch ops that `tf` was leaving unquantized.
+Otherwise warning pattern is identical to baseline.
+
+### NAS drop
+
+```
+Z:\exposed\junk\phase5_step15_local_qairt_out_qairt242_tfe\
+├── qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local-tfe.bin              875 MB
+│   MD5: 96667934cbf9dfdcbddf2f1fe93f13a9
+├── qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local-tfe.encodings.json   3.32 MB
+│   MD5: 3dda18331e8fff2e11e9c2ee144bef12
+├── HANDOFF_tfe.md
+├── dlc_info_w4a16_tfe.txt
+├── qairt_compile_log.tfe.txt / qairt_quantizer.tfe.log / qnn_ctx_bin_gen.tfe.log
+└── config_main.json / htp_backend_ext_inner.json
+```
+
+Runtime contract unchanged from w4a16-local-qairt242: 60 uint16 inputs
+(+ `input_ids` int32), 57 uint16 outputs, dotted names in encodings.json
+and underscored names in the binary. Suggested variant:
+`SPECULA_NPU_VARIANT=w4a16-local-tfe`.
+
 ### What this closes
 
 - Answers the open question from the original findings: **2.45-built
