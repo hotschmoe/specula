@@ -393,6 +393,65 @@ Diagnostics used:
   normalisation `qnn-context-binary-generator` applies.
 - pathbmask sanity rerun via the same probe — green.
 
+### Update (session 18, 2026-04-22, battery) — shotgun landed, w8a16-local PASSES
+
+x86 shipped a 7-variant shotgun at
+`Z:\exposed\junk\phase5_step15_local_qairt_out_shotgun\` (6 distinct
+MD5s after 3 byte-identical collisions ruled themselves out). Copied
+the 4 new distinct bins + encodings to `models/` before leaving the
+office. Full details in `results/shotgun_drop/PROBE_RESULTS.md`.
+
+All probes on humaneval fib-p0 (+ p1 for the two winners), battery
+at 98% charge throughout:
+
+| variant | cos | argmax | top-5 | multi-step | ms/step | outcome |
+|---|---:|:-:|:-:|:-:|---:|---|
+| w4a16-local-mse | 0.33 | ✗ | 0/5 | 0% | 51 | COLLAPSE (confirms act-cal not the lever) |
+| **w4a16-local-pr** | 0.888 (p0) / 0.904 (p1) | ✓ | 3-4/5 | **100%** | 48-50 | Soft pass (cos<0.95, greedy matches) |
+| **w8a16-local** | **0.963 (p0) / 0.979 (p1)** | ✓ | 4/5 | **100%** | 48-50 | **FULL PASS both prompts** |
+| w8a16-local-pr | 0.924 | ✓ | 4/5 | 100% | 51 | Soft pass (per-row hurts at w8) |
+
+**Phase 5.5 Lever C has a correct deliverable: `w8a16-local`.** First
+variant in the whole investigation that clears cos ≥ 0.95 with
+argmax match + multi-step 100% on both probed prompts.
+
+Per-row weight quant is the critical w4 remedy: `w4a16-local-pr`
+jumps cos 0.33 → 0.888 on p0. Not over the strict gate but the
+greedy path matches CPU 100% across 3 multi-steps, which is what
+speculative decoding actually cares about. On w8a16 the extra
+per-row granularity mildly hurts (0.963 → 0.924) since w8 already
+has enough weight headroom.
+
+Latency caveat: all 4 new variants measured ~50 ms/step first-call
+vs the ~28-30 ms we saw on baseline w4a16 and fp16 in prior
+sessions. Could be cold-HTP, battery thermal, or cumulative session
+warmup confounds. AC sweep next session with a proper
+warmup-then-steady-state harness will split these.
+
+Decision-tree pruning:
+
+- **A.6 w8a16:** GREEN. Ship as the product.
+- **A.5 per-tensor overrides (V/O → w8):** still attractive as a
+  stretch goal — `w4a16-local-pr` shows per-row alone gets to 0.89;
+  if we additionally pin V/O to w8 via `--quantization_overrides`,
+  the combination likely lands above 0.95 at w4's memory footprint.
+  Next x86 ask if we want to push past w8a16.
+- **A.2 enhanced / A.2-alt mse:** retired (confirmed negative).
+- **A.3 Bundle B calibration:** superseded. Diagnosis is weight
+  precision, not calibration distribution.
+- **A.4 CLE:** retired. Shotgun confirmed CLE produces a
+  byte-identical binary to baseline on our MatMul graph — silent
+  no-op. `--apply_algorithms cle` is conv/BN-specific.
+
+Next (on AC):
+
+1. AC sweep with `SPECULA_NPU_VARIANT=w8a16-local` vs Lever B's
+   18.12 t/s.
+2. Secondary sweep with `w4a16-local-pr` — if the 100% greedy-match
+   holds at k=2, the memory-bandwidth advantage might beat w8a16
+   throughput-wise despite soft-gate cos.
+3. Steady-state latency harness (warmup + median of N).
+
 ### Update (session 17, 2026-04-22) — A.2 tfe barely moves; differential localises to V-projection weights
 
 x86 shipped `w4a16-local-tfe` at
