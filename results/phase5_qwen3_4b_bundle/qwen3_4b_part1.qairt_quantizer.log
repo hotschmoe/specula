@@ -1,0 +1,82 @@
+# C:\Users\hotschmoe\Documents\GitHub\specula\.venv-qairt\Scripts\python.exe C:\Qualcomm\AIStack\QAIRT\2.45.40.260406\bin\x86_64-windows-msvc\qairt-quantizer --input_dlc C:\Users\hotschmoe\Documents\GitHub\specula\results\phase5_qwen3_4b_bundle\qwen3_4b_part1.fp32.dlc --output_dlc C:\Users\hotschmoe\Documents\GitHub\specula\results\phase5_qwen3_4b_bundle\qwen3_4b_part1.w4a16-local.dlc --input_list C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part1_raw\input_list.txt --weights_bitwidth 4 --act_bitwidth 16
+    16.1ms [  INFO ] Inferences will run in sync mode
+Processing inference input(s):
+input_ids -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part1_raw\sample_000\input_ids.raw
+input_ids -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part1_raw\sample_001\input_ids.raw
+input_ids -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part1_raw\sample_002\input_ids.raw
+input_ids -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part1_raw\sample_003\input_ids.raw
+input_ids -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part1_raw\sample_004\input_ids.raw
+input_ids -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part1_raw\sample_005\input_ids.raw
+input_ids -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part1_raw\sample_006\input_ids.raw
+input_ids -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part1_raw\sample_007\input_ids.raw
+input_ids -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part1_raw\sample_008\input_ids.raw
+input_ids -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part1_raw\sample_009\input_ids.raw
+2026-04-23 10:31:03,650 - 278 - INFO - Quantization completed successfully: 
+    20.7ms [  INFO ] No BackendExtensions lib provided;initializing NetRunBackend Interface
+    21.3ms [  INFO ] WindowsFileIO callback: WindowsFileIO
+    31.5ms [  INFO ] Initialized WindowsFileIO callback
+    12.8ms [  INFO ] [QNN_CPU] CpuBackend creation start
+    12.8ms [  INFO ] [QNN_CPU] CpuBackend creation end
+    33.8ms [WARNING] Unable to find a device with NetRunDeviceKeyDefault in Library NetRunBackendLibKeyDefault
+    33.8ms [WARNING] Profile Logger with name = defaultKey doesn't exist! Returning nullptr
+    13.2ms [  INFO ] [QNN_CPU] QnnContext create start
+    13.4ms [  INFO ] [QNN_CPU] QnnContext create end
+    35.1ms [  INFO ] Entering QuantizeRuntimeApp flow
+    35.1ms [WARNING] Profile Logger with name = defaultKey doesn't exist! Returning nullptr
+    16.1ms [  INFO ] [QNN_CPU] CpuGraph creation start
+    16.4ms [  INFO ] [QNN_CPU] CpuGraph creation end
+    16.6ms [  INFO ] [QNN_CPU] QnnGraph create end
+   128.9ms [  INFO ] [QNN_CPU] QnnGraph finalize start
+   129.5ms [  INFO ] [QNN_CPU] QnnGraph finalize end
+   130.8ms [  INFO ] [QNN_CPU] QnnGraph execute start
+   131.1ms [  INFO ] [QNN_CPU] QnnGraph execute end
+   116.7ms [  INFO ] cleaning up resources for input tensors
+   116.7ms [  INFO ] cleaning up resources for output tensors
+   131.1ms [  INFO ] [QNN_CPU] QnnGraph execute start
+   131.1ms [  INFO ] [QNN_CPU] QnnGraph execute end
+   116.8ms [  INFO ] cleaning up resources for input tensors
+   116.8ms [  INFO ] cleaning up resources for output tensors
+   131.2ms [  INFO ] [QNN_CPU] QnnGraph execute start
+   131.2ms [  INFO ] [QNN_CPU] QnnGraph execute end
+   116.8ms [  INFO ] cleaning up resources for input tensors
+   116.8ms [  INFO ] cleaning up resources for output tensors
+   131.3ms [  INFO ] [QNN_CPU] QnnGraph execute start
+   131.4ms [  INFO ] [QNN_CPU] QnnGraph execute end
+   117.0ms [  INFO ] cleaning up resources for input tensors
+   117.0ms [  INFO ] cleaning up resources for output tensors
+   131.5ms [  INFO ] [QNN_CPU] QnnGraph execute start
+   131.5ms [  INFO ] [QNN_CPU] QnnGraph execute end
+   117.1ms [  INFO ] cleaning up resources for input tensors
+   117.1ms [  INFO ] cleaning up resources for output tensors
+   131.5ms [  INFO ] [QNN_CPU] QnnGraph execute start
+   131.5ms [  INFO ] [QNN_CPU] QnnGraph execute end
+   117.2ms [  INFO ] cleaning up resources for input tensors
+   117.2ms [  INFO ] cleaning up resources for output tensors
+   131.6ms [  INFO ] [QNN_CPU] QnnGraph execute start
+   131.6ms [  INFO ] [QNN_CPU] QnnGraph execute end
+   117.2ms [  INFO ] cleaning up resources for input tensors
+   117.2ms [  INFO ] cleaning up resources for output tensors
+   131.6ms [  INFO ] [QNN_CPU] QnnGraph execute start
+   131.6ms [  INFO ] [QNN_CPU] QnnGraph execute end
+   117.2ms [  INFO ] cleaning up resources for input tensors
+   117.2ms [  INFO ] cleaning up resources for output tensors
+   131.7ms [  INFO ] [QNN_CPU] QnnGraph execute start
+   131.7ms [  INFO ] [QNN_CPU] QnnGraph execute end
+   117.3ms [  INFO ] cleaning up resources for input tensors
+   117.3ms [  INFO ] cleaning up resources for output tensors
+   131.7ms [  INFO ] [QNN_CPU] QnnGraph execute start
+   131.7ms [  INFO ] [QNN_CPU] QnnGraph execute end
+   117.3ms [  INFO ] cleaning up resources for input tensors
+   117.3ms [  INFO ] cleaning up resources for output tensors
+modeltools::IrGraph::reEvalMacsParams: Re-evaluated graph statistics after IrOptimizer optimization passes:
+modeltools::IrGraph::reEvalMacsParams: Total MACs: 0
+modeltools::IrGraph::reEvalMacsParams: Total Params Count: 0
+2026-04-23 10:31:04,943 - 278 - INFO - Quantized Model saved at: C:\Users\hotschmoe\Documents\GitHub\specula\results\phase5_qwen3_4b_bundle\qwen3_4b_part1.w4a16-local.dlc 
+   423.3ms [  INFO ] Freeing graphsInfo
+   423.3ms [WARNING] Profile Logger with name = defaultKey doesn't exist! Returning nullptr
+   437.7ms [  INFO ] [QNN_CPU] QnnContext Free start
+   470.7ms [  INFO ] [QNN_CPU] QnnContext Free end
+   456.9ms [WARNING] Profile Logger with name = defaultKey doesn't exist!
+   471.3ms [  INFO ] [QNN_CPU] QnnBackend Free start
+   471.4ms [  INFO ] [QNN_CPU] QnnBackend Free end
+   457.0ms [  INFO ] WindowsFileIO callback: ~WindowsFileIO

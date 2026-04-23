@@ -1,0 +1,13 @@
+# C:\Users\hotschmoe\Documents\GitHub\specula\.venv-qairt\Scripts\python.exe C:\Qualcomm\AIStack\QAIRT\2.45.40.260406\bin\x86_64-windows-msvc\qairt-converter --input_network C:\Users\hotschmoe\Documents\GitHub\specula\models\qwen3-4b-arm-pathb-ctx512-part1\model.onnx --output_path C:\Users\hotschmoe\Documents\GitHub\specula\results\phase5_qwen3_4b_bundle\qwen3_4b_part1.fp32.dlc --preserve_onnx_output_order --remove_unused_inputs
+2026-04-23 10:29:01,626 - 278 - INFO - INFO_INITIALIZATION_SUCCESS: 
+2026-04-23 10:29:01,881 - 283 - WARNING - Unable to register converter supported Operation [Inverse:Version 1] with your Onnx installation. Converter will bail if Model contains this Op.
+2026-04-23 10:29:02,712 - 283 - WARNING - --desired_input_shape and -d are deprecated. Use --source_model_input_shape or -s for achieving this functionality
+2026-04-23 10:29:02,712 - 278 - INFO - Input shape info 
+2026-04-23 10:29:10,293 - 278 - INFO - INFO_INITIALIZATION_SUCCESS: 
+modeltools::iroptimizer::removeIdentity::handleReshapeOp: Squash Reshape Op: /model/embed_tokens/Gather_identity due to IdentityOp. Input shape: IrTensorShape(dims = [1,1,2560] , dy_axes=[]), shape after IrTensorShape(dims = [1,1,2560] , dy_axes=[])
+
+modeltools::IrGraph::reEvalMacsParams: Re-evaluated graph statistics after IrOptimizer optimization passes:
+modeltools::IrGraph::reEvalMacsParams: Total MACs: 0
+modeltools::IrGraph::reEvalMacsParams: Total Params Count: 0
+2026-04-23 10:29:12,605 - 278 - INFO - INFO_CONVERSION_SUCCESS: Conversion completed successfully
+2026-04-23 10:29:12,651 - 278 - INFO - INFO_WRITE_SUCCESS: 

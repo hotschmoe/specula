@@ -1,11 +1,16 @@
-"""Drive qnn-context-binary-generator on the 4 w4a16 DLCs to produce a
-weight-shared 4-part bundle (parallels Qualcomm's shipping layout).
+"""Drive qnn-context-binary-generator on each of the 4 w4a16 DLCs to
+produce a weight-shared 4-part bundle (parallels Qualcomm's shipping
+layout).
 
-The plan per docs/qualcomm_reproduction_4b.md Phase 5: pass all 4
-DLCs as a comma-separated --dlc_path, keep weight_sharing_enabled in
-the backend-extensions config. HTP memory per part should stay well
-under the 3.67 GB serializer ceiling that Phase 3c hit with the
-single 4B DLC (~4.86 GB).
+Invokes ctx-bin-gen ONCE PER DLC (not a single multi-DLC call) — the
+multi-DLC form packs all graphs into ONE 4.8 GB .bin, which
+ORT-QNN 2.1 rejects at session load with QNN_COMMON_ERROR_MEM_ALLOC
+because it tries to allocate the full 4.8 GB up front. Separate per-
+DLC .bins let ORT-QNN create one session per part and keep each
+part's allocation bounded. `weight_sharing_enabled: true` in the HTP
+backend-extensions config still applies — at runtime the four
+sessions share weight memory when the HTP driver recognizes them as
+a compilation group.
 
 Requires: .venv-qairt activated + QAIRT 2.45 on PATH.
 
@@ -17,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -27,6 +33,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 RESULTS = REPO / "results" / "phase5_qwen3_4b_bundle"
 PHASE3_RESULTS = REPO / "results" / "phase3_qwen3_4b_compile"
+QAIRT_BIN_DEFAULT = Path(r"C:\Qualcomm\AIStack\QAIRT\2.45.40.260406\bin\x86_64-windows-msvc")
+QAIRT_LIB_DEFAULT = Path(r"C:\Qualcomm\AIStack\QAIRT\2.45.40.260406\lib\x86_64-windows-msvc")
 
 
 def ensure_configs(dst: Path) -> tuple[Path, Path]:
@@ -70,47 +78,53 @@ def main() -> int:
     parser.add_argument(
         "--binary-basename", type=str,
         default="qwen3_4b_4part_w4a16",
-        help="Basename for the emitted bundle. ctx-bin-gen appends "
-             "_1, _2, ... per DLC (one .bin per DLC when multi-DLC).",
+        help="Per-part basename. Each part lands at <basename>_part{N}.bin.",
     )
+    parser.add_argument("--parts", type=str, default="1,2,3,4")
+    parser.add_argument("--qairt-bin", type=Path, default=QAIRT_BIN_DEFAULT)
     args = parser.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     compile_cfg, _ = ensure_configs(args.out_dir)
+    tool = args.qairt_bin / "qnn-context-binary-generator.exe"
+    if not tool.exists():
+        print(f"FATAL: qnn-context-binary-generator not found at {tool}")
+        return 2
 
-    dlcs = [args.dlc_dir / f"qwen3_4b_part{i}.w4a16-local.dlc" for i in (1, 2, 3, 4)]
-    for d in dlcs:
-        if not d.exists():
-            print(f"FATAL: missing w4a16 DLC at {d}")
+    # Windows DLL search for QnnHtp.dll + QnnHtpNetRunExtensions.dll.
+    env = os.environ.copy()
+    env["PATH"] = str(QAIRT_LIB_DEFAULT) + os.pathsep + env.get("PATH", "")
+
+    wanted = {int(p) for p in args.parts.split(",")}
+    for idx in (1, 2, 3, 4):
+        if idx not in wanted:
+            continue
+        dlc = args.dlc_dir / f"qwen3_4b_part{idx}.w4a16-local.dlc"
+        if not dlc.exists():
+            print(f"FATAL: missing w4a16 DLC at {dlc}")
             return 2
-
-    dlc_arg = ",".join(str(d) for d in dlcs)
-    out_basename = args.out_dir / args.binary_basename
-    log = args.out_dir / f"{args.binary_basename}.qnn_ctx_bin_gen.log"
-
-    # cwd = out_dir so the compile_config's relative reference to
-    # htp_backend_ext_config.json resolves.
-    cmd = [
-        "qnn-context-binary-generator",
-        "--backend", "QnnHtp.dll",
-        "--dlc_path", dlc_arg,
-        "--binary_file", str(out_basename),
-        "--config_file", str(compile_cfg),
-    ]
-    print("=== qnn-context-binary-generator (4-part weight-shared) ===")
-    print(" ".join(cmd))
-    t0 = time.perf_counter()
-    with log.open("w", encoding="utf-8") as f:
-        proc = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT,
-                              cwd=str(args.out_dir))
-    elapsed = time.perf_counter() - t0
-    if proc.returncode != 0:
-        print(f"FAIL after {elapsed:.1f}s - see {log}")
-        return proc.returncode
-    print(f"ok: {elapsed:.1f}s")
-    for bin_file in sorted(args.out_dir.glob(f"{args.binary_basename}*.bin")):
-        size_mb = bin_file.stat().st_size / 1e6
-        print(f"  {bin_file.name}: {size_mb:.0f} MB")
+        out_basename = args.out_dir / f"{args.binary_basename}_part{idx}"
+        log = args.out_dir / f"{args.binary_basename}_part{idx}.qnn_ctx_bin_gen.log"
+        cmd = [
+            str(tool),
+            "--backend", "QnnHtp.dll",
+            "--dlc_path", str(dlc),
+            "--binary_file", str(out_basename),
+            "--config_file", str(compile_cfg),
+        ]
+        print(f"\n=== part{idx}: qnn-context-binary-generator ===")
+        print(" ".join(cmd))
+        t0 = time.perf_counter()
+        with log.open("w", encoding="utf-8") as f:
+            proc = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT,
+                                  cwd=str(args.out_dir), env=env)
+        elapsed = time.perf_counter() - t0
+        if proc.returncode != 0:
+            print(f"FAIL after {elapsed:.1f}s - see {log}")
+            return proc.returncode
+        bin_file = Path(f"{out_basename}.bin")
+        size_mb = bin_file.stat().st_size / 1e6 if bin_file.exists() else 0
+        print(f"ok: {elapsed:.1f}s, {bin_file.name} = {size_mb:.0f} MB")
     return 0
 
 

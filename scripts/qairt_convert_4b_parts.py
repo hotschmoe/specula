@@ -12,6 +12,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -21,20 +22,41 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 MODELS = REPO / "models"
 RESULTS = REPO / "results" / "phase5_qwen3_4b_bundle"
+QAIRT_BIN_DEFAULT = Path(r"C:\Qualcomm\AIStack\QAIRT\2.45.40.260406\bin\x86_64-windows-msvc")
+QAIRT_LIB_PYTHON_DEFAULT = Path(r"C:\Qualcomm\AIStack\QAIRT\2.45.40.260406\lib\python")
+
+
+def run_tool(tool: Path, args: list[str], log: Path) -> int:
+    """Windows QAIRT tools are Python scripts with no .exe wrapper, so
+    invoke them via the current interpreter. Also prepend QAIRT's
+    lib/python to PYTHONPATH so `qti.aisw.*` imports resolve."""
+    env = os.environ.copy()
+    qairt_pypath = str(QAIRT_LIB_PYTHON_DEFAULT)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = qairt_pypath + (os.pathsep + existing if existing else "")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    cmd = [sys.executable, str(tool), *args]
+    with log.open("w", encoding="utf-8") as f:
+        f.write("# " + " ".join(cmd) + "\n")
+        f.flush()
+        proc = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, env=env)
+    return proc.returncode
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--parts", type=str, default="1,2,3,4")
     parser.add_argument("--out-dir", type=Path, default=RESULTS)
+    parser.add_argument("--qairt-bin", type=Path, default=QAIRT_BIN_DEFAULT,
+                        help="Directory containing qairt-converter (Python script).")
     args = parser.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    # --preserve_onnx_output_order: keep present.N.key/value ordering
-    # aligned with the ONNX graph output order so input_list + quantizer
-    # stay positionally consistent with the raw calibration files.
-    # --remove_unused_inputs: drops position_ids if it leaks back in
-    # (shouldn't in the split graphs, but matches Phase 3 convention).
+    tool = args.qairt_bin / "qairt-converter"
+    if not tool.exists():
+        print(f"FATAL: qairt-converter not found at {tool}")
+        return 2
+
     common_flags = ["--preserve_onnx_output_order", "--remove_unused_inputs"]
 
     wanted = {int(p) for p in args.parts.split(",")}
@@ -47,21 +69,19 @@ def main() -> int:
         if not src.exists():
             print(f"FATAL: missing split ONNX at {src}")
             return 2
-        cmd = [
-            "qairt-converter",
+        tool_args = [
             "--input_network", str(src),
             "--output_path", str(dst),
             *common_flags,
         ]
         print(f"\n=== part{idx}: qairt-converter ===")
-        print(" ".join(cmd))
+        print(f"  {sys.executable} {tool} {' '.join(tool_args)}")
         t0 = time.perf_counter()
-        with log.open("w", encoding="utf-8") as f:
-            proc = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
+        rc = run_tool(tool, tool_args, log)
         elapsed = time.perf_counter() - t0
-        if proc.returncode != 0:
+        if rc != 0:
             print(f"FAIL after {elapsed:.1f}s - see {log}")
-            return proc.returncode
+            return rc
         size_mb = dst.stat().st_size / 1e6 if dst.exists() else 0
         print(f"ok: {elapsed:.1f}s, {dst.name} = {size_mb:.0f} MB")
     return 0

@@ -20,6 +20,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -32,6 +33,22 @@ REPO = Path(__file__).resolve().parents[1]
 MODELS = REPO / "models"
 RESULTS = REPO / "results" / "phase5_qwen3_4b_bundle"
 CALIB_ROOT = MODELS / "calibration"
+QAIRT_BIN_DEFAULT = Path(r"C:\Qualcomm\AIStack\QAIRT\2.45.40.260406\bin\x86_64-windows-msvc")
+QAIRT_LIB_PYTHON_DEFAULT = Path(r"C:\Qualcomm\AIStack\QAIRT\2.45.40.260406\lib\python")
+
+
+def run_tool(tool: Path, args: list[str], log: Path) -> int:
+    env = os.environ.copy()
+    qairt_pypath = str(QAIRT_LIB_PYTHON_DEFAULT)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = qairt_pypath + (os.pathsep + existing if existing else "")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    cmd = [sys.executable, str(tool), *args]
+    with log.open("w", encoding="utf-8") as f:
+        f.write("# " + " ".join(cmd) + "\n")
+        f.flush()
+        proc = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, env=env)
+    return proc.returncode
 
 
 def fix_input_ids_dtype(part1_raw_root: Path) -> int:
@@ -60,9 +77,14 @@ def main() -> int:
     parser.add_argument("--out-dir", type=Path, default=RESULTS)
     parser.add_argument("--weights-bitwidth", type=int, default=4)
     parser.add_argument("--act-bitwidth", type=int, default=16)
+    parser.add_argument("--qairt-bin", type=Path, default=QAIRT_BIN_DEFAULT)
     args = parser.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    tool = args.qairt_bin / "qairt-quantizer"
+    if not tool.exists():
+        print(f"FATAL: qairt-quantizer not found at {tool}")
+        return 2
 
     # One-time patch: coerce input_ids.raw to int32 for part1 only.
     p1_raw = CALIB_ROOT / "qwen3_4b_ctx512_part1_raw"
@@ -85,8 +107,7 @@ def main() -> int:
         if not list_file.exists():
             print(f"FATAL: missing calibration list at {list_file}")
             return 2
-        cmd = [
-            "qairt-quantizer",
+        tool_args = [
             "--input_dlc", str(fp32),
             "--output_dlc", str(dst),
             "--input_list", str(list_file),
@@ -94,14 +115,13 @@ def main() -> int:
             "--act_bitwidth", str(args.act_bitwidth),
         ]
         print(f"\n=== part{idx}: qairt-quantizer ===")
-        print(" ".join(cmd))
+        print(f"  {sys.executable} {tool} {' '.join(tool_args)}")
         t0 = time.perf_counter()
-        with log.open("w", encoding="utf-8") as f:
-            proc = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
+        rc = run_tool(tool, tool_args, log)
         elapsed = time.perf_counter() - t0
-        if proc.returncode != 0:
+        if rc != 0:
             print(f"FAIL after {elapsed:.1f}s - see {log}")
-            return proc.returncode
+            return rc
         size_mb = dst.stat().st_size / 1e6 if dst.exists() else 0
         print(f"ok: {elapsed:.1f}s, {dst.name} = {size_mb:.0f} MB")
     return 0

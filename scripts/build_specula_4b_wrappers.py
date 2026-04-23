@@ -1,26 +1,22 @@
-"""Build 4 EPContext wrapper ONNX files pointing at our 4-part bundle.
+"""Build 4 EPContext wrapper ONNX files pointing at our single merged
+4-graph context binary (`qwen3_4b_4part_w4a16.bin`).
 
-Each wrapper declares the part's graph I/O and embeds the .bin path
-via the EPContext `com.microsoft` op. ORT-QNN 2.1 (QAIRT 2.45) loads
-the wrapper, follows the embedded context-binary reference, and runs
-the graph on HTP.
+ctx-bin-gen with comma-separated `--dlc_path` packs all 4 graphs into
+ONE .bin; graph selection at run time is by IO-name matching (each
+wrapper declares the IO signature of exactly one graph, and ORT-QNN
+routes it to that graph). Tensor names must match the .bin's
+underscored form (leading `/` stripped, `/` -> `_`, `.` -> `_`), not
+our source ONNX slash/dot form. Dtypes come from the actual compiled
+binary: `input_ids` int32, everything else uint16 at this stage
+(Phase 4 levers can push KV to uint8 and cos/sin to half-dim later).
 
-Mirrors the layout of scripts/qualcomm_qwen3_4b_oracle.py but targets
-our produced bundle (no quant params from metadata.yaml — we read
-scales/offsets from each part's .dlc via qairt-dlc-to-json).
-
-Run (needs scale/offset info, so run AFTER qairt-quantizer):
-    .venv/Scripts/python.exe scripts/build_specula_4b_wrappers.py \\
-        --dlc-dir results/phase5_qwen3_4b_bundle \\
-        --bin-dir results/phase5_qwen3_4b_bundle \\
-        --out-dir results/phase5_qwen3_4b_bundle
+Run AFTER ctx-bin-gen:
+    .venv/Scripts/python.exe scripts/build_specula_4b_wrappers.py
 """
 
 from __future__ import annotations
 
 import argparse
-import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -29,7 +25,7 @@ from onnx import TensorProto, helper
 
 
 REPO = Path(__file__).resolve().parents[1]
-MODELS = REPO / "models"
+RESULTS = REPO / "results" / "phase5_qwen3_4b_bundle"
 
 NUM_LAYERS = 36
 LAYERS_PER_PART = 12
@@ -40,43 +36,67 @@ PAST = CTX - 1
 NUM_KV_HEADS = 8
 HEAD_DIM = 128
 
-EMBED_HIDDEN = "/model/embed_tokens/Gather_output_0"
-L11_HIDDEN = "/model/layers.11/Add_1_output_0"
-L23_HIDDEN = "/model/layers.23/Add_1_output_0"
+# Underscored tensor names (match the .bin's internal layout).
+EMBED_HIDDEN = "_model_embed_tokens_Gather_output_0"
+L11_HIDDEN = "_model_layers_11_Add_1_output_0"
+L23_HIDDEN = "_model_layers_23_Add_1_output_0"
 
 
-# Per-part I/O contract in declared order. Matches the split sub-ONNXs exactly.
-def part_io_spec(part: int) -> tuple[list[tuple], list[tuple]]:
+def past_name(kind: str, layer: int) -> str:
+    return f"past_key_values_{layer}_{kind}"
+
+
+def present_name(kind: str, layer: int) -> str:
+    return f"present_{layer}_{kind}"
+
+
+def part_io_spec(part: int) -> tuple[list[tuple], list[tuple], str]:
+    """Returns (inputs, outputs, internal_graph_name). Names here match
+    the compiled .bin's per-graph IO exactly."""
     def decode_inputs(s: int, e: int) -> list[tuple]:
         items = [
-            ("attention_bias", "float32", [1, 1, 1, CTX]),
-            ("position_ids_cos", "float32", [1, 1, HEAD_DIM]),
-            ("position_ids_sin", "float32", [1, 1, HEAD_DIM]),
+            ("attention_bias", "uint16", [1, 1, 1, CTX]),
+            ("position_ids_cos", "uint16", [1, 1, HEAD_DIM]),
+            ("position_ids_sin", "uint16", [1, 1, HEAD_DIM]),
         ]
         for li in range(s, e + 1):
-            items.append((f"past_key_values.{li}.key", "float32", [1, NUM_KV_HEADS, PAST, HEAD_DIM]))
-            items.append((f"past_key_values.{li}.value", "float32", [1, NUM_KV_HEADS, PAST, HEAD_DIM]))
+            items.append((past_name("key", li), "uint16",
+                          [1, NUM_KV_HEADS, PAST, HEAD_DIM]))
+            items.append((past_name("value", li), "uint16",
+                          [1, NUM_KV_HEADS, PAST, HEAD_DIM]))
         return items
 
     def decode_outputs(s: int, e: int) -> list[tuple]:
-        items = []
-        for li in range(s, e + 1):
-            items.append((f"present.{li}.key", "float32", [1, NUM_KV_HEADS, CTX, HEAD_DIM]))
-            items.append((f"present.{li}.value", "float32", [1, NUM_KV_HEADS, CTX, HEAD_DIM]))
-        return items
+        return [
+            (present_name(kind, li), "uint16",
+             [1, NUM_KV_HEADS, CTX, HEAD_DIM])
+            for li in range(s, e + 1) for kind in ("key", "value")
+        ]
 
     if part == 1:
-        return ([("input_ids", "int64", [1, 1])],
-                [(EMBED_HIDDEN, "float32", [1, 1, HIDDEN])])
+        return (
+            [("input_ids", "int32", [1, 1])],
+            [(EMBED_HIDDEN, "uint16", [1, 1, HIDDEN])],
+            "qwen3_4b_part1_fp32",
+        )
     if part == 2:
-        return ([(EMBED_HIDDEN, "float32", [1, 1, HIDDEN])] + decode_inputs(0, 11),
-                [(L11_HIDDEN, "float32", [1, 1, HIDDEN])] + decode_outputs(0, 11))
+        return (
+            [(EMBED_HIDDEN, "uint16", [1, 1, HIDDEN])] + decode_inputs(0, 11),
+            [(L11_HIDDEN, "uint16", [1, 1, HIDDEN])] + decode_outputs(0, 11),
+            "qwen3_4b_part2_fp32",
+        )
     if part == 3:
-        return ([(L11_HIDDEN, "float32", [1, 1, HIDDEN])] + decode_inputs(12, 23),
-                [(L23_HIDDEN, "float32", [1, 1, HIDDEN])] + decode_outputs(12, 23))
+        return (
+            [(L11_HIDDEN, "uint16", [1, 1, HIDDEN])] + decode_inputs(12, 23),
+            [(L23_HIDDEN, "uint16", [1, 1, HIDDEN])] + decode_outputs(12, 23),
+            "qwen3_4b_part3_fp32",
+        )
     if part == 4:
-        return ([(L23_HIDDEN, "float32", [1, 1, HIDDEN])] + decode_inputs(24, 35),
-                [("logits", "float32", [1, 1, VOCAB])] + decode_outputs(24, 35))
+        return (
+            [(L23_HIDDEN, "uint16", [1, 1, HIDDEN])] + decode_inputs(24, 35),
+            [("logits", "uint16", [1, 1, VOCAB])] + decode_outputs(24, 35),
+            "qwen3_4b_part4_fp32",
+        )
     raise ValueError(f"bad part {part}")
 
 
@@ -90,42 +110,12 @@ _DTYPE_PROTO = {
 }
 
 
-def dlc_io_info(dlc_path: Path) -> dict[str, dict]:
-    """Use qairt-dlc-to-json to read the per-IO scale/offset/dtype for
-    the quantized DLC. Returns {tensor_name: {scale, offset, dtype}}."""
-    cmd = ["qairt-dlc-to-json", "--input_dlc", str(dlc_path),
-           "--output_json", str(dlc_path.with_suffix(".json"))]
-    subprocess.run(cmd, check=True, capture_output=True)
-    data = json.loads(dlc_path.with_suffix(".json").read_text(encoding="utf-8"))
-    info: dict[str, dict] = {}
-    # The DLC JSON nests tensors under different keys depending on version;
-    # walk it robustly.
-    for tensors_key in ("tensors", "graph_tensors", "input_tensors", "output_tensors"):
-        tensors = data.get(tensors_key)
-        if isinstance(tensors, dict):
-            for name, meta in tensors.items():
-                info[name] = meta
-        elif isinstance(tensors, list):
-            for meta in tensors:
-                if "name" in meta:
-                    info[meta["name"]] = meta
-    return info
-
-
-def build_wrapper(part: int, bin_path: Path, dst: Path,
-                  dlc_io: dict[str, dict] | None = None) -> None:
-    """Emit wrapper.onnx declaring the part's I/O and referencing bin_path
-    via EPContext. Dtypes here use the fp32/int64 "pre-quant" declaration
-    so CPU testers can feed dequantized fp32 values; if the DLC's IO is
-    quantized, callers must still match the DLC's port dtypes at QNN
-    session run time. (The wrapper's declared dtype at the ORT boundary
-    is what ORT binds; QNN EP handles the dequant marshaling when the
-    wrapper declares fp32 on a uint16/uint8 port.)
-    """
-    inputs, outputs = part_io_spec(part)
-    inputs_decl = [helper.make_tensor_value_info(n, _DTYPE_PROTO[dt], s) for n, dt, s in inputs]
-    outputs_decl = [helper.make_tensor_value_info(n, _DTYPE_PROTO[dt], s) for n, dt, s in outputs]
-    graph_name = f"specula_qwen3_4b_ar1_cl512_part{part}"
+def build_wrapper(part: int, bin_path: Path, dst: Path) -> None:
+    inputs, outputs, graph_name = part_io_spec(part)
+    inputs_decl = [helper.make_tensor_value_info(n, _DTYPE_PROTO[dt], s)
+                   for n, dt, s in inputs]
+    outputs_decl = [helper.make_tensor_value_info(n, _DTYPE_PROTO[dt], s)
+                    for n, dt, s in outputs]
     node = helper.make_node(
         "EPContext",
         inputs=[v.name for v in inputs_decl],
@@ -152,18 +142,19 @@ def build_wrapper(part: int, bin_path: Path, dst: Path,
     )
     model.ir_version = 10
     onnx.save(model, str(dst))
-    print(f"wrote {dst} -> ep_cache_context={bin_path.name}")
+    print(f"wrote {dst.name} -> graph={graph_name}, "
+          f"{len(inputs_decl)} inputs / {len(outputs_decl)} outputs, "
+          f"ep_cache_context={bin_path.name}")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bin-dir", type=Path, required=True,
-                        help="Directory holding the .bin files (used for ep_cache_context).")
-    parser.add_argument("--out-dir", type=Path, required=True,
-                        help="Directory to write the 4 wrapper.onnx files into.")
+    parser.add_argument("--bin-dir", type=Path, default=RESULTS,
+                        help="Directory holding per-part .bin files.")
     parser.add_argument("--binary-basename", type=str,
                         default="qwen3_4b_4part_w4a16",
-                        help="ctx-bin-gen basename. Produces <basename>_{1..4}.bin.")
+                        help="Per-part bin stem: <basename>_part{N}.bin.")
+    parser.add_argument("--out-dir", type=Path, default=RESULTS)
     parser.add_argument("--parts", type=str, default="1,2,3,4")
     args = parser.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -172,16 +163,9 @@ def main() -> int:
     for part in (1, 2, 3, 4):
         if part not in wanted:
             continue
-        bin_path = args.bin_dir / f"{args.binary_basename}_{part}.bin"
+        bin_path = args.bin_dir / f"{args.binary_basename}_part{part}.bin"
         if not bin_path.exists():
-            # ctx-bin-gen may also emit <basename>_ar1_cl512_part{N}.bin or
-            # just <basename>.bin if single-part. Try a couple fallbacks.
-            alt1 = args.bin_dir / f"{args.binary_basename}_part{part}.bin"
-            if alt1.exists():
-                bin_path = alt1
-            else:
-                print(f"WARNING: no .bin found for part{part} at {bin_path}; "
-                      f"wrapper still emitted but will fail at load time")
+            print(f"WARNING: .bin not found at {bin_path}")
         dst = args.out_dir / f"specula_qwen3_4b_part{part}.wrapper.onnx"
         build_wrapper(part, bin_path, dst)
     return 0

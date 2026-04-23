@@ -1,9 +1,12 @@
 # Reproducing the Qualcomm Qwen3-4B w4a16 reference bundle
 
 **Status:** in-progress 2026-04-23. Phases 0-2 complete; Phase 3 hit the
-single-bin HTP ceiling (structural, not a bug); Phase 5 (multi-part
-weight-shared compile) started. ONNX split + CPU round-trip green; QAIRT
-pipeline scripted, awaiting x86_64 run.
+single-bin HTP ceiling (structural, not a bug); Phase 5 converter +
+quantizer + ctx-bin-gen + wrapper + HTP-load all green end to end.
+Oracle runs but cos vs Qualcomm is ~0 (gibberish output) because the
+per-part calibration is mis-matched across seams — see Phase 5g
+below. Fix path: iterative calibration using upstream's quantized
+output as downstream's calibration input.
 
 ## Goal
 
@@ -341,54 +344,103 @@ writes per-part raw directories under `models/calibration/`:
 | 3 | 502 MB | 28 |
 | 4 | 502 MB | 28 |
 
-### 5d. QAIRT converter + quantizer — scripted, pending run
+### 5d. QAIRT converter + quantizer — green
 
-Drivers (`scripts/qairt_convert_4b_parts.py`,
-`scripts/qairt_quantize_4b_parts.py`) invoke `qairt-converter` and
-`qairt-quantizer` for each of the 4 parts. Converter produces
-`.fp32.dlc` per part; quantizer produces `.w4a16-local.dlc` per part
-using that part's calibration raw list with
-`--weights_bitwidth 4 --act_bitwidth 16`. The Phase 3b int64→int32
-`input_ids.raw` patch is applied in-place by the quantizer driver.
+Ran on the X2E (Prism x86_64 Python 3.10 + QAIRT 2.45):
 
-Outputs land in `results/phase5_qwen3_4b_bundle/`.
+| part | fp32 DLC | w4a16 DLC | convert | quantize |
+|---|---:|---:|---:|---:|
+| 1 (embed) | 1.56 GB | 778 MB | 11.7 s | 5.9 s |
+| 2 (0-11) | 4.85 GB | 1.21 GB | 29.5 s | 25.4 s |
+| 3 (12-23) | 4.85 GB | 1.21 GB | 30.2 s | 26.9 s |
+| 4 (24-35) | 6.40 GB | 1.60 GB | 35.5 s | 31.1 s |
 
-To run (from `.venv-qairt` with QAIRT 2.45 on PATH):
+Total w4a16 = 4.80 GB (matches Phase 3b single monolithic w4a16
+exactly — weight bytes just split across 4 files). Part 1 stays at
+fp16 for the embedding table (778 MB = 151936×2560×2), same as
+Qualcomm's shipping `part_1_of_4.bin` which is 778 MB for the same
+reason.
 
-```
-.venv-qairt/Scripts/python.exe scripts/qairt_convert_4b_parts.py
-.venv-qairt/Scripts/python.exe scripts/qairt_quantize_4b_parts.py
-```
+### 5e. qnn-context-binary-generator — green, one invocation per DLC
 
-### 5e. qnn-context-binary-generator — scripted, pending run
+Important: the multi-DLC form (comma-separated `--dlc_path`) packs
+all graphs into ONE merged `.bin`. At 4.83 GB that single file fails
+to load via ORT-QNN 2.1 with `QNN_COMMON_ERROR_MEM_ALLOC` — the EP
+tries to allocate the full 4.83 GB up front. The working form is to
+invoke `qnn-context-binary-generator` **once per DLC**, producing 4
+separate bins that each fit in their own HTP context.
 
-`scripts/compile_4b_bundle_ctx_bin_gen.py` calls
-`qnn-context-binary-generator` with `--dlc_path` as a comma-separated
-list of all 4 `.w4a16-local.dlc` files plus the Phase 3
-`compile_config.json` / `htp_backend_ext_config.json` (already sets
-`weight_sharing_enabled: true`). Emits
-`qwen3_4b_4part_w4a16_{1..4}.bin` under
-`results/phase5_qwen3_4b_bundle/`.
+| part | .bin size | compile time | Qualcomm's |
+|---|---:|---:|---:|
+| 1 | 778 MB | 3.5 s | 778 MB |
+| 2 | 1.22 GB | 21.6 s | 669 MB |
+| 3 | 1.22 GB | 21.7 s | 669 MB |
+| 4 | 1.60 GB | 27.2 s | 1020 MB |
 
-Each per-part allocation should be ~1.2 GB (4B model ÷ 4, plus the
-~2.7 GB activation/KV/scratch split proportionally), comfortably
-under the 3.67 GB HTP ceiling that blocked the single-bin 4B compile.
+Our parts 2/3/4 are larger than Qualcomm's because we still have
+uint16 KV (Qualcomm uses uint8 per Phase 4 lever #1). Part 1 matches
+exactly (embed-only, same fp16 convention). Every part cleared the
+3.67 GB HTP serializer ceiling that blocked the Phase 3c single-bin
+compile.
 
-### 5f. Wrapper ONNX + oracle cos — scripted, pending DLC
+### 5f. Wrapper ONNX + HTP load — green
 
-`scripts/build_specula_4b_wrappers.py` emits 4 EPContext wrapper
-ONNXs (one per .bin) declaring the part's I/O contract and embedding
-the bin path via `ep_cache_context`. Final IO dtypes will be
-auto-adjusted from the DLC's actual port dtypes once the DLCs exist
-(the quantizer with default flags produces a DLC with quantized
-activations — uint8/uint16 on the IO — we'll read those from
-`qairt-dlc-to-json` and declare them in the wrapper).
+`scripts/build_specula_4b_wrappers.py` emits 4 EPContext wrappers
+using the DLC's underscored tensor names (leading `/` stripped,
+`/` → `_`, `.` → `_`) and actual port dtypes from the compiled bin:
+`input_ids` int32, everything else uint16 (UFIXED_POINT_16). All 4
+load via ORT-QNN 2.1 / QAIRT 2.45 on HTP in ~6 s total:
 
-The final cos-vs-oracle gate (>= 0.95 on first decode step) will be
-measured by a small adaptation of
-`scripts/qualcomm_qwen3_4b_oracle.py` that drives our bundle instead
-of Qualcomm's. That harness is deferred until the wrappers + DLC IO
-dtypes are known.
+| part | load | inputs | outputs |
+|---|---:|---:|---:|
+| 1 | 1.1 s | 1 | 1 |
+| 2 | 1.8 s | 28 | 25 |
+| 3 | 1.9 s | 28 | 25 |
+| 4 | 2.3 s | 28 | 25 |
+
+Session load triggers the documented ORT-QNN-2.1 Code 1000
+file-mapping retry, but the retry path succeeds. Part 1's first
+`run()` is 1.8 ms and produces sensible uint16 output (embed lookup
+range ~ ±0.22 matches the DLC's calibrated range).
+
+### 5g. End-to-end oracle — RED, calibration scale mismatch across seams
+
+`scripts/specula_qwen3_4b_oracle.py` drives all 4 HTP sessions with
+prompt prefill + N generation steps. It dequant→requants uint16
+values across every seam (parts 2/3/4 input scale ≠ part N-1's
+output scale for the cross-part hidden). The full pipeline runs
+(30 prefill + 2 gen steps @ ~240 ms/step), but the decoded output is
+gibberish (`'Ġcls Ġcls Ġcls Ġmat'`) and first-decode logit cosine
+vs Qualcomm oracle is **-0.005** (random).
+
+**Root cause (identified):** calibration-scale mismatch at the
+seams. Part 1's output `/model/embed_tokens/Gather_output_0` was
+calibrated by qairt-quantizer running part 1's own graph — with w4
+weights, so the embed output range is ±0.22. Part 2's input
+`/model/embed_tokens/Gather_output_0` was calibrated with the clean
+fp32 CPU-ORT Gather output (which we pre-computed and wrote as raw
+calibration), range ±0.08. At runtime, part 1 produces values in
+±0.22; when we requant those fp32 values into part 2's ±0.08
+encoding, ~60% of the dynamic range clips, destroying signal. Same
+story at the L11 and L23 seams (each downstream calibrated against
+the clean CPU-ORT output of the upstream, not the w4 output).
+
+**Fix path (iterative calibration):**
+1. Compile part 1 → w4a16.bin (already done).
+2. Run part 1's HTP session over the 10 calibration samples to
+   generate *quantized* embed_hidden outputs; write those as part 2's
+   calibration input.
+3. Re-quantize part 2 with the new calibration; compile to part 2's
+   bin.
+4. Run parts 1+2 to generate part 3's calibration; quantize +
+   compile part 3. Repeat for part 4.
+
+This requires a small new script
+(`scripts/capture_calibration_qwen3_4b_split_iterative.py` or an
+extension to the existing split capture) that invokes ORT-QNN
+sessions on upstream `.bin` files to stage each downstream part's
+calibration. One pass per downstream part — ~2.4 s each for 10
+calibration samples at ~240 ms/step.
 
 ### Follow-up: generalize the splitter (deferred)
 

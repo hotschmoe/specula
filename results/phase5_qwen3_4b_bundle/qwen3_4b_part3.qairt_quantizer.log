@@ -1,0 +1,352 @@
+# C:\Users\hotschmoe\Documents\GitHub\specula\.venv-qairt\Scripts\python.exe C:\Qualcomm\AIStack\QAIRT\2.45.40.260406\bin\x86_64-windows-msvc\qairt-quantizer --input_dlc C:\Users\hotschmoe\Documents\GitHub\specula\results\phase5_qwen3_4b_bundle\qwen3_4b_part3.fp32.dlc --output_dlc C:\Users\hotschmoe\Documents\GitHub\specula\results\phase5_qwen3_4b_bundle\qwen3_4b_part3.w4a16-local.dlc --input_list C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\input_list.txt --weights_bitwidth 4 --act_bitwidth 16
+    14.7ms [  INFO ] Inferences will run in sync mode
+Processing inference input(s):
+_model_layers_11_Add_1_output_0 -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\model_layers_11_Add_1_output_0.raw
+attention_bias -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\attention_bias.raw
+position_ids_cos -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\position_ids_cos.raw
+position_ids_sin -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\position_ids_sin.raw
+past_key_values_12_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_12_key.raw
+past_key_values_12_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_12_value.raw
+past_key_values_13_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_13_key.raw
+past_key_values_13_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_13_value.raw
+past_key_values_14_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_14_key.raw
+past_key_values_14_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_14_value.raw
+past_key_values_15_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_15_key.raw
+past_key_values_15_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_15_value.raw
+past_key_values_16_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_16_key.raw
+past_key_values_16_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_16_value.raw
+past_key_values_17_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_17_key.raw
+past_key_values_17_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_17_value.raw
+past_key_values_18_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_18_key.raw
+past_key_values_18_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_18_value.raw
+past_key_values_19_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_19_key.raw
+past_key_values_19_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_19_value.raw
+past_key_values_20_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_20_key.raw
+past_key_values_20_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_20_value.raw
+past_key_values_21_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_21_key.raw
+past_key_values_21_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_21_value.raw
+past_key_values_22_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_22_key.raw
+past_key_values_22_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_22_value.raw
+past_key_values_23_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_23_key.raw
+past_key_values_23_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_000\past_key_values_23_value.raw
+_model_layers_11_Add_1_output_0 -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\model_layers_11_Add_1_output_0.raw
+attention_bias -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\attention_bias.raw
+position_ids_cos -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\position_ids_cos.raw
+position_ids_sin -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\position_ids_sin.raw
+past_key_values_12_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_12_key.raw
+past_key_values_12_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_12_value.raw
+past_key_values_13_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_13_key.raw
+past_key_values_13_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_13_value.raw
+past_key_values_14_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_14_key.raw
+past_key_values_14_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_14_value.raw
+past_key_values_15_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_15_key.raw
+past_key_values_15_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_15_value.raw
+past_key_values_16_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_16_key.raw
+past_key_values_16_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_16_value.raw
+past_key_values_17_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_17_key.raw
+past_key_values_17_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_17_value.raw
+past_key_values_18_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_18_key.raw
+past_key_values_18_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_18_value.raw
+past_key_values_19_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_19_key.raw
+past_key_values_19_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_19_value.raw
+past_key_values_20_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_20_key.raw
+past_key_values_20_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_20_value.raw
+past_key_values_21_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_21_key.raw
+past_key_values_21_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_21_value.raw
+past_key_values_22_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_22_key.raw
+past_key_values_22_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_22_value.raw
+past_key_values_23_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_23_key.raw
+past_key_values_23_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_001\past_key_values_23_value.raw
+_model_layers_11_Add_1_output_0 -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\model_layers_11_Add_1_output_0.raw
+attention_bias -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\attention_bias.raw
+position_ids_cos -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\position_ids_cos.raw
+position_ids_sin -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\position_ids_sin.raw
+past_key_values_12_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_12_key.raw
+past_key_values_12_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_12_value.raw
+past_key_values_13_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_13_key.raw
+past_key_values_13_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_13_value.raw
+past_key_values_14_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_14_key.raw
+past_key_values_14_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_14_value.raw
+past_key_values_15_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_15_key.raw
+past_key_values_15_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_15_value.raw
+past_key_values_16_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_16_key.raw
+past_key_values_16_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_16_value.raw
+past_key_values_17_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_17_key.raw
+past_key_values_17_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_17_value.raw
+past_key_values_18_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_18_key.raw
+past_key_values_18_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_18_value.raw
+past_key_values_19_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_19_key.raw
+past_key_values_19_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_19_value.raw
+past_key_values_20_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_20_key.raw
+past_key_values_20_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_20_value.raw
+past_key_values_21_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_21_key.raw
+past_key_values_21_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_21_value.raw
+past_key_values_22_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_22_key.raw
+past_key_values_22_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_22_value.raw
+past_key_values_23_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_23_key.raw
+past_key_values_23_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_002\past_key_values_23_value.raw
+_model_layers_11_Add_1_output_0 -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\model_layers_11_Add_1_output_0.raw
+attention_bias -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\attention_bias.raw
+position_ids_cos -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\position_ids_cos.raw
+position_ids_sin -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\position_ids_sin.raw
+past_key_values_12_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_12_key.raw
+past_key_values_12_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_12_value.raw
+past_key_values_13_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_13_key.raw
+past_key_values_13_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_13_value.raw
+past_key_values_14_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_14_key.raw
+past_key_values_14_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_14_value.raw
+past_key_values_15_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_15_key.raw
+past_key_values_15_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_15_value.raw
+past_key_values_16_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_16_key.raw
+past_key_values_16_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_16_value.raw
+past_key_values_17_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_17_key.raw
+past_key_values_17_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_17_value.raw
+past_key_values_18_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_18_key.raw
+past_key_values_18_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_18_value.raw
+past_key_values_19_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_19_key.raw
+past_key_values_19_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_19_value.raw
+past_key_values_20_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_20_key.raw
+past_key_values_20_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_20_value.raw
+past_key_values_21_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_21_key.raw
+past_key_values_21_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_21_value.raw
+past_key_values_22_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_22_key.raw
+past_key_values_22_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_22_value.raw
+past_key_values_23_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_23_key.raw
+past_key_values_23_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_003\past_key_values_23_value.raw
+_model_layers_11_Add_1_output_0 -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\model_layers_11_Add_1_output_0.raw
+attention_bias -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\attention_bias.raw
+position_ids_cos -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\position_ids_cos.raw
+position_ids_sin -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\position_ids_sin.raw
+past_key_values_12_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_12_key.raw
+past_key_values_12_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_12_value.raw
+past_key_values_13_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_13_key.raw
+past_key_values_13_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_13_value.raw
+past_key_values_14_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_14_key.raw
+past_key_values_14_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_14_value.raw
+past_key_values_15_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_15_key.raw
+past_key_values_15_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_15_value.raw
+past_key_values_16_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_16_key.raw
+past_key_values_16_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_16_value.raw
+past_key_values_17_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_17_key.raw
+past_key_values_17_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_17_value.raw
+past_key_values_18_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_18_key.raw
+past_key_values_18_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_18_value.raw
+past_key_values_19_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_19_key.raw
+past_key_values_19_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_19_value.raw
+past_key_values_20_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_20_key.raw
+past_key_values_20_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_20_value.raw
+past_key_values_21_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_21_key.raw
+past_key_values_21_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_21_value.raw
+past_key_values_22_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_22_key.raw
+past_key_values_22_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_22_value.raw
+past_key_values_23_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_23_key.raw
+past_key_values_23_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_004\past_key_values_23_value.raw
+_model_layers_11_Add_1_output_0 -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\model_layers_11_Add_1_output_0.raw
+attention_bias -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\attention_bias.raw
+position_ids_cos -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\position_ids_cos.raw
+position_ids_sin -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\position_ids_sin.raw
+past_key_values_12_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_12_key.raw
+past_key_values_12_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_12_value.raw
+past_key_values_13_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_13_key.raw
+past_key_values_13_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_13_value.raw
+past_key_values_14_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_14_key.raw
+past_key_values_14_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_14_value.raw
+past_key_values_15_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_15_key.raw
+past_key_values_15_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_15_value.raw
+past_key_values_16_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_16_key.raw
+past_key_values_16_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_16_value.raw
+past_key_values_17_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_17_key.raw
+past_key_values_17_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_17_value.raw
+past_key_values_18_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_18_key.raw
+past_key_values_18_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_18_value.raw
+past_key_values_19_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_19_key.raw
+past_key_values_19_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_19_value.raw
+past_key_values_20_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_20_key.raw
+past_key_values_20_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_20_value.raw
+past_key_values_21_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_21_key.raw
+past_key_values_21_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_21_value.raw
+past_key_values_22_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_22_key.raw
+past_key_values_22_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_22_value.raw
+past_key_values_23_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_23_key.raw
+past_key_values_23_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_005\past_key_values_23_value.raw
+_model_layers_11_Add_1_output_0 -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\model_layers_11_Add_1_output_0.raw
+attention_bias -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\attention_bias.raw
+position_ids_cos -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\position_ids_cos.raw
+position_ids_sin -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\position_ids_sin.raw
+past_key_values_12_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_12_key.raw
+past_key_values_12_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_12_value.raw
+past_key_values_13_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_13_key.raw
+past_key_values_13_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_13_value.raw
+past_key_values_14_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_14_key.raw
+past_key_values_14_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_14_value.raw
+past_key_values_15_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_15_key.raw
+past_key_values_15_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_15_value.raw
+past_key_values_16_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_16_key.raw
+past_key_values_16_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_16_value.raw
+past_key_values_17_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_17_key.raw
+past_key_values_17_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_17_value.raw
+past_key_values_18_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_18_key.raw
+past_key_values_18_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_18_value.raw
+past_key_values_19_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_19_key.raw
+past_key_values_19_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_19_value.raw
+past_key_values_20_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_20_key.raw
+past_key_values_20_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_20_value.raw
+past_key_values_21_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_21_key.raw
+past_key_values_21_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_21_value.raw
+past_key_values_22_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_22_key.raw
+past_key_values_22_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_22_value.raw
+past_key_values_23_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_23_key.raw
+past_key_values_23_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_006\past_key_values_23_value.raw
+_model_layers_11_Add_1_output_0 -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\model_layers_11_Add_1_output_0.raw
+attention_bias -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\attention_bias.raw
+position_ids_cos -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\position_ids_cos.raw
+position_ids_sin -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\position_ids_sin.raw
+past_key_values_12_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_12_key.raw
+past_key_values_12_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_12_value.raw
+past_key_values_13_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_13_key.raw
+past_key_values_13_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_13_value.raw
+past_key_values_14_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_14_key.raw
+past_key_values_14_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_14_value.raw
+past_key_values_15_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_15_key.raw
+past_key_values_15_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_15_value.raw
+past_key_values_16_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_16_key.raw
+past_key_values_16_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_16_value.raw
+past_key_values_17_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_17_key.raw
+past_key_values_17_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_17_value.raw
+past_key_values_18_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_18_key.raw
+past_key_values_18_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_18_value.raw
+past_key_values_19_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_19_key.raw
+past_key_values_19_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_19_value.raw
+past_key_values_20_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_20_key.raw
+past_key_values_20_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_20_value.raw
+past_key_values_21_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_21_key.raw
+past_key_values_21_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_21_value.raw
+past_key_values_22_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_22_key.raw
+past_key_values_22_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_22_value.raw
+past_key_values_23_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_23_key.raw
+past_key_values_23_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_007\past_key_values_23_value.raw
+_model_layers_11_Add_1_output_0 -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\model_layers_11_Add_1_output_0.raw
+attention_bias -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\attention_bias.raw
+position_ids_cos -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\position_ids_cos.raw
+position_ids_sin -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\position_ids_sin.raw
+past_key_values_12_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_12_key.raw
+past_key_values_12_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_12_value.raw
+past_key_values_13_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_13_key.raw
+past_key_values_13_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_13_value.raw
+past_key_values_14_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_14_key.raw
+past_key_values_14_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_14_value.raw
+past_key_values_15_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_15_key.raw
+past_key_values_15_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_15_value.raw
+past_key_values_16_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_16_key.raw
+past_key_values_16_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_16_value.raw
+past_key_values_17_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_17_key.raw
+past_key_values_17_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_17_value.raw
+past_key_values_18_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_18_key.raw
+past_key_values_18_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_18_value.raw
+past_key_values_19_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_19_key.raw
+past_key_values_19_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_19_value.raw
+past_key_values_20_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_20_key.raw
+past_key_values_20_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_20_value.raw
+past_key_values_21_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_21_key.raw
+past_key_values_21_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_21_value.raw
+past_key_values_22_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_22_key.raw
+past_key_values_22_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_22_value.raw
+past_key_values_23_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_23_key.raw
+past_key_values_23_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_008\past_key_values_23_value.raw
+_model_layers_11_Add_1_output_0 -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\model_layers_11_Add_1_output_0.raw
+attention_bias -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\attention_bias.raw
+position_ids_cos -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\position_ids_cos.raw
+position_ids_sin -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\position_ids_sin.raw
+past_key_values_12_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_12_key.raw
+past_key_values_12_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_12_value.raw
+past_key_values_13_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_13_key.raw
+past_key_values_13_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_13_value.raw
+past_key_values_14_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_14_key.raw
+past_key_values_14_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_14_value.raw
+past_key_values_15_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_15_key.raw
+past_key_values_15_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_15_value.raw
+past_key_values_16_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_16_key.raw
+past_key_values_16_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_16_value.raw
+past_key_values_17_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_17_key.raw
+past_key_values_17_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_17_value.raw
+past_key_values_18_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_18_key.raw
+past_key_values_18_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_18_value.raw
+past_key_values_19_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_19_key.raw
+past_key_values_19_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_19_value.raw
+past_key_values_20_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_20_key.raw
+past_key_values_20_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_20_value.raw
+past_key_values_21_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_21_key.raw
+past_key_values_21_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_21_value.raw
+past_key_values_22_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_22_key.raw
+past_key_values_22_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_22_value.raw
+past_key_values_23_key -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_23_key.raw
+past_key_values_23_value -> C:\Users\hotschmoe\Documents\GitHub\specula\models\calibration\qwen3_4b_ctx512_part3_raw\sample_009\past_key_values_23_value.raw
+2026-04-23 10:31:53,453 - 278 - INFO - Quantization completed successfully: 
+    15.9ms [  INFO ] No BackendExtensions lib provided;initializing NetRunBackend Interface
+    15.9ms [  INFO ] WindowsFileIO callback: WindowsFileIO
+    19.5ms [  INFO ] Initialized WindowsFileIO callback
+     3.9ms [  INFO ] [QNN_CPU] CpuBackend creation start
+     3.9ms [  INFO ] [QNN_CPU] CpuBackend creation end
+    19.8ms [WARNING] Unable to find a device with NetRunDeviceKeyDefault in Library NetRunBackendLibKeyDefault
+    19.8ms [WARNING] Profile Logger with name = defaultKey doesn't exist! Returning nullptr
+     3.9ms [  INFO ] [QNN_CPU] QnnContext create start
+     4.0ms [  INFO ] [QNN_CPU] QnnContext create end
+    20.1ms [  INFO ] Entering QuantizeRuntimeApp flow
+    20.1ms [WARNING] Profile Logger with name = defaultKey doesn't exist! Returning nullptr
+     5.8ms [  INFO ] [QNN_CPU] CpuGraph creation start
+     5.9ms [  INFO ] [QNN_CPU] CpuGraph creation end
+     5.9ms [  INFO ] [QNN_CPU] QnnGraph create end
+  1278.5ms [  INFO ] [QNN_CPU] QnnGraph finalize start
+  1324.3ms [  INFO ] [QNN_CPU] QnnGraph finalize end
+  1517.0ms [  INFO ] [QNN_CPU] QnnGraph execute start
+  2098.7ms [  INFO ] [QNN_CPU] QnnGraph execute end
+  2109.3ms [  INFO ] cleaning up resources for input tensors
+  2110.5ms [  INFO ] cleaning up resources for output tensors
+  2367.5ms [  INFO ] [QNN_CPU] QnnGraph execute start
+  2931.3ms [  INFO ] [QNN_CPU] QnnGraph execute end
+  2940.7ms [  INFO ] cleaning up resources for input tensors
+  2941.9ms [  INFO ] cleaning up resources for output tensors
+  3199.2ms [  INFO ] [QNN_CPU] QnnGraph execute start
+  3769.7ms [  INFO ] [QNN_CPU] QnnGraph execute end
+  3778.3ms [  INFO ] cleaning up resources for input tensors
+  3779.5ms [  INFO ] cleaning up resources for output tensors
+  4036.9ms [  INFO ] [QNN_CPU] QnnGraph execute start
+  4603.2ms [  INFO ] [QNN_CPU] QnnGraph execute end
+  4608.8ms [  INFO ] cleaning up resources for input tensors
+  4609.9ms [  INFO ] cleaning up resources for output tensors
+  4857.8ms [  INFO ] [QNN_CPU] QnnGraph execute start
+  5423.6ms [  INFO ] [QNN_CPU] QnnGraph execute end
+  5431.6ms [  INFO ] cleaning up resources for input tensors
+  5432.8ms [  INFO ] cleaning up resources for output tensors
+  5682.1ms [  INFO ] [QNN_CPU] QnnGraph execute start
+  6243.9ms [  INFO ] [QNN_CPU] QnnGraph execute end
+  6252.8ms [  INFO ] cleaning up resources for input tensors
+  6254.3ms [  INFO ] cleaning up resources for output tensors
+  6510.7ms [  INFO ] [QNN_CPU] QnnGraph execute start
+  7071.5ms [  INFO ] [QNN_CPU] QnnGraph execute end
+  7079.7ms [  INFO ] cleaning up resources for input tensors
+  7081.0ms [  INFO ] cleaning up resources for output tensors
+  7334.6ms [  INFO ] [QNN_CPU] QnnGraph execute start
+  7899.0ms [  INFO ] [QNN_CPU] QnnGraph execute end
+  7907.0ms [  INFO ] cleaning up resources for input tensors
+  7908.2ms [  INFO ] cleaning up resources for output tensors
+  8147.1ms [  INFO ] [QNN_CPU] QnnGraph execute start
+  8670.3ms [  INFO ] [QNN_CPU] QnnGraph execute end
+  8676.6ms [  INFO ] cleaning up resources for input tensors
+  8677.6ms [  INFO ] cleaning up resources for output tensors
+  8925.2ms [  INFO ] [QNN_CPU] QnnGraph execute start
+  9406.5ms [  INFO ] [QNN_CPU] QnnGraph execute end
+  9415.1ms [  INFO ] cleaning up resources for input tensors
+  9416.2ms [  INFO ] cleaning up resources for output tensors
+modeltools::IrGraph::reEvalMacsParams: Re-evaluated graph statistics after IrOptimizer optimization passes:
+modeltools::IrGraph::reEvalMacsParams: Total MACs: 1251268608
+modeltools::IrGraph::reEvalMacsParams: Total Params Count: 1211105280
+2026-04-23 10:31:56,814 - 278 - INFO - Quantized Model saved at: C:\Users\hotschmoe\Documents\GitHub\specula\results\phase5_qwen3_4b_bundle\qwen3_4b_part3.w4a16-local.dlc 
+ 12347.0ms [  INFO ] Freeing graphsInfo
+ 12347.0ms [WARNING] Profile Logger with name = defaultKey doesn't exist! Returning nullptr
+ 12351.3ms [  INFO ] [QNN_CPU] QnnContext Free start
+ 12975.9ms [  INFO ] [QNN_CPU] QnnContext Free end
+ 12972.6ms [WARNING] Profile Logger with name = defaultKey doesn't exist!
+ 12977.0ms [  INFO ] [QNN_CPU] QnnBackend Free start
+ 12977.0ms [  INFO ] [QNN_CPU] QnnBackend Free end
+ 12972.7ms [  INFO ] WindowsFileIO callback: ~WindowsFileIO
