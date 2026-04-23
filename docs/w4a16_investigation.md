@@ -393,6 +393,80 @@ Diagnostics used:
   normalisation `qnn-context-binary-generator` applies.
 - pathbmask sanity rerun via the same probe — green.
 
+### Update (session 17, 2026-04-22) — A.2 tfe barely moves; differential localises to V-projection weights
+
+x86 shipped `w4a16-local-tfe` at
+`Z:\exposed\junk\phase5_step15_local_qairt_out_qairt242_tfe\` (MD5
+`96667934cbf9dfdcbddf2f1fe93f13a9`). 2.42 calls the option `--act_quantizer
+enhanced`, not `tf_enhanced` (see `HANDOFF_tfe.md` §"Terminology
+correction"). Runtime contract identical to w4a16-local; refactored
+our IS_LOCAL_COMPILE dispatch to pattern-match (`"-local" in VARIANT`)
+so any `w4a16-local-*` suffix flows through the same schema.
+
+Correctness probe on fib-p0:
+
+| variant | cos vs CPU | argmax | top5 | multi-step |
+|---|---:|:-:|:-:|:-:|
+| fp16-local | **0.9999** | ✓ | 5/5 | 100% |
+| w4a16-local (tf) | 0.33 | ✗ | 1/5 | 0% |
+| **w4a16-local-tfe (enhanced)** | **0.36** | ✗ | 1/5 | 0% |
+
+cos shifted 0.33 → 0.36. Enhanced activation calibration is doing
+something measurable but nowhere near the 0.95 gate. Prompt-1 also
+ran: cos=0.606 (tfe). So the error is prompt-dependent (activation
+distribution matters) but dominated by a deeper issue than activation
+range.
+
+**Differential probe (`scripts/probe_w4a16_vs_fp16_differential.py`)
+— same feed, fp16-local vs w4a16-local-tfe binaries side by side, walked
+per-layer present_N_{key,value}:**
+
+```
+layer    key_cos  value_cos   k_maxabs   v_maxabs
+    0   0.985804   0.957463     50.149      0.125
+    1   0.982467   0.130328     35.275      0.602
+    2   0.968868   0.069804     47.292      0.712
+    3   0.881869  -0.001491     11.599      2.928
+    ...
+    8   0.226160   0.102045     23.842      3.194
+   21   0.295060   0.113408     24.617     26.873
+   27   0.446465   0.181096     18.297     45.679
+```
+
+Key tensors degrade gracefully from cos=0.99 at layer 0 to ~0.45 at
+layer 27. **Value tensors COLLAPSE at layer 1** (0.957 → 0.130) and
+stay near-random (0.0 to 0.18) for every subsequent layer. V-tensor
+absolute range also explodes — layer-0 max 0.125, layer-27 max 45.6
+— a ~350× dynamic-range growth across depth.
+
+Value projection is a pure `W_v × x` linear projection with no rotary
+folding. Keys survive better because rotary + MatMul smooths some
+error. Values don't. **If layer-1+ V-projection weights can't be
+represented cleanly at w4 precision, every downstream value tensor is
+garbage and accumulated error corrupts the logits.** This is a known
+failure mode for low-bit quantization of attention V/O projections,
+especially in small (0.6B) models where each layer matters.
+
+Enhanced activation calibration would not address this — it tunes
+ranges on activations that the W_v × x MatMul emits, but if W_v is
+already quantized too aggressively, no activation range tweak helps.
+
+**Implication for the decision tree:** the remaining options split
+into weight-precision fixes (new primary) and activation fixes
+(secondary):
+
+- **Weight precision:** A.6 w8a16 (all weights 8-bit — brute sanity),
+  A.5-style per-tensor overrides targeting V and O projections
+  specifically, or A.4 CLE (redistributes weight magnitudes but
+  doesn't raise bitwidth).
+- **Activation fixes:** A.3 Bundle B, A.2-alt 2.42 calibrators
+  (`sqnr` / `mse` / `percentile`). Lower expected impact given the
+  diagnosis; park unless weight-side fixes don't land.
+
+Updated x86 ask in `docs/phase5_lever_c_x86_ask.md` — A.6 w8a16 is
+now primary, A.4 CLE stays backup, A.5 per-tensor overrides stacked
+for after the w8a16 result.
+
 ### Update (later, same day) — A.1 result: fp16-pathb is fully correct
 
 x86 shipped the fp16-pathb rebuild at

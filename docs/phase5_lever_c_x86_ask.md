@@ -5,6 +5,96 @@ Focused one-pager for the x86 compile box. Companion to
 and `docs/phase5_local_qairt_compile_findings.md` (the pipeline you
 already ran).
 
+## Update 2 (session 17) — A.2 `enhanced` localises the issue to V-projection weights
+
+Your `w4a16-local-tfe` rebuild ran. cos(CPU, NPU) = 0.36 on fib-p0
+(vs 0.33 for baseline `tf`). Modest lift, nowhere near the 0.95
+gate. Per-prompt variance (0.36 on p0, 0.61 on p1) confirms activation
+distribution matters, but not dominantly.
+
+**Differential probe (fp16-local vs w4a16-local-tfe, same feed, per-layer
+present K/V):** layer-0 value cos=0.957 → layer-1 value cos=**0.130**
+→ every subsequent layer cos ≤ 0.18. Keys degrade gradually (0.99 →
+0.45 across 28 layers). Values collapse at layer 1 and stay random.
+V-tensor absolute range grows ~350× from layer 0 (max 0.125) to
+layer 27 (max 45.6).
+
+V-projection is pure `W_v × x` with no rotary folding. Rotary smooths
+key error; values have nothing. Our reading: **w4 weights are too
+narrow for the layer-1+ V projections.** Activation calibration
+cannot fix this because W_v itself is already lossy.
+
+Full per-layer data: `results/differential_w4a16_tfe_vs_fp16_p0.stdout`
+on ARM64. Can push to NAS if useful.
+
+### Primary ask now — A.6 w8a16 (precision-ceiling test, ~50 s)
+
+Set weights to 8-bit, keep activations at 16-bit. Same calibration
+(Bundle A), same pipeline, everything else identical to the
+w4a16-local-qairt242 run. Decisive:
+
+- If cos ≥ 0.95 → weight precision was the ceiling; we then either
+  ship w8a16 (still ~1.5× faster than fp16; Qualcomm's Llama-v3.2-1B
+  table shows w8a16 in a similar range to w4a16 for small models)
+  or pursue mixed-precision rescue via A.5 per-tensor overrides.
+- If cos < 0.95 → weight precision isn't the whole story, and we
+  stack CLE / per-tensor overrides next.
+
+```bash
+qairt-quantizer \
+    --input_dlc qwen3_0_6b_draft_v81_ctx256.pathb.fp32.dlc \
+    --output_dlc qwen3_0_6b_draft_v81_ctx256.pathb.w8a16-local.dlc \
+    --input_list input_list.txt \
+    --weights_bitwidth 8 \
+    --act_bitwidth 16
+# step 4 unchanged, output name: *.w8a16-local.bin
+```
+
+NAS drop: `Z:\exposed\junk\phase5_step15_local_qairt_out_qairt242_w8a16\`.
+ARM64 will consume under `SPECULA_NPU_VARIANT=w8a16-local` — our
+dispatcher pattern-matches "PTQ variant" (any non-`fp*-local`
+variant carrying the `-local` token) so `w8a16-local` flows through
+the same UINT16 IO schema with no code change. Scale/offset will
+naturally differ (weight PTQ with 8-bit target picks different
+ranges); existing encodings.json consumption handles that.
+
+### Backup ask — A.5 per-tensor overrides (V/O projections to w8)
+
+If A.6 w8a16 passes, this is the bigger unlock: keep most weights
+at w4, bump just the V and O projections to w8. Retains most of w4's
+memory savings while rescuing the projections that need precision.
+
+The projection tensor names per layer in our pathb graph (from the
+prep pipeline) are:
+- `/model/layers.{i}/self_attn/v_proj/MatMul` (V projection)
+- `/model/layers.{i}/self_attn/o_proj/MatMul` (O projection)
+
+I can author the `--quantization_overrides <json>` once we know w8
+fixes it. The JSON will enumerate 28 × 2 = 56 tensor overrides. ~10
+min authoring + another ~50 s compile.
+
+### Backup ask — A.4 CLE (orthogonal to weight bitwidth)
+
+Still worth trying if A.6 is marginal. CLE redistributes weight
+magnitudes across adjacent layers so w4 can represent each layer's
+weights with less per-layer outlier damage. Can stack on top of any
+PTQ algorithm.
+
+```bash
+qairt-quantizer ... --apply_algorithms cle \
+    --weights_bitwidth 4 --act_bitwidth 16 --input_list input_list.txt
+# Note: --use_adjusted_weights_quantizer from the earlier ask is
+# not a 2.42 flag; CLE is triggered via --apply_algorithms cle
+# (per your HANDOFF_tfe.md correction).
+```
+
+NAS suffix `-cle`.
+
+### Retired — A.2 enhanced
+
+Ran; ~0.03 cos lift. Keep the binary as a data point; not usable as
+a product deliverable.
+
 ## Update: A.1 fp16-pathb is CORRECT on ARM64
 
 Your fp16-pathb rebuild at `Z:\exposed\junk\phase5_step15_local_qairt_out_fp16\`

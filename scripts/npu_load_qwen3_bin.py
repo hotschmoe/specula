@@ -71,9 +71,27 @@ _VARIANT_SUFFIX = f".{VARIANT}" if VARIANT else ""
 # AI-Hub-compiled binaries don't: `--remove_unused_inputs` drops
 # position_ids, qairt-converter's output-rename pass is skipped so
 # outputs stay as `logits` / `present_N_{key,value}`, and the wrapper
-# must declare those names. Values in the set identify the local variants.
-LOCAL_COMPILE_VARIANTS = ("w4a16-local", "fp16-local")
-IS_LOCAL_COMPILE = VARIANT in LOCAL_COMPILE_VARIANTS
+# must declare those names.
+#
+# Naming convention: every local variant carries a `-local` token
+# somewhere in VARIANT. Examples we've shipped or planned:
+#   fp16-local              — no PTQ, float32 IO
+#   w4a16-local             — w4 weights, a16 activations, uint16 IO
+#   w4a16-local-tfe         — + enhanced act calibration
+#   w4a16-local-cle         — + cross-layer equalisation
+#   w4a16-local-b           — + Bundle B calibration
+#   w8a16-local             — w8 weights, a16 activations, uint16 IO
+#
+# The dtype split is PTQ-applied → UINT16 IO; no-PTQ → FLOAT IO.
+# A `fp*-local` prefix identifies no-PTQ variants (qairt-quantizer
+# called with `--float_bitwidth {16,32}` instead of weight/act flags).
+# Anything else that's local went through PTQ and has UINT16 IO.
+IS_LOCAL_COMPILE = "-local" in VARIANT
+IS_LOCAL_FP_NO_PTQ = IS_LOCAL_COMPILE and VARIANT.startswith("fp")
+# Retain the IS_LOCAL_W4A16 name (public across probe imports) but key
+# it on "quantized local variant" semantics rather than the w4a16 prefix
+# literally — w8a16-local and any future precision combo qualifies.
+IS_LOCAL_W4A16 = IS_LOCAL_COMPILE and not IS_LOCAL_FP_NO_PTQ
 
 # Logits live on the first compiled output. AI-Hub-compiled binaries go
 # through qairt-converter's output-renaming pass so every output ends up
@@ -259,7 +277,7 @@ def describe_inputs(cfg: dict, path_key: str) -> list[tuple[str, list[int], int]
     if path_key == "pathb" and IS_LOCAL_COMPILE:
         return _describe_inputs_pathb_local(
             cfg,
-            dtype=TensorProto.UINT16 if VARIANT == "w4a16-local" else TensorProto.FLOAT,
+            dtype=TensorProto.UINT16 if IS_LOCAL_W4A16 else TensorProto.FLOAT,
         )
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]
@@ -330,7 +348,7 @@ def describe_outputs(cfg: dict, path_key: str = "") -> list[tuple[str, list[int]
     if path_key == "pathb" and IS_LOCAL_COMPILE:
         return _describe_outputs_pathb_local(
             cfg,
-            dtype=TensorProto.UINT16 if VARIANT == "w4a16-local" else TensorProto.FLOAT,
+            dtype=TensorProto.UINT16 if IS_LOCAL_W4A16 else TensorProto.FLOAT,
         )
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]

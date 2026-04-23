@@ -64,6 +64,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from npu_load_qwen3_bin import (  # noqa: E402
     CONTEXT_MAX,
     IS_LOCAL_COMPILE,
+    IS_LOCAL_W4A16,
     LOGITS_OUTPUT_NAME,
     VARIANT,
     QuantSpec,
@@ -84,14 +85,10 @@ from npu_vs_cpu_correctness import (  # noqa: E402
     load_npu_session,
 )
 
-# The x86 local-compile variants (w4a16-local, fp16-local) both drop
-# position_ids via `--remove_unused_inputs` and expose `logits` /
-# `present_N_{key,value}` output names (no qairt-converter rename). The
-# w4a16-local variant additionally quantizes every IO except input_ids
-# to uint16; fp16-local keeps IO at fp32. The probe keeps an fp32-internal
-# representation and quantizes only at the session-feed boundary for
-# w4a16-local — symmetric dequant on the way back.
-IS_W4A16_LOCAL = VARIANT == "w4a16-local"
+# Any w4a16-local* variant (w4a16-local, w4a16-local-tfe, w4a16-local-cle,
+# ...) needs quant_specs loaded from encodings.json; fp16-local* keeps
+# IO at fp32 so no quant layer fires.
+IS_W4A16_LOCAL = IS_LOCAL_W4A16
 
 HUMANEVAL = REPO_ROOT / "prompts" / "humaneval_subset.jsonl"
 
