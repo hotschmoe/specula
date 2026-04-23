@@ -1062,6 +1062,74 @@ Artifacts:
 - `models/qwen3-4b-arm-pathb-ctx512-part{2,3,4}/model_halfdim.onnx`.
 - `scripts/capture_calibration_qwen3_4b_split.py` — `--halfdim` flag.
 
+### 5p. Remaining gap → AIMET calibration — path analysis
+
+At Phase 5o we match Qualcomm's structure (KV dtype/scales, cos/sin
+dim, ops) and generate the same first 8 decoded tokens exactly, but
+the bundle is ~50% oversized because we use w8 for the transformer
+layers where Qualcomm uses w4. Their w4 produces quality that our
+native qairt-quantizer w4 cannot reach. Closing that last gap needs
+AIMET-equivalent calibration (per our Phase 5j control experiment,
+it was AIMET-grade weight quant that made Qualcomm's w4 work).
+
+Three paths evaluated for acquiring AIMET-quality encodings on this
+X2E dev machine (Windows on ARM):
+
+**Path A — Qualcomm AI Hub cloud `submit_quantize_job()` [RECOMMENDED]**
+
+AI Hub exposes `qai_hub.submit_quantize_job()` which takes a PyTorch
+or ONNX model + calibration data and returns a quantized QDQ ONNX
+(AIMET runs on their cloud compute — no local install, no WSL).
+
+- Inputs: our `qwen3-4b-arm-pathb-ctx512-part{2,3,4}/model_halfdim.onnx`
+  + calibration samples (we already capture 50 per part via
+  `capture_calibration_qwen3_4b_split.py --halfdim`).
+- Configurable `weights_dtype` / `activations_dtype` (INT4 / INT16).
+- Returns: quantized ONNX with embedded QDQ nodes carrying encodings.
+- Then convert that QDQ ONNX via qairt-converter → w4a16 DLC, bin-gen,
+  drop into the existing wrapper/bundle pipeline.
+
+Constraints:
+- Upload size: ~5 GB per part (4 parts → 20 GB total). Feasible.
+- AI Hub quota: quantize jobs are billable; check pricing.
+- Each part is one job; cos/sin + KV encodings we already pin via
+  overrides would either (a) need to be re-expressed as pre-seeded
+  encodings in the input ONNX, or (b) layered via a second override
+  pass at qairt-converter time.
+
+**Path B — Rent AWS/GCP Linux x86_64 + CUDA VM** (fallback)
+
+If AI Hub's quantize job doesn't meet our w4a16 + per-row + CLE +
+our exact override needs, we can stand up a Linux x86_64 + NVIDIA
+CUDA VM (≥40 GB VRAM for 3-4B models, ≥80 GB for 7B+).
+
+- Template: `qai_hub_models/llama_v3_2_3b_instruct/quantize` (per
+  the AI Hub Models repo) — uses AIMET with Sequential MSE.
+- Runtime: ~1 hour standard PTQ, 5+ hours with SEQ_MSE.
+- Cost: ~\$2-10 per run on a small GPU instance.
+- Output: encodings JSON we import into qairt-converter via
+  `--quantization_overrides`.
+
+**Path C — WSL2 on this X2E Windows ARM machine** (not viable)
+
+WSL2 on Windows on ARM is available but only with ARM64 Linux
+distributions. AIMET's published wheels are Linux x86_64 only; no
+official ARM support. Options:
+- Pip install from source on ARM Linux → uncertain build
+  compatibility, no upstream support.
+- Run an x86_64 Ubuntu container via QEMU user-mode emulation →
+  correct but likely too slow for a 4B model (tens of hours per
+  calibration pass).
+
+Conclusion: WSL is not the right path on this hardware. Paths A and
+B are both feasible; A is cleaner (no infra to manage, billed per
+job) and B gives full control if we need to customize AIMET options
+beyond what AI Hub exposes.
+
+**Status**: enumerated, not executed. Requires AI Hub API credentials
+or a cloud Linux+CUDA box. Tracking as Task #14 (AI Hub path) and
+Task #15 (local AIMET fallback).
+
 ### Follow-up: generalize the splitter (deferred)
 
 `scripts/split_qwen3_4b_pathb.py` hard-codes Qwen3-4B's layer count
