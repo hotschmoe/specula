@@ -313,6 +313,59 @@ Z:\exposed\junk\phase5_step15_local_qairt_out_qairt242\
 The earlier 2.45-built drop at `phase5_step15_local_qairt_out\` is
 retained as a reference (known to fail ORT-QNN 1.24.4 with error 5000).
 
+## Update 2026-04-22 (later) — fp16-pathb rebuild (A.1 isolator)
+
+Ask: `docs/phase5_lever_c_x86_ask.md` § "Primary ask — fp16-pathb
+rebuild". Re-run the same pipeline with no PTQ, so the cos≈0.3
+failure observed on the w4a16-local build can be split between
+"w4a16 PTQ is the culprit" (fp16-pathb passes) vs "pathb rewrite /
+prep pipeline lost something" (fp16-pathb also fails).
+
+### Pipeline executed
+
+Reused the existing fp32 DLC on disk (deterministic from identical
+step-1 flags). Only new work:
+
+| step | tool | duration |
+|---|---|---:|
+| 3' | `qairt-quantizer --float_bitwidth 16` (no `--input_list`) | ~5 s |
+| 4 | `qnn-context-binary-generator` (same config_main.json) | ~79 s |
+
+Quantizer logged `Skipping quantization, no input_list provided` and
+wrote a DLC whose IO tensors all declare `Float_32` — matching the
+working fp16 pathbmask binary's runtime contract. Step 4 was 8× slower
+than the w4a16 build (79 s vs 10 s); the prepare pass does more work
+on a fp16 graph than a w4a16 one. Compile completed cleanly through
+every stage; magic bytes `00 00 00 02 00 00 00 03 00 00 00 00 00 00 00 01`
+match the Qualcomm reference.
+
+One Windows-quirk correction to the compile plan: the ask doc's
+step-4 invocation used the Linux-style `--model libQnnHtpV81Prepare
+--backend libQnnHtp`. On our x86 box those don't resolve — the real
+filenames in the SDK's `lib/x86_64-windows-msvc/` are `HtpPrepare.dll`
+and `QnnHtp.dll`. Passing full DLL paths works.
+
+One venv-quirk correction: QAIRT tools shebang `#!/usr/bin/env python3`
+doesn't find python3 on Windows by default (Store app-execution-alias
+intercepts first). Fix: `cp python.exe python3.exe` inside the venv's
+`Scripts\` dir. Applies to both 2.42 and 2.45 trees.
+
+### NAS drop
+
+```
+Z:\exposed\junk\phase5_step15_local_qairt_out_fp16\
+├── qwen3_0_6b_draft_v81_ctx256.pathb.fp16-local.bin    1.41 GB
+│   MD5: a4bf0c4e0f8ee9994d0ea2cec998186b
+├── HANDOFF_fp16.md
+├── dlc_info_fp16.txt
+├── qairt_compile_log.fp16.txt
+└── config_main.json / htp_backend_ext_inner.json
+```
+
+No `encodings.json` — the DLC declares fp32 IO, so no per-tensor
+quant params exist to extract. ARM64 runtime contract is float32 in,
+float32 logits out (same as the working fp16 pathbmask binary).
+
 ### What this closes
 
 - Answers the open question from the original findings: **2.45-built
