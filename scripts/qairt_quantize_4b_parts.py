@@ -113,12 +113,24 @@ def main() -> int:
             "--input_list", str(list_file),
             "--weights_bitwidth", str(args.weights_bitwidth),
             "--act_bitwidth", str(args.act_bitwidth),
-            # The bare default (no flags) silently applies aggressive outlier
-            # rejection — a diagnostic on part 2 showed L11 calibrated to
-            # ±11.5 despite position-0 samples hitting ±4000. Explicit
-            # min-max asymmetric widens L11 to ±1285 using the same data.
+            # The bare default silently applies aggressive outlier rejection
+            # despite help text claiming min-max. Explicit min-max asymmetric
+            # restores true min-max. See Phase 5h.
             "--act_quantizer_calibration", "min-max",
             "--act_quantizer_schema", "asymmetric",
+            # Per-channel (weight scale per output channel) and per-row
+            # (per-Matmul-row scale) weight quantization plus Cross-Layer
+            # Equalization redistribute weight magnitudes so HTP internal
+            # math runs at full fp32-equivalent magnitude instead of
+            # cascade-compressing. Without these flags, Part 2 HTP produces
+            # L11 at ±1400 vs CPU-ORT ±16000 (10× compression); with them,
+            # HTP produces ±16000 matching CPU-ORT (cos 0.9996). Also
+            # brings per-part bin size in line with Qualcomm's shipping
+            # bundle (Part 2: 1220 MB → 615 MB vs Qualcomm's 669 MB).
+            # See Phase 5k.
+            "--use_per_channel_quantization",
+            "--use_per_row_quantization",
+            "--apply_algorithms", "cle",
         ]
         print(f"\n=== part{idx}: qairt-quantizer ===")
         print(f"  {sys.executable} {tool} {' '.join(tool_args)}")

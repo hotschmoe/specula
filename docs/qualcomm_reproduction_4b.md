@@ -3,20 +3,15 @@
 **Status:** in-progress 2026-04-23. Phases 0-2 complete; Phase 3 hit the
 single-bin HTP ceiling (structural, not a bug); Phase 5 converter +
 quantizer + ctx-bin-gen + wrapper + HTP-load all green end to end.
-Phase 5h implemented position-spread + chat-template calibration;
-output varies per step now (not stuck) but cos=-0.027 random.
-Phase 5i (diagnosis) localized the bug: per-part HTP vs CPU-ORT probe
-shows Part 1 cos=1.0, Part 2 cos=0.998 but magnitude compressed 10×,
-Part 3 cos=1.0, **Part 4 cos=0.63**. Root cause is cascading calibration
-clipping: qairt-quantizer's internal calibration forward observes
-narrow activations at early layers, clips them, which makes the next
-layer's observed input narrow too, snowballing. 798 activation
-tensors per part — selective override doesn't scale. Phase 5j
-confirmed via Qualcomm's shipping Part 2 HTP probe: their L11 matches
-CPU-ORT at cos=+0.9998 with natural saturation at the wide encoding
-boundary — **w4a16 HTP math is NOT the limit**, our calibration is.
-Fix path reduced to AIMET-PyTorch calibration (primary) or iterative
-compile-in-the-loop recalibration (fallback).
+Phase 5h-i-j localized the bug via per-part probes. Phase 5k found
+the fix: adding `--use_per_channel_quantization --use_per_row_quantization
+--apply_algorithms cle` to qairt-quantizer. **First coherent English
+output achieved**: generation starts with `\n\nOkay, I'm...` (Qualcomm's
+starts with `\nOkay, the user...`). First-decode cos vs Qualcomm:
+**+0.283** (up from -0.027). Bin sizes match Qualcomm to within ~50 MB
+per part. Part 4 `logits` cos in isolation is +0.671 — the remaining
+divergence budget, attributable to lm_head quantization. Next: close
+the Part 4 gap toward the 0.95 gate.
 
 ## Goal
 
@@ -727,6 +722,77 @@ Artifacts:
 - `scripts/probe_qualcomm_part2_vs_cpu.py` — the decisive control
   probe. Run anytime to reconfirm that Qualcomm's bundle matches
   CPU-ORT at each seam (regression test for the control itself).
+
+### 5k. Per-channel + per-row + CLE weight quantization — coherent English
+
+Hypothesis from Phase 5j: since w4a16 HTP math is capable of full
+magnitude activations (Qualcomm proved it), and our output encoding
+is already wide, the limit must be *weight quantization quality*.
+Per-tensor w4 weight quant (one scale per weight matrix) is extremely
+lossy for large matrices; per-channel adds one scale per output
+channel, per-row adds one scale per Matmul row, CLE (Cross-Layer
+Equalization) redistributes weight magnitudes across consecutive
+linear layers to reduce per-channel range disparity.
+
+Added to `qairt_quantize_4b_parts.py`:
+```
+--use_per_channel_quantization
+--use_per_row_quantization
+--apply_algorithms cle
+```
+
+Re-quantized all 4 parts from scratch (no overrides). Results:
+
+**Per-part HTP vs CPU-ORT probe (at pos=0 BOS + empty past_kv):**
+
+| part | output | cos before (5i) | cos after (5k) | range before | range after |
+|---|---|---:|---:|---|---|
+| 1 | embed | +1.000000 | +1.000000 | ±0.08 | ±0.08 |
+| 2 | L11 | +0.997633 | **+0.999628** | ±1418 (10× compressed) | **±16148 (matches CPU-ORT)** |
+| 3 | L23 | +0.999993 | +0.999999 | ±16340 | ±16405 |
+| 4 | logits | +0.630841 | +0.670627 | ±3.73 | ±3.64 |
+
+**Per-part bin sizes vs Qualcomm:**
+
+| part | ours before (5h) | ours after (5k) | Qualcomm shipping |
+|---|---:|---:|---:|
+| 1 | 778 MB | 778 MB | 778 MB |
+| 2 | 1220 MB | **615 MB** | 669 MB |
+| 3 | 1221 MB | **615 MB** | 669 MB |
+| 4 | 1612 MB | **813 MB** | 1020 MB |
+
+Parts 2/3 now match Qualcomm's size to within ~50 MB — strong
+structural convergence. Part 4 is still 200 MB smaller than
+Qualcomm's (suggests Qualcomm uses slightly different lm_head
+quantization, possibly wider bitwidth for the final FC).
+
+**End-to-end oracle result — FIRST COHERENT OUTPUT:**
+
+Prompt: `<|im_start|>system\nYou are a helpful AI assistant<|im_end|>...What is gravity? Keep the answer under ten words.`
+
+| run | cos vs Qualcomm oracle | decode |
+|---|---:|---|
+| 5g baseline | -0.005 | stuck `cls cls cls cls` |
+| 5h chat+min-max asym | -0.027 | varied gibberish `PedPedPed` |
+| 5i + L11 seam override | -0.027 | varied gibberish `carr iva arily` |
+| **5k per-channel+row+CLE** | **+0.283** | **`\n\nOkay, I'm a bit of...`** |
+
+Qualcomm's oracle decode starts with `\nOkay, the user is asking...`
+— **both our output and Qualcomm's start with "\n\nOkay"**. The model
+is running coherently; it just diverges in content direction from
+Qualcomm's specific completion after a few tokens. +0.283 cos is
+below the 0.95 gate but conclusively non-random. Remaining gap
+attributable to Part 4 (cos=0.67 in isolation) — lm_head
+quantization quality is the next lever.
+
+Also tried on Part 4 (no change): `--bias_bitwidth 32
+--enable_per_row_quantized_bias`. Part 4 fp32 DLC also doesn't
+expose lm_head weight encoding in the JSON dump, so we can't
+directly inspect per-channel coverage of that final FC matrix.
+Next likely lever: widen lm_head weights to 8-bit (selective via
+`--keep_weights_quantized` with a tensor-specific override) or
+route the Qualcomm-exported `logits` encoding back as a
+`--quantization_overrides` pin.
 
 ### Follow-up: generalize the splitter (deferred)
 
