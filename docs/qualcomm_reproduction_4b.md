@@ -11,8 +11,12 @@ Part 3 cos=1.0, **Part 4 cos=0.63**. Root cause is cascading calibration
 clipping: qairt-quantizer's internal calibration forward observes
 narrow activations at early layers, clips them, which makes the next
 layer's observed input narrow too, snowballing. 798 activation
-tensors per part — selective override doesn't scale. Fundamental
-fix needs iterative recalibration or AIMET/QAT-grade pipeline.
+tensors per part — selective override doesn't scale. Phase 5j
+confirmed via Qualcomm's shipping Part 2 HTP probe: their L11 matches
+CPU-ORT at cos=+0.9998 with natural saturation at the wide encoding
+boundary — **w4a16 HTP math is NOT the limit**, our calibration is.
+Fix path reduced to AIMET-PyTorch calibration (primary) or iterative
+compile-in-the-loop recalibration (fallback).
 
 ## Goal
 
@@ -662,6 +666,67 @@ Artifacts committed in this phase:
 - `results/phase5_qwen3_4b_bundle/part2_encoding_overrides.json` —
   the 12-entry overrides (current state: layers 0-11 Add_1
   residuals, based on CPU-ORT observed ranges).
+
+### 5j. Qualcomm Part 2 HTP vs CPU-ORT — decisive control experiment
+
+`scripts/probe_qualcomm_part2_vs_cpu.py` runs Qualcomm's shipping
+Part 2 `.bin` with the same test input (BOS token 151644, pos=0,
+empty past_kv) and compares their L11 HTP output against CPU-ORT
+fp32. This distinguishes "w4a16 fundamentally can't represent this
+activation" from "our calibration is the bug."
+
+| source | L11 range | cos vs CPU-ORT | sat@0 / @65535 |
+|---|---|---:|---|
+| CPU-ORT pathb fp32 (truth) | [-4596, +16136] | — | — |
+| **Qualcomm HTP** | **[-3164, +11104]** | **+0.999791** | 0.039% / 0% |
+| Our HTP (post-5h overrides) | [-395, +1418] | +0.997633 | 0% / 0% |
+
+Qualcomm's HTP L11 sits right at the encoding boundary
+(scale=0.2177, range exactly [-3164, +11104], saturation 0.039%
+confirms the math reaches the encoding's negative bound): their
+w4a16 math reaches ~±11000 and then the output encoding imposes
+that cap. Their cos=+0.9998 against CPU-ORT fp32 shows the direction
+matches and magnitude is preserved up to the encoding ceiling.
+
+Our HTP L11 at ±1400 with sat=0% means the math *itself* is
+compressed, not the encoding. Our w4a16 HTP is running real
+activations through narrow internal tensor encodings, producing
+compressed outputs that don't even approach the (now-wide)
+output encoding.
+
+**Decisive conclusion: w4a16 on HTP is fully capable of producing
+fp32-magnitude activations.** The issue is 100% in our
+quantization pipeline — qairt-quantizer's native calibration
+cascades narrow encodings layer-by-layer, while Qualcomm's
+calibration (almost certainly AIMET-based) produced uniformly
+wide internal encodings that let the HTP math run at full
+magnitude.
+
+This narrows the viable fix paths:
+1. **AIMET-PyTorch calibration** (was candidate #3): generate
+   encodings from the HF Qwen3-4B checkpoint using AIMET's
+   calibrator, then import the resulting encodings JSON into
+   QAIRT for compile-only. This is how Qualcomm almost certainly
+   produced their bundle. Well-documented path. **Primary target.**
+2. **Iterative compile-in-the-loop** (was candidate #1):
+   useful if we want to stay inside QAIRT's native quantizer.
+   Each iteration compiles upstream, uses the quantized output as
+   the next-layer calibration input, so subsequent-layer
+   observations aren't CPU-ORT-wide but runtime-realistic. Slower
+   but avoids AIMET dependency. **Fallback.**
+3. AI Hub PTQ (was candidate #4): easiest — resubmit the pathb
+   ONNX and let AI Hub handle PTQ with their internal tooling.
+   Unknown whether their PTQ flow matches the quality of their
+   shipping bundle but worth trying.
+4. Offline per-tensor encoding extraction (was candidate #2):
+   now deprioritized — the cascade finding above shows we'd need
+   to override every one of ~800 tensors per part, and many don't
+   have direct ONNX counterparts. Too fragile.
+
+Artifacts:
+- `scripts/probe_qualcomm_part2_vs_cpu.py` — the decisive control
+  probe. Run anytime to reconfirm that Qualcomm's bundle matches
+  CPU-ORT at each seam (regression test for the control itself).
 
 ### Follow-up: generalize the splitter (deferred)
 
