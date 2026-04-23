@@ -70,10 +70,11 @@ from onnx import TensorProto, helper, numpy_helper
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-OPTIMUM_DIR = REPO_ROOT / "models" / "qwen3-0.6b-optimum"
-STAGED_DIR = REPO_ROOT / "models" / "qwen3-0.6b-staged"
-PATHA_DIR = REPO_ROOT / "models" / "qwen3-0.6b-patha"
-PATHBMASK_DIR = REPO_ROOT / "models" / "qwen3-0.6b-pathbmask"
+
+# Defaults for the original Qwen3-0.6B pipeline. Override via --model-stem
+# (e.g. `--model-stem qwen3-4b-optimum-arm` -> model dirs all share that
+# stem prefix, so `<stem>-staged`, `<stem>-patha`, `<stem>-pathbmask`).
+DEFAULT_STEM = "qwen3-0.6b"
 
 CTX_LEN = 512  # hard decode-window size we compile for
 
@@ -331,8 +332,8 @@ def elide_isnan_where_guards(model: onnx.ModelProto) -> int:
     return len(renames)
 
 
-def run_stage() -> int:
-    model = load_model(OPTIMUM_DIR)
+def run_stage(optimum_dir: Path, staged_dir: Path) -> int:
+    model = load_model(optimum_dir)
     summarize_graph(model, "input")
 
     print("2a: promoting attention_mask to initializer ...")
@@ -340,7 +341,9 @@ def run_stage() -> int:
 
     print("2b: eliding Where(IsNaN(x), c, x) -> x ...")
     elided = elide_isnan_where_guards(model)
-    print(f"  2b: elided {elided} guards (expected 28)")
+    # The expected count equals num_hidden_layers; printed here only for
+    # operator sanity, not enforced (works for any layer count).
+    print(f"  2b: elided {elided} guards (one per attention layer)")
 
     # Don't re-run shape inference here. Shape inference on the full
     # 7k-node model with external-data resolved is slow and not needed
@@ -348,8 +351,8 @@ def run_stage() -> int:
     # remaining edge.
 
     summarize_graph(model, "staged")
-    save_model(model, STAGED_DIR)
-    copy_sidecars(OPTIMUM_DIR, STAGED_DIR)
+    save_model(model, staged_dir)
+    copy_sidecars(optimum_dir, staged_dir)
     return 0
 
 
@@ -357,7 +360,7 @@ def run_stage() -> int:
 # Fold A - placeholder; written after recon
 # ---------------------------------------------------------------------------
 
-def run_fold_patha() -> int:
+def run_fold_patha(optimum_dir: Path, staged_dir: Path, patha_dir: Path) -> int:
     """Path A: replace Gather_5 with ConstantOfShape(Shape(idx), True, BOOL)
     + delete the 2 BOOL->BOOL identity casts (Cast_5, Cast_6) + fold away
     Cast_2 (INT64 attention_mask -> BOOL -> obsolete after Gather_5 swap).
@@ -370,7 +373,7 @@ def run_fold_patha() -> int:
     use Path B-mask instead. Either way, the compile result is research
     signal we didn't have before.
     """
-    model = load_model(STAGED_DIR)
+    model = load_model(staged_dir)
     summarize_graph(model, "input")
 
     # Names from recon. Validate they exist before editing anything.
@@ -464,8 +467,8 @@ def run_fold_patha() -> int:
         print(f"  pruned {unused_init} unused initializers")
 
     summarize_graph(model, "patha")
-    save_model(model, PATHA_DIR)
-    copy_sidecars(OPTIMUM_DIR, PATHA_DIR)
+    save_model(model, patha_dir)
+    copy_sidecars(optimum_dir, patha_dir)
     return 0
 
 
@@ -473,7 +476,7 @@ def run_fold_patha() -> int:
 # Fold B-mask - direct attention_bias splice
 # ---------------------------------------------------------------------------
 
-def run_fold_pathbmask() -> int:
+def run_fold_pathbmask(optimum_dir: Path, staged_dir: Path, pathbmask_dir: Path) -> int:
     """Path B-mask: bypass the BOOL mask subgraph entirely by feeding the
     attention additive bias in as a new FP32 graph input. Rewire each of
     the 28 Add_2 nodes to read from the new input instead of Where_2's
@@ -490,7 +493,7 @@ def run_fold_pathbmask() -> int:
     their production pattern is enough to clear HTP compile; the RoPE
     half is deferred to a future cycle.
     """
-    model = load_model(STAGED_DIR)
+    model = load_model(staged_dir)
     summarize_graph(model, "input")
 
     # ---- Step 1: add attention_bias graph input ----
@@ -523,9 +526,9 @@ def run_fold_pathbmask() -> int:
                 splices += 1
                 break
     print(f"  2: spliced attention_bias into {splices} Add_2 nodes "
-          "(expected 28)")
-    if splices != 28:
-        print(f"WARNING: expected 28 splices; got {splices}")
+          "(one per attention layer)")
+    if splices == 0:
+        print(f"WARNING: zero splices — node naming convention may have changed")
 
     # ---- Step 3: let DCE drop the BOOL chain ----
     # The 28 Where_2 outputs are now orphaned; DCE reclaims them and
@@ -540,8 +543,8 @@ def run_fold_pathbmask() -> int:
           "(attention_mask typically drops out here)")
 
     summarize_graph(model, "pathbmask")
-    save_model(model, PATHBMASK_DIR)
-    copy_sidecars(OPTIMUM_DIR, PATHBMASK_DIR)
+    save_model(model, pathbmask_dir)
+    copy_sidecars(optimum_dir, pathbmask_dir)
     return 0
 
 
@@ -556,14 +559,44 @@ def main() -> int:
         required=True,
         choices=("stage", "fold-patha", "fold-pathbmask"),
     )
+    parser.add_argument(
+        "--model-stem",
+        default=DEFAULT_STEM,
+        help=f"Model directory stem (default: {DEFAULT_STEM!r}). "
+             f"Used to derive <stem>-optimum, <stem>-staged, <stem>-patha, "
+             f"<stem>-pathbmask under models/.",
+    )
+    parser.add_argument(
+        "--optimum-dir", type=Path, default=None,
+        help="Override the optimum source directory (default: models/<stem>-optimum)",
+    )
+    parser.add_argument(
+        "--staged-dir", type=Path, default=None,
+        help="Override the staged output/source directory (default: models/<stem>-staged)",
+    )
+    parser.add_argument(
+        "--patha-dir", type=Path, default=None,
+        help="Override the path-A output directory (default: models/<stem>-patha)",
+    )
+    parser.add_argument(
+        "--pathbmask-dir", type=Path, default=None,
+        help="Override the path-B-mask output directory (default: models/<stem>-pathbmask)",
+    )
     args = parser.parse_args()
 
-    dispatch = {
-        "stage": run_stage,
-        "fold-patha": run_fold_patha,
-        "fold-pathbmask": run_fold_pathbmask,
-    }
-    return dispatch[args.mode]()
+    models_root = REPO_ROOT / "models"
+    optimum_dir = args.optimum_dir or (models_root / f"{args.model_stem}-optimum")
+    staged_dir = args.staged_dir or (models_root / f"{args.model_stem}-staged")
+    patha_dir = args.patha_dir or (models_root / f"{args.model_stem}-patha")
+    pathbmask_dir = args.pathbmask_dir or (models_root / f"{args.model_stem}-pathbmask")
+
+    if args.mode == "stage":
+        return run_stage(optimum_dir, staged_dir)
+    if args.mode == "fold-patha":
+        return run_fold_patha(optimum_dir, staged_dir, patha_dir)
+    if args.mode == "fold-pathbmask":
+        return run_fold_pathbmask(optimum_dir, staged_dir, pathbmask_dir)
+    return 2
 
 
 if __name__ == "__main__":

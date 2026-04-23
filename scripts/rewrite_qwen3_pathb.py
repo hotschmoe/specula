@@ -21,6 +21,7 @@ externally-computed cos/sin in the runtime helper.
 
 from __future__ import annotations
 
+import argparse
 import os
 from pathlib import Path
 
@@ -29,10 +30,11 @@ import onnx
 from onnx import TensorProto, helper, numpy_helper
 
 REPO = Path(__file__).resolve().parents[1]
-SRC_DIR = REPO / "models" / "qwen3-0.6b-pathbmask"
-DST_DIR = REPO / "models" / "qwen3-0.6b-pathb"
-SRC_ONNX = SRC_DIR / "model.onnx"
-DST_ONNX = DST_DIR / "model.onnx"
+
+# Defaults for the original Qwen3-0.6B pipeline. Override via --model-stem
+# (e.g. `--model-stem qwen3-4b-optimum-arm` -> `<stem>-pathbmask` and
+# `<stem>-pathb`).
+DEFAULT_STEM = "qwen3-0.6b"
 
 ROTARY_PREFIX = "/model/rotary_emb/"
 # layer-0 Unsqueeze_6/7 are the only direct consumers of the rotary
@@ -49,8 +51,29 @@ SIN_INPUT = "position_ids_sin"
 
 
 def main() -> None:
-    print(f"loading {SRC_ONNX} (with external data)...")
-    m = onnx.load(str(SRC_ONNX), load_external_data=True)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--model-stem", default=DEFAULT_STEM,
+        help=f"Model directory stem (default: {DEFAULT_STEM!r}). Used to derive "
+             f"<stem>-pathbmask (input) and <stem>-pathb (output) under models/.",
+    )
+    parser.add_argument(
+        "--src-dir", type=Path, default=None,
+        help="Override the path-B-mask input directory (default: models/<stem>-pathbmask)",
+    )
+    parser.add_argument(
+        "--dst-dir", type=Path, default=None,
+        help="Override the path-B output directory (default: models/<stem>-pathb)",
+    )
+    args = parser.parse_args()
+
+    src_dir = args.src_dir or (REPO / "models" / f"{args.model_stem}-pathbmask")
+    dst_dir = args.dst_dir or (REPO / "models" / f"{args.model_stem}-pathb")
+    src_onnx = src_dir / "model.onnx"
+    dst_onnx = dst_dir / "model.onnx"
+
+    print(f"loading {src_onnx} (with external data)...")
+    m = onnx.load(str(src_onnx), load_external_data=True)
     print(f"  inputs={len(m.graph.input)} nodes={len(m.graph.node)}")
 
     # Sanity-check Constant_7 / Constant_8 are 1.0 — if not, we'd need to
@@ -160,23 +183,23 @@ def main() -> None:
     print(f"  initializers: {before} -> {len(kept_inits)}")
 
     # 5. Save with consolidated external data.
-    DST_DIR.mkdir(parents=True, exist_ok=True)
+    dst_dir.mkdir(parents=True, exist_ok=True)
     # If a stale model.data exists, remove so save_as_external_data gets a clean target
-    for f in DST_DIR.iterdir():
+    for f in dst_dir.iterdir():
         if f.suffix in {".onnx", ".data"} or f.name.endswith(".onnx_data"):
             f.unlink()
 
-    print(f"saving to {DST_ONNX}...")
+    print(f"saving to {dst_onnx}...")
     onnx.save(
         m,
-        str(DST_ONNX),
+        str(dst_onnx),
         save_as_external_data=True,
         all_tensors_to_one_file=True,
         location="model.data",
         size_threshold=1024,
     )
     print(f"  done.")
-    sz = (DST_DIR / "model.data").stat().st_size
+    sz = (dst_dir / "model.data").stat().st_size
     print(f"  model.data size: {sz / 1e9:.2f} GB")
 
 
