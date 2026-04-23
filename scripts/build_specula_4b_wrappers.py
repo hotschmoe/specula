@@ -56,8 +56,11 @@ def part_io_spec(part: int) -> tuple[list[tuple], list[tuple], str]:
     def decode_inputs(s: int, e: int) -> list[tuple]:
         items = [
             ("attention_bias", "uint16", [1, 1, 1, CTX]),
-            ("position_ids_cos", "uint16", [1, 1, HEAD_DIM]),
-            ("position_ids_sin", "uint16", [1, 1, HEAD_DIM]),
+            # Phase 5o: half-dim cos/sin [1, 1, 64] matching Qualcomm's
+            # genie bundle. Graph internally concats to [1,1,128] before
+            # the existing Unsqueeze + rotary Muls.
+            ("position_ids_cos", "uint16", [1, 1, HEAD_DIM // 2]),
+            ("position_ids_sin", "uint16", [1, 1, HEAD_DIM // 2]),
         ]
         # Phase 5n: KV now uint8 (matching Qualcomm's genie bundle). Per-layer
         # scales applied via --quantization_overrides at convert time.

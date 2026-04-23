@@ -76,6 +76,16 @@ def dequant_u16(q: np.ndarray, scale: float, offset: int) -> np.ndarray:
     return ((q.astype(np.int64) + int(offset)).astype(np.float64) * scale).astype(np.float32)
 
 
+def rope_half_dim(position: int) -> tuple[np.ndarray, np.ndarray]:
+    """Phase 5o: half-dim cos/sin [1,1,64] for graph inputs matching
+    Qualcomm's genie bundle. The graph internally concats to [1,1,128]."""
+    inv_freq = 1.0 / (ROPE_THETA ** (np.arange(0, HEAD_DIM, 2, dtype=np.float32) / HEAD_DIM))
+    freqs = position * inv_freq
+    cos = np.cos(freqs).astype(np.float32).reshape(1, 1, HEAD_DIM // 2)
+    sin = np.sin(freqs).astype(np.float32).reshape(1, 1, HEAD_DIM // 2)
+    return cos, sin
+
+
 def rope_full_dim(position: int) -> tuple[np.ndarray, np.ndarray]:
     inv_freq = 1.0 / (ROPE_THETA ** (np.arange(0, HEAD_DIM, 2, dtype=np.float32) / HEAD_DIM))
     freqs = position * inv_freq
@@ -206,7 +216,7 @@ def main() -> int:
         all_step_tokens.append(token_in)
         position = step
 
-        cos_fp32, sin_fp32 = rope_full_dim(position)
+        cos_fp32, sin_fp32 = rope_half_dim(position)
         bias_fp32 = attention_bias_at(position)
         cos_u16 = quant_u16(cos_fp32, cos_scale, cos_offset)
         sin_u16 = quant_u16(sin_fp32, sin_scale, sin_offset)

@@ -5,16 +5,16 @@ single-bin HTP ceiling (structural, not a bug); Phase 5 converter +
 quantizer + ctx-bin-gen + wrapper + HTP-load all green end to end.
 Phase 5h-i-j localized the bug via per-part probes. Phase 5k found
 the fix: adding `--use_per_channel_quantization --use_per_row_quantization
---apply_algorithms cle` to qairt-quantizer. Phase 5l closed the Part 4
-gap by auto-defaulting Part 4 to w8. Phase 5m pushed parts 2/3 to
-w8 as well. **Token-by-token argmax agreement with Qualcomm's
-oracle: 29/46 (63%)**; the first ~7 decoded tokens match Qualcomm
-exactly (`\n Okay , the user is asking`). Our generation follows
-Qualcomm's template "Okay, the user is asking ... What is gravity?
-... answer" with only minor word-level divergence. Size overhead
-is ~50% (4833 MB bundle vs Qualcomm's 3136 MB); closing that
-requires better w4 calibration quality (AIMET-equivalent) to
-preserve cos at smaller bitwidth.
+--apply_algorithms cle` to qairt-quantizer. Phases 5l-5m (Part 4 → w8, parts 2/3 → w8) first gave coherent
+English. Phase 5n (uint8 KV with Qualcomm's exact per-layer scales)
+then Phase 5o (half-dim cos/sin matching Qualcomm's rotary format)
+pushed first-decode cos to **+0.611** and matched Qualcomm's
+**first 8 decoded tokens exactly** (`\n Okay , the user (space) is
+asking`). Total argmax agreement: 30/46 (65%). Structural match
+now covers: Part 1 size, KV dtype+scale, cos/sin dim. Remaining
+gap is the ~50% size overhead from w8 weights (vs Qualcomm's
+better-calibrated w4) — final lever is AIMET-PyTorch calibration
+on a Linux x86_64 box (AIMET isn't available for ARM Windows).
 
 ## Goal
 
@@ -972,6 +972,95 @@ Artifacts:
 - `scripts/build_uint8_kv_overrides.py` — extracts Qualcomm's KV
   scales and emits part2/3/4 override JSONs.
 - `results/phase5_qwen3_4b_bundle/part{2,3,4}_kv_uint8_overrides.json`.
+
+### 5o. Half-dim cos/sin — matching Qualcomm's rotary convention
+
+Qualcomm's shipping bundle takes cos/sin as half-dim
+(`[1, 1, 1, 64]` for AR1) at the graph input, while the original
+optimum export produced full-dim `[1, 1, 128]`. For structural
+match we rewrite our pathb split ONNXs so their cos/sin inputs
+are `[1, 1, 64]`, then the graph immediately concatenates them to
+`[1, 1, 128]` before the existing Unsqueeze + rotary Muls — a pure
+I/O change, numerically identical (Concat([x, x], axis=-1) produces
+the same 128-wide tensor the original graph expected).
+
+`scripts/rewrite_halfdim_cos_sin.py` performs the surgery on
+parts 2/3/4 in place (writes `model_halfdim.onnx` alongside the
+original `model.onnx`, sharing the same `model.onnx_data` external
+weight file — zero weight duplication).
+
+Equivalence check (sample-0 BOS pos=0, all 50 samples pass):
+CPU-ORT fp32 L11 from halfdim graph = CPU-ORT fp32 L11 from full-dim
+graph, max_abs_diff = 0.0, cos = 1.0. Surgery is bit-exact.
+
+`capture_calibration_qwen3_4b_split.py` gained `--halfdim` flag
+that loads `model_halfdim.onnx` for parts 2/3/4 and truncates
+cos/sin to first 64 elements before writing raws. Re-captured all
+50 calibration samples in halfdim form (cos/sin raw = 256 B vs
+the old 512 B, confirming [1,1,64]).
+
+Re-converted parts 2/3/4 from `model_halfdim.onnx` with the
+uint8 KV overrides, re-quantized with w8 + per-channel + CLE,
+re-bin-gen'd. Regenerated wrapper ONNXs with cos/sin declared as
+`[1, 1, 64]`. Updated both `probe_4b_per_part_htp_vs_cpu.py` and
+`specula_qwen3_4b_oracle.py` with a `rope_half_dim()` helper
+(64 freqs, single cos/sin, no concat) and pointed their CPU-ORT
+reference at `model_halfdim.onnx`.
+
+**Per-part probe unchanged from 5n** (equivalent math):
+
+| part | cos |
+|---:|---:|
+| 1 | 1.000000 |
+| 2 | 0.999971 |
+| 3 | 0.999999 |
+| 4 | 0.988884 |
+
+**End-to-end oracle — structural token match with Qualcomm extends to 8 decoded tokens**:
+
+| run | first-decode cos | decode |
+|---|---:|---|
+| 5m (full-dim, u16 KV) | +0.282 | `\nOkay, theuser is asking, " what is gravity? keep the answer` |
+| 5n (full-dim, u8 KV) | +0.374 | `\nOkay, theuser is asking, " What is gravity? Keep the answer` |
+| **5o (half-dim, u8 KV)** | **+0.611** | `\nOkay, the user is asking, " What is gravity? Keep the answer` |
+| Qualcomm shipping | — | `\nOkay, the user is asking "What is gravity?" and wants the answer` |
+
+Per-step argmax agreement vs Qualcomm's recorded oracle:
+
+| step | pos | token | Qualcomm | ours (5o) | match |
+|---|---:|---|---:|---:|:---:|
+| 29 | 29 | `<|im_start|>` | 151667 | 151667 | ✓ |
+| 30 | 30 | `\n` | 198 | 198 | ✓ |
+| 31 | 31 | `Okay` | 32313 | 32313 | ✓ |
+| 32 | 32 | `,` | 11 | 11 | ✓ |
+| 33 | 33 | ` the` | 279 | 279 | ✓ |
+| 34 | 34 | ` ` (space) | 1196 | 1196 | ✓ |
+| 35 | 35 | ` is` | 374 | 374 | ✓ |
+| 36 | 36 | ` asking` | 10161 | 10161 | ✓ |
+| 37 | 37 | `"` | 330 | 11 (`,`) | ✗ |
+
+**8 consecutive matches** (up from 5m's 5 matches). Total argmax
+agreement: 30/46 (65.2%, up from 28/46).
+
+Halfdim didn't change the math, so why does cos improve from
+0.374 to 0.611? Speculation: the concat-then-quantize flow for
+full-dim cos/sin introduces tiny asymmetric encoding imprecisions
+when cos/sin values near 1.0 / 0.0 are calibrated per-axis; the
+half-dim input avoids the redundant duplicate half and lets the
+quantizer dedicate its 16-bit resolution to the 64 unique values.
+This matches why Qualcomm chose the half-dim format.
+
+Structural match state:
+- Part 1: exact match ✓
+- KV: uint8 symmetric offset=-128 with Qualcomm's exact scales ✓
+- cos/sin: `[1, 1, 64]` half-dim ✓ (Phase 5o)
+- Size: 4833 vs 3136 MB (50% over — w8 weight overhead)
+- Calibration quality: qairt-quantizer native vs AIMET-equivalent (Phase 5p)
+
+Artifacts:
+- `scripts/rewrite_halfdim_cos_sin.py` — the ONNX surgery.
+- `models/qwen3-4b-arm-pathb-ctx512-part{2,3,4}/model_halfdim.onnx`.
+- `scripts/capture_calibration_qwen3_4b_split.py` — `--halfdim` flag.
 
 ### Follow-up: generalize the splitter (deferred)
 

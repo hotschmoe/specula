@@ -49,13 +49,23 @@ L11_HIDDEN = "/model/layers.11/Add_1_output_0"
 L23_HIDDEN = "/model/layers.23/Add_1_output_0"
 
 
-def rope_full_dim(position: int) -> tuple[np.ndarray, np.ndarray]:
+def rope_half_dim(position: int) -> tuple[np.ndarray, np.ndarray]:
+    """Phase 5o: half-dim cos/sin [1,1,64] matching Qualcomm's rotary
+    convention. The graph internally doubles to [1,1,128] via Concat."""
     inv_freq = 1.0 / (ROPE_THETA ** (np.arange(0, HEAD_DIM, 2, dtype=np.float32) / HEAD_DIM))
-    freqs = position * inv_freq
-    emb = np.concatenate([freqs, freqs], axis=-1)
-    cos = np.cos(emb).astype(np.float32).reshape(1, 1, HEAD_DIM)
-    sin = np.sin(emb).astype(np.float32).reshape(1, 1, HEAD_DIM)
+    freqs = position * inv_freq  # shape [64]
+    cos = np.cos(freqs).astype(np.float32).reshape(1, 1, HEAD_DIM // 2)
+    sin = np.sin(freqs).astype(np.float32).reshape(1, 1, HEAD_DIM // 2)
     return cos, sin
+
+
+def rope_full_dim_from_half(cos_half: np.ndarray, sin_half: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Undo the halfdim rewrite for CPU-ORT feeds that still expect full-dim
+    cos/sin (not used anymore by the probe's CPU-ORT path, which now loads
+    model_halfdim.onnx)."""
+    cos_full = np.concatenate([cos_half, cos_half], axis=-1)
+    sin_full = np.concatenate([sin_half, sin_half], axis=-1)
+    return cos_full, sin_full
 
 
 def attention_bias_at(position: int) -> np.ndarray:
@@ -182,13 +192,18 @@ def main() -> int:
                           qnn_devs, htp_dll)
            for i in (1, 2, 3, 4)]
     print("loading CPU-ORT sessions ...")
-    cpu = [mk_cpu_session(args.parts_root / f"qwen3-4b-arm-pathb-ctx512-part{i}" / "model.onnx")
-           for i in (1, 2, 3, 4)]
+    # Part 1 has no cos/sin; parts 2/3/4 use model_halfdim.onnx (Phase 5o).
+    cpu = [
+        mk_cpu_session(args.parts_root / "qwen3-4b-arm-pathb-ctx512-part1" / "model.onnx"),
+        mk_cpu_session(args.parts_root / "qwen3-4b-arm-pathb-ctx512-part2" / "model_halfdim.onnx"),
+        mk_cpu_session(args.parts_root / "qwen3-4b-arm-pathb-ctx512-part3" / "model_halfdim.onnx"),
+        mk_cpu_session(args.parts_root / "qwen3-4b-arm-pathb-ctx512-part4" / "model_halfdim.onnx"),
+    ]
 
     # ---- Fixed fp32 test inputs (same as oracle step 0) ----
     input_ids_i32 = np.array([[args.bos_id]], dtype=np.int32)
     input_ids_i64 = input_ids_i32.astype(np.int64)
-    cos_fp32, sin_fp32 = rope_full_dim(args.position)
+    cos_fp32, sin_fp32 = rope_half_dim(args.position)
     mask_fp32 = attention_bias_at(args.position)
     past_k_fp32 = np.zeros((1, NUM_KV_HEADS, PAST, HEAD_DIM), dtype=np.float32)
     past_v_fp32 = np.zeros((1, NUM_KV_HEADS, PAST, HEAD_DIM), dtype=np.float32)

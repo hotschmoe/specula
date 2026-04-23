@@ -49,13 +49,18 @@ def sanitize(name: str) -> str:
     return name.replace("/", "_").replace(".", "_").lstrip("_")
 
 
-def load_session(part_dir: Path) -> ort.InferenceSession:
+def load_session(part_dir: Path, onnx_name: str = "model.onnx") -> ort.InferenceSession:
     so = ort.SessionOptions()
     so.log_severity_level = 3
     return ort.InferenceSession(
-        str(part_dir / "model.onnx"), sess_options=so,
+        str(part_dir / onnx_name), sess_options=so,
         providers=["CPUExecutionProvider"],
     )
+
+
+def graph_input_names_from(part_dir: Path, onnx_name: str) -> list[str]:
+    m = onnx.load(str(part_dir / onnx_name), load_external_data=False)
+    return [i.name for i in m.graph.input]
 
 
 def write_sample(out_root: Path, sample_idx: int, feed: dict[str, np.ndarray],
@@ -93,13 +98,27 @@ def main() -> int:
         default=MODELS,
         help="Where the split part ONNXs live: qwen3-4b-arm-pathb-ctx512-part{1..4}/.",
     )
+    parser.add_argument(
+        "--halfdim", action="store_true",
+        help="Load model_halfdim.onnx (half-dim cos/sin input) for parts 2/3/4 "
+             "and write cos/sin raws as [1,1,64] half-dim. Matches Qualcomm's "
+             "genie bundle rotary convention. See Phase 5o.",
+    )
     args = parser.parse_args()
 
     part_dirs = [args.parts_root / f"qwen3-4b-arm-pathb-ctx512-part{i}" for i in (1, 2, 3, 4)]
-    for p in part_dirs:
-        if not (p / "model.onnx").exists():
-            print(f"FATAL: missing split part at {p}")
+    # Part 1 always uses model.onnx (no cos/sin involvement). Parts 2/3/4 can
+    # use model_halfdim.onnx when --halfdim is set.
+    part_onnx_names = ["model.onnx"] + (
+        ["model_halfdim.onnx"] * 3 if args.halfdim else ["model.onnx"] * 3
+    )
+    for p, onnx_name in zip(part_dirs, part_onnx_names):
+        if not (p / onnx_name).exists():
+            print(f"FATAL: missing split part at {p / onnx_name}")
             return 2
+    if args.halfdim:
+        print("HALFDIM mode: parts 2/3/4 loaded from model_halfdim.onnx; "
+              "cos/sin raws will be [1,1,64].")
 
     print(f"loading calibration npz: {args.npz}")
     data = np.load(str(args.npz))
@@ -107,13 +126,15 @@ def main() -> int:
     print(f"  {len(data.files)} tensors, {n_samples} samples")
 
     print("reading part graph input orders ...")
-    part_inputs = [graph_input_names(p) for p in part_dirs]
+    part_inputs = [graph_input_names_from(p, name)
+                   for p, name in zip(part_dirs, part_onnx_names)]
     for i, names in enumerate(part_inputs, start=1):
         print(f"  part{i}: {len(names)} inputs")
 
     print("loading CPU sessions ...")
     t0 = time.perf_counter()
-    sessions = [load_session(p) for p in part_dirs]
+    sessions = [load_session(p, name)
+                for p, name in zip(part_dirs, part_onnx_names)]
     print(f"  all 4 sessions loaded in {time.perf_counter() - t0:.1f}s")
 
     # Per-part raw dir + open list files.
@@ -129,6 +150,11 @@ def main() -> int:
             attention_bias = data["attention_bias"][s]
             cos = data["position_ids_cos"][s]
             sin = data["position_ids_sin"][s]
+            if args.halfdim:
+                # Full-dim cos/sin is [cos_half; cos_half] — first 64 elements
+                # are the unique half. Truncate for the halfdim graph input.
+                cos = cos[..., : cos.shape[-1] // 2]
+                sin = sin[..., : sin.shape[-1] // 2]
 
             # Part 1 forward.
             p1_feed = {"input_ids": input_ids}
