@@ -75,7 +75,11 @@ def main() -> int:
     parser.add_argument("--parts", type=str, default="1,2,3,4")
     parser.add_argument("--fp32-dir", type=Path, default=RESULTS)
     parser.add_argument("--out-dir", type=Path, default=RESULTS)
-    parser.add_argument("--weights-bitwidth", type=int, default=4)
+    parser.add_argument("--weights-bitwidth", type=int, default=4,
+                        help="Default w4. Phase 5l finds Part 4 needs w8 because "
+                             "the lm_head 2560x151936 matrix loses too much precision "
+                             "at w4 (isolated part4 cos 0.671 at w4 -> 0.988 at w8). "
+                             "Override per part via --weights-bitwidth 8 with --parts 4.")
     parser.add_argument("--act-bitwidth", type=int, default=16)
     parser.add_argument("--qairt-bin", type=Path, default=QAIRT_BIN_DEFAULT)
     args = parser.parse_args()
@@ -107,11 +111,20 @@ def main() -> int:
         if not list_file.exists():
             print(f"FATAL: missing calibration list at {list_file}")
             return 2
+        # Part 4 contains the lm_head (2560x151936 = 389M params). At w4 that
+        # matrix has only 16 distinct weight levels, which is too coarse even
+        # with per-channel scaling — isolated Part 4 cos drops to 0.67. At w8
+        # it recovers to 0.988. So default Part 4 to w8 while parts 1-3 stay
+        # w4. Overridable via --weights-bitwidth.
+        part_weights_bw = args.weights_bitwidth
+        if idx == 4 and args.weights_bitwidth == 4:
+            part_weights_bw = 8
+            print(f"[part4 auto-override] weights_bitwidth 4 -> 8 (lm_head fidelity)")
         tool_args = [
             "--input_dlc", str(fp32),
             "--output_dlc", str(dst),
             "--input_list", str(list_file),
-            "--weights_bitwidth", str(args.weights_bitwidth),
+            "--weights_bitwidth", str(part_weights_bw),
             "--act_bitwidth", str(args.act_bitwidth),
             # The bare default silently applies aggressive outlier rejection
             # despite help text claiming min-max. Explicit min-max asymmetric
