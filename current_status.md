@@ -1,5 +1,42 @@
 # specula -- current status
 
+Last updated: 2026-04-23 (session 20 — **Phase 5.5 Lever C REOPENED
+via w4a16_investigation_continued.md; Phase 5.5.1 A.2 + A.1 in
+flight.** Rationale: the Qualcomm Qwen3-4B side-quest
+(`results/qwen3_4b_genie_w4a16_probe.md`) measured 7.22 ms median for
+12 Qwen3-4B w4a16 layers via ORT-QNN — projecting **~17 ms/step for
+our 0.6B** if we match Qualcomm's uint8-past_kv + uint16-rest IO
+convention, vs our current **21-24 ms/step** with uint16-past_kv. Two
+investigation-axis leads were never executed: A.2 (drop preserved-IO,
+pin past_kv to 8-bit via `--quantization_overrides`) and A.1 (A.2 +
+V-projection + O-projection weights pinned to w8 — targeting the
+session-17-localised V-collapse at w4 precision). This session
+shipped the full ARM-side prep: `IS_LOCAL_FULL_QUANT_IO` flag,
+`quant_to_uint8` / `dequant_from_uint8` helpers, bitwidth-aware
+`quant_tensor` / `dequant_tensor` dispatchers, `past_kv_dtype` /
+`present_kv_dtype` params on `_describe_{inputs,outputs}_pathb_local`,
+migrated four probes (`npu_short_prompt_probe`,
+`probe_npu_steady_state_latency`, `probe_w4a16_quant_roundtrip`,
+`probe_w4a16_vs_fp16_differential`) to the dispatcher. Committed 168-
+and 112-entry pre-authored `--quantization_overrides` JSONs at
+`models/calibration/quant_overrides_{mixed,fqio}.json`. x86 compile
+ask landed in `docs/phase5_lever_c_x86_ask.md` Update 3 with both
+recipes + NAS drop paths
+(`phase5_step15_local_qairt_out_qairt242_{fqio,mixed}\`). AST parse
+green across all five modified scripts; full-pipeline load gated on
+binary arrival. Existing variants (w4a16-local, w8a16-local,
+fp16-local, etc.) are explicit-whitelist-gated so they keep their
+uint16-everywhere schema unchanged. Decision tree on outcome in
+w4a16_investigation_continued.md §"Decision tree after measurement":
+A.2 beats 18.12 t/s → Lever C positive; A.1 clears cos 0.95 AND beats
+18.12 → Lever C positive on mixed precision; both lose → memory-
+bandwidth thesis empirically disproven at 0.6B/8B ratio, pivot to
+Axis B (Qwen3-1.7B draft) or W1.a (GPU prefill 8B target). Commit
+3f366db. See also the expanded roadmap
+(B9 EAGLE-3 ↔ w4a16 compounding, B20 custom multipath verifier, W4
+heterogeneous 3-island pipeline with layer-wise KV streaming per
+exolabs). Prior status snapshot preserved below.)
+
 Last updated: 2026-04-22 (session 19 — **Phase 5.5 Lever C closes
 NEGATIVE as a product: w8a16-local AC sweep mean 12.83 t/s k=2 vs
 Lever B's 18.12 t/s (−29%), 71.65% vs 81.91% accept.** Correctness
