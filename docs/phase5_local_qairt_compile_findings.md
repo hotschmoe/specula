@@ -419,6 +419,82 @@ Runtime contract unchanged from w4a16-local-qairt242: 60 uint16 inputs
 and underscored names in the binary. Suggested variant:
 `SPECULA_NPU_VARIANT=w4a16-local-tfe`.
 
+## Update 2026-04-23 (session 17, later) — 7-variant PTQ shotgun
+
+Ask: session-17 x86 ask recorded in `docs/phase5_lever_c_x86_ask.md`
+("A.6 w8a16" as primary) extended by user request to shotgun all
+cheap follow-ons so ARM64 can batch-probe. Seven PTQ variants built
+against the same fp32 DLC + Bundle A input_list; Step 4 identical
+across all. Driver: `scripts/run_shotgun.sh` on the x86 box. Total
+wall: ~11 min.
+
+### Variants and MD5s
+
+| variant | flags | bin MD5 | bin size |
+|---|---|---|---:|
+| w8a16-local | `-w 8 -a 16` | `0d40493513120fb4e3965280ed6358f4` | 917,909,504 |
+| w4a16-local-pr | `-w 4 -a 16 --use_per_row_quantization` | `caff709da351b3db12ae5108e4b1ce2a` | 620,146,688 |
+| w4a16-local-cle | `-w 4 -a 16 --apply_algorithms cle` | `b8d8f3b7a4df9a6825af9b969f631228` | 917,934,080 |
+| w4a16-local-pr-cle | `-w 4 -a 16 --use_per_row_quantization --apply_algorithms cle` | `caff709da351b3db12ae5108e4b1ce2a` | 620,146,688 |
+| w4a16-local-sqnr | `-w 4 -a 16 --act_quantizer_calibration sqnr` | `96667934cbf9dfdcbddf2f1fe93f13a9` | 917,946,368 |
+| w4a16-local-mse | `-w 4 -a 16 --act_quantizer_calibration mse` | `fe89b7edf7f3dcfdabc78f9772f0f50b` | 917,966,848 |
+| w8a16-local-pr | `-w 8 -a 16 --use_per_row_quantization` | `ebdf9be6ef34576d5c943d47fc484f5f` | 917,929,984 |
+
+### Byte-identical collisions found mid-sweep
+
+Three collisions ruled themselves out without any ARM64 probe run:
+
+- `w4a16-local-cle` ≡ baseline `w4a16-local-qairt242` — CLE produced a
+  byte-identical binary. `--apply_algorithms cle` is a silent no-op on
+  our MatMul-heavy graph (CLE is a conv/BN pattern matcher).
+- `w4a16-local-pr-cle` ≡ `w4a16-local-pr` — CLE was also a no-op on
+  top of per-row.
+- `w4a16-local-sqnr` ≡ `w4a16-local-tfe` from the A.2 build — the
+  legacy `--act_quantizer enhanced` and modern
+  `--act_quantizer_calibration sqnr` map to the same internal
+  algorithm. ARM64's cos=0.36 result on tfe applies to sqnr too.
+
+Net: 7 compiles produced 5 distinct binaries. ARM64 needs to probe 4 new
+ones (baseline + tfe already covered).
+
+### Binary-size surprise
+
+Per-row variants (`-pr`, `-pr-cle`) are **620 MB** on disk versus
+~876 MB for non-per-row w4a16 — a 32% reduction despite per-row
+carrying **more** metadata (encodings JSON grows 3.5 MB → 124 MB from
+per-row scale tables). HTP's compressed weight layout packs denser
+under per-row quant. w8a16 and w4a16 binary sizes are within 0.01% of
+each other (917 MB both); bitwidth amortizes into per-tensor overhead
+more than we expected.
+
+### NAS drop
+
+```
+Z:\exposed\junk\phase5_step15_local_qairt_out_shotgun\
+├── HANDOFF_shotgun.md
+├── SHOTGUN_SUMMARY.txt
+├── 7 × *.bin + encodings.json + dlc_info + logs (qairt_compile_log,
+│     qairt_quantizer, qnn_ctx_bin_gen per variant)
+└── config_main.json / htp_backend_ext_inner.json
+```
+
+### Suggested ARM64 probe order
+
+Given the V-projection weight-precision diagnosis from the differential
+probe (session 17):
+
+1. **`w4a16-local-pr`** — per-row directly targets MatMul weight
+   precision, the cheapest fix for the value-tensor cos collapse.
+2. **`w8a16-local`** — precision-ceiling sanity check.
+3. **`w8a16-local-pr`** — kitchen sink if neither alone hits 0.95.
+4. **`w4a16-local-mse`** — last activation-calibration data point.
+
+Runtime contract: non-per-row variants identical to the baseline
+w4a16-local-qairt242 build (60 UINT16 inputs, 57 UINT16 outputs).
+Per-row variants should still have per-tensor scales on the IO tensors
+(per-row is for weights); ARM64 should confirm via `jq` on the
+encodings.json before plumbing.
+
 ### What this closes
 
 - Answers the open question from the original findings: **2.45-built
