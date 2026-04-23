@@ -66,9 +66,11 @@ CONTEXT_MAX = int(os.environ.get("SPECULA_NPU_CTX", 512))
 VARIANT = os.environ.get("SPECULA_NPU_VARIANT", "")
 _VARIANT_SUFFIX = f".{VARIANT}" if VARIANT else ""
 
-# Logits live on the first compiled output ('output_0'). Capture this so
-# downstream analysis code stays robust to the qairt naming convention.
-LOGITS_OUTPUT_NAME = "output_0"
+# Logits live on the first compiled output. AI-Hub-compiled binaries go
+# through qairt-converter's output-renaming pass so every output ends up
+# as `output_{0..N}`; the x86 local-compile variant (w4a16-local) did
+# not rename and kept the ONNX names, so logits is literally `logits`.
+LOGITS_OUTPUT_NAME = "logits" if VARIANT == "w4a16-local" else "output_0"
 
 # Qwen3-0.6B RoPE params (config.json: head_dim=128, rope_theta=1e6,
 # attention_scaling=1.0). Path B hoists the rotary_emb subgraph out of
@@ -121,7 +123,16 @@ def describe_inputs(cfg: dict, path_key: str) -> list[tuple[str, list[int], int]
     Path B-mask additionally has `attention_bias` (FP32, additive)
     as an input. Path B extends that with `position_ids_cos` +
     `position_ids_sin` (rotary hoisted out of the graph).
+
+    The `w4a16-local` VARIANT (x86-compiled per docs/phase5_local_qairt_compile.md)
+    deviates on three axes documented in
+    docs/phase5_local_qairt_compile_findings.md: (1) `position_ids`
+    dropped via `--remove_unused_inputs`, (2) dotted ONNX names
+    preserved (no underscore rename), (3) uint16 quantized IO for
+    every tensor except `input_ids` (int32).
     """
+    if path_key == "pathb" and VARIANT == "w4a16-local":
+        return _describe_inputs_pathb_w4a16_local(cfg)
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]
     head_dim = cfg.get("head_dim", cfg["hidden_size"] // cfg["num_attention_heads"])
@@ -145,7 +156,25 @@ def describe_inputs(cfg: dict, path_key: str) -> list[tuple[str, list[int], int]
     return inputs
 
 
-def describe_outputs(cfg: dict) -> list[tuple[str, list[int], int]]:
+def _describe_inputs_pathb_w4a16_local(cfg: dict) -> list[tuple[str, list[int], int]]:
+    n_layers = cfg["num_hidden_layers"]
+    n_kv = cfg["num_key_value_heads"]
+    head_dim = cfg.get("head_dim", cfg["hidden_size"] // cfg["num_attention_heads"])
+    past_len = CONTEXT_MAX - 1
+
+    inputs: list[tuple[str, list[int], int]] = [
+        ("input_ids", [1, 1], TensorProto.INT32),
+    ]
+    for i in range(n_layers):
+        inputs.append((f"past_key_values.{i}.key", [1, n_kv, past_len, head_dim], TensorProto.UINT16))
+        inputs.append((f"past_key_values.{i}.value", [1, n_kv, past_len, head_dim], TensorProto.UINT16))
+    inputs.append(("attention_bias", [1, 1, 1, CONTEXT_MAX], TensorProto.UINT16))
+    inputs.append(("position_ids_cos", [1, 1, head_dim], TensorProto.UINT16))
+    inputs.append(("position_ids_sin", [1, 1, head_dim], TensorProto.UINT16))
+    return inputs
+
+
+def describe_outputs(cfg: dict, path_key: str = "") -> list[tuple[str, list[int], int]]:
     """Return (name, shape, elem_type) per output.
 
     The qairt-converter renames all outputs to `output_0..output_N` in
@@ -155,7 +184,13 @@ def describe_outputs(cfg: dict) -> list[tuple[str, list[int], int]]:
       output_2  = present.0.value
       ...
       output_56 = present.27.value
+
+    The `w4a16-local` VARIANT did not apply the rename pass, so the
+    binary exposes the literal ONNX names (`logits` / `present.N.{key,value}`),
+    and every output is uint16 per the PTQ.
     """
+    if path_key == "pathb" and VARIANT == "w4a16-local":
+        return _describe_outputs_pathb_w4a16_local(cfg)
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]
     head_dim = cfg.get("head_dim", cfg["hidden_size"] // cfg["num_attention_heads"])
@@ -170,6 +205,22 @@ def describe_outputs(cfg: dict) -> list[tuple[str, list[int], int]]:
         idx += 1
         outputs.append((f"output_{idx}", [1, n_kv, total_len, head_dim], TensorProto.FLOAT))
         idx += 1
+    return outputs
+
+
+def _describe_outputs_pathb_w4a16_local(cfg: dict) -> list[tuple[str, list[int], int]]:
+    n_layers = cfg["num_hidden_layers"]
+    n_kv = cfg["num_key_value_heads"]
+    head_dim = cfg.get("head_dim", cfg["hidden_size"] // cfg["num_attention_heads"])
+    vocab = cfg["vocab_size"]
+    total_len = CONTEXT_MAX
+
+    outputs: list[tuple[str, list[int], int]] = [
+        ("logits", [1, 1, vocab], TensorProto.UINT16),
+    ]
+    for i in range(n_layers):
+        outputs.append((f"present.{i}.key", [1, n_kv, total_len, head_dim], TensorProto.UINT16))
+        outputs.append((f"present.{i}.value", [1, n_kv, total_len, head_dim], TensorProto.UINT16))
     return outputs
 
 
@@ -188,7 +239,7 @@ def build_ep_context_wrapper(cfg: dict, bin_path: Path, out_path: Path, path_key
     ]
     outputs_decl = [
         helper.make_tensor_value_info(n, dt, shape)
-        for n, shape, dt in describe_outputs(cfg)
+        for n, shape, dt in describe_outputs(cfg, path_key)
     ]
 
     node = helper.make_node(
@@ -265,6 +316,8 @@ def build_zero_feed(sess: ort.InferenceSession) -> dict:
         "tensor(int32)": np.int32,
         "tensor(float)": np.float32,
         "tensor(float16)": np.float16,
+        "tensor(uint16)": np.uint16,
+        "tensor(uint8)": np.uint8,
     }
     feed = {}
     for x in sess.get_inputs():

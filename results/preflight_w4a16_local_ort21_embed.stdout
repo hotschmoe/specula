@@ -1,0 +1,10 @@
+ort        : 1.25.0
+ort-qnn    : 2.1.0
+wrapper    : C:\Users\hotschmoe\Documents\GitHub\specula\models\qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local.wrapper.onnx  exists=True
+bin        : C:\Users\hotschmoe\Documents\GitHub\specula\models\qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local.bin  exists=True  size=875 MB
+
+--- attempt 3: plugin-EP + embed_mode=1 (inline binary in wrapper) ---
+  building inline-binary wrapper at C:\Users\hotschmoe\Documents\GitHub\specula\models\qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local.wrapper.embed.onnx
+  wrote 875 MB wrapper (inline embed of 875 MB binary)
+  registering EP library: C:\Users\hotschmoe\Documents\GitHub\specula\.venv-ort21\Lib\site-packages\onnxruntime_qnn\onnxruntime_providers_qnn.dll
+  QNN devices visible: 3
