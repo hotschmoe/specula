@@ -67,6 +67,17 @@ is sparse; every workstream below adds one or more cells.
 Cells marked `?` are workstream targets. Cells marked `—` are
 category-incompatible (TG is single-stream by definition).
 
+**Heterogeneous pipelined configurations** (W4.e) are a separate
+axis layered on top of this matrix: the same **phase** (prefill,
+draft, or verify) can run on different **islands** across the
+pipeline, with **layer-wise KV streaming** (W4.d) hiding the
+inter-island handoff under unified-memory fencing. The "best"
+pipeline is context-dependent (short vs long prompt, AC vs
+battery, single vs concurrent sessions), so W4's deliverable is
+a policy-shaped answer — a decision tree over (prompt-length,
+power-state, session-count) → (prefill island, draft island,
+verify island) — not a single leaderboard row.
+
 ## Workstreams
 
 Ordered by *information-per-session-hour*. Each ends with an
@@ -149,10 +160,11 @@ buy us, given:
 - W2.d: **Tree/batched drafts on NPU (parallel at one NPU call).**
   The real lever behind the 48% utilization: draft k=4 tokens in
   *one* NPU call instead of k sequential calls. Needs a compile-
-  time batch=4 variant and a verify-side tree-merge. This is where
-  the headroom actually converts to throughput. Compare against
-  Qualcomm's published 128-token prefill-batch pattern; same idea
-  at decode-batch scale.
+  time batch=4 variant **and** a verify-side tree-merge
+  (the target-side multipath capability is B20 — shared prerequisite
+  with EAGLE-3 / DFlash). This is where the headroom actually
+  converts to throughput. Compare against Qualcomm's published
+  128-token prefill-batch pattern; same idea at decode-batch scale.
 
 **Deliverable.** Draft-sizing × utilization × throughput table.
 Expected outcome: scaling the draft model *alone* is negative;
@@ -210,14 +222,32 @@ reimplement from the paper. Gate on finding companion code first.
 **Transfer.** Full if it works — the whole point is calibration-
 free PTQ. Becomes the default recipe for every future draft quant.
 
-### W4 — Async orchestration (exolabs-style)
+### W4 — Heterogeneous async orchestration (exolabs-style, 3-island)
 
-**Question.** exolabs showed heterogeneous inference across
-machines (split weights, async message-passing) works for
-edge-class hardware. On *one* X2 Elite with three compute islands
-sharing LPDDR5X, the same async pattern should apply intra-device.
-Phase 5.5 Lever A proved async draft∥verify pays +37%; the full
-pattern is 3-way.
+**Question.** exolabs
+([blog](https://blog.exolabs.net/nvidia-dgx-spark/)) showed
+heterogeneous inference across machines (DGX Spark + Mac Studio)
+wins by **overlapping communication with compute at layer
+granularity** — Layer N's KV starts streaming to the Mac the moment
+Layer N's prefill finishes on the DGX, while Layer N+1's prefill
+launches in parallel. On *one* X2 Elite with three compute islands
+(CPU / Adreno / Hexagon) sharing LPDDR5X, the same pattern should
+apply intra-device, with a bonus: **unified memory eliminates the
+"communication" cost entirely** — the "transfer" is a cache-line
+flush + visibility fence, not a DMA. That flips the math: exolabs'
+gains came from *hiding* a slow link; ours come from *exploiting* a
+shared link. Phase 5.5 Lever A proved async draft∥verify pays +37%
+(the 2-island case); the full pattern is 3-way with layer-wise
+streaming.
+
+**Reframe.** Three *phases* of inference — (1) prefill, (2) draft
+speculation, (3) target verify/generation — each with its own
+hardware-mapping preferences. Three *islands* available. The
+question isn't "which island wins" but "which **assignment** of
+phases-to-islands maximizes throughput, and can we pipeline them
+layer-wise so no island idles." Today every phase runs on a
+hard-coded island (prefill CPU / draft NPU / verify CPU); no
+evidence that's optimal.
 
 **Sub-questions.**
 - W4.a: **Per-island concurrent execution.** Can we run NPU draft,
@@ -235,16 +265,64 @@ pattern is 3-way.
   16-63 on CPU (TG-fast). Inverse of Phase 2's mixed-device
   which put *whole model* on GPU. Per-layer split was not tested;
   llama.cpp supports `--override-kv` / device-per-layer.
+- W4.d: **Layer-wise KV streaming across islands (the exolabs
+  trick, unified-memory variant).** When GPU prefills the target,
+  expose per-layer KV buffers to CPU the moment each layer
+  finishes — don't wait for the full prompt to complete on GPU
+  before CPU decode can start. On unified LPDDR5X this is a
+  `clFinish` / `qnn_fence` + atomic handoff, not a copy. Layer 1's
+  KV becomes CPU-visible while GPU is still prefilling layers
+  2..N. TTFT drops by the prefill depth; end-to-end throughput
+  gains whatever fraction of prefill overlaps with first-token
+  decode. Requires: (a) per-layer sync primitives exposed by each
+  backend (OpenCL events, QNN fences, stdatomic on CPU); (b) a
+  shared buffer layout both sides agree on (probably easier to
+  standardize on GGML's KV layout than invent our own).
+- W4.e: **Three-phase × three-device assignment matrix.** Empirical
+  grid filling the "which island should do what" question. Each of
+  {prefill, draft, verify} benchmarked on each of {CPU, Adreno,
+  Hexagon} at the reference model sizes, plus the 9 one-way + 27
+  three-way pipelined combinations, scored on
+  (throughput, TTFT, power, idle time per island):
 
-**Deliverable.** `docs/async_orchestration.md` with per-island
-timing trace + 2-3 async recipe configs benched end-to-end.
+  | phase → island ↓ | CPU | Adreno | Hexagon |
+  |---|---|---|---|
+  | prefill | W1 baseline | W1.a | W1.b |
+  | draft (0.6B / 1.7B) | Ph2 baseline | Ph2 regression | Ph5.5 ✓ |
+  | verify (8B target) | Ph2 baseline | Ph2 regression | W1.b needs 8B NPU |
 
-**Cost.** W4.a: 1 session (profiler + three-session harness). W4.b:
-2 sessions (memory plumbing is hard on Windows ARM). W4.c: 1
-session (llama.cpp flags, no code).
+  Winning candidates to bench as full pipelines (3-way layer-
+  streamed via W4.d): e.g. **prefill NPU / draft NPU / verify
+  CPU** (today's config), **prefill GPU / draft NPU / verify
+  CPU** (expected W1.a winner), **prefill GPU / draft CPU /
+  verify CPU** (fallback). The actual optimum is almost certainly
+  context-dependent (short prompt → prefill doesn't matter; long
+  prompt → prefill becomes the bottleneck), so the deliverable is
+  a **policy**, not a single winner.
 
-**Transfer.** Full across model families — it's an infrastructure
-workstream, not a model one.
+**Deliverable.** `docs/async_orchestration.md` with: (a) per-
+island timing trace; (b) the W4.e phase×island matrix filled in
+with AC + battery numbers; (c) 3-5 pipelined recipe configs
+benched end-to-end with layer-wise streaming enabled; (d) a
+context-sensitive decision tree for "which pipeline to use at
+prompt-length P and battery-state S."
+
+**Cost.** W4.a: 1 session. W4.b: 2 sessions (memory plumbing hard
+on Windows ARM). W4.c: 1 session (llama.cpp flags only).
+W4.d: 2-3 sessions (per-backend sync primitives + shared-layout
+negotiation). W4.e: 2 sessions measurement (depends on W1 + W2
+filling the single-phase cells first). Total 8-9 sessions but
+parallelizable with W1/W2.
+
+**Transfer.** Full across model families. More importantly, the
+layer-streaming primitive from W4.d is the **exact pattern
+DFlash+DDTree on OpenCL will need** (Phase 4 notes in
+current_status.md call out GPU↔CPU per-layer handoff as the
+pattern). Landing W4.d pays off twice.
+
+**Dependency.** W4.e is downstream of W1 (prefill single-phase
+cells) and W2.a (utilization measurements). W4.d is prerequisite
+for W4.e's pipelined cells.
 
 ### W5 — ARM/Windows build portability + upstream contributions
 
@@ -567,10 +645,60 @@ so later cross-refs don't churn.
   `scripts/build_llama_cpp.ps1 -Preset cpu-kleidiai` wires the
   build; the ZA-tile user-mode state is the runtime suspicion.
 - **B9. EAGLE-3 on NPU draft.** Demoted pre-Phase-5 because it
-  only moves accept rate, and CPU wasn't accept-bound. On NPU
-  where per-step is the bottleneck, EAGLE's smaller-per-step
-  profile might change the calculus. One-session revisit
-  post-Lever-C; inexpensive because the llama.cpp PR exists.
+  only moves accept rate, and CPU wasn't accept-bound. Two
+  reasons to reopen now:
+  1. On NPU where per-step is the bottleneck at large k, EAGLE's
+     smaller-per-step profile might change the calculus.
+  2. **Compounding with w4a16 (new insight, 2026-04-22).** EAGLE-3
+     drafters are trained against the target's hidden states and
+     publish accept rates 85-92% on LLaMA — 10-20 pp above vanilla
+     draft-model spec. That absorbs the PTQ accept-rate tax that
+     killed w4a16-local-pr (-17 pp vs w8a16). Makes the accept-rate
+     axis, which w4a16 alone can't move, attackable independently.
+     The V/O-projection precision sensitivity we saw on Qwen3-0.6B
+     may not transfer to a co-adapted EAGLE head.
+  Cost is no longer "one cheap session" — EAGLE-3 needs target
+  hidden-state exposure (llama-server `/completion` returns tokens
+  only), so it shares its main cost with B20 (custom verifier).
+  See `docs/w4a16_investigation_continued.md` Axis D.1 for full
+  scoping. Gate on B20 landing.
+
+### Cross-cutting prerequisites (enable whole classes of lever)
+
+- **B20. Custom multipath-capable verifier (post-`/completion`).**
+  The binding structural limitation behind three otherwise-independent
+  levers. `llama-server`'s `/completion` endpoint returns tokens only
+  — no hidden states, no multipath scoring, no batched alternate
+  candidates. That single constraint blocks:
+  - **Tree / multipath verify** (R3 in levers doc, W2.d "verify-side
+    tree-merge"): can't score K parallel draft paths in one target
+    call.
+  - **EAGLE-3** (B9): head needs to consume target's residual stream
+    per step.
+  - **DFlash + DDTree** (Phase 4, see current_status.md §Phase 4):
+    lucebox-hub's reference impl uses a custom tree-verify kernel;
+    no `/completion`-shaped endpoint can drive it.
+  Three build paths, roughly equal cost:
+  1. **In-process target via llama.cpp Python bindings** — run
+     `llama_cpp.Llama` directly in our sidecar, hook residual
+     stream + expose a multipath `decode_tree(prompt, tree)` call.
+     Cheapest; no fork. Prototype on CPU target; add OpenCL later
+     once the API settles.
+  2. **Fork llama-server** — add `/completion_tree` and
+     `/completion_hidden` endpoints. Upstream the fork as a PR after
+     it stabilizes. Most reusable for the broader llama.cpp community.
+  3. **Write a minimal target runner** — ggml-based single-binary
+     that loads a GGUF + exposes our exact API over a Unix socket.
+     Most control, most code; valuable only if we end up needing
+     custom target-side features anyway.
+  Cost: ~2-3 sessions for path (1), ~4-5 for (2), ~6+ for (3). Pick
+  (1) first; promote to (2) once we know which endpoint shape
+  actually matters. **Transfer: full** — the resulting endpoint
+  serves Qwen3.5/Qwen3.6/Gemma4 identically; this is
+  infrastructure.
+  **Promotion trigger: any of B9 / W2.d / Phase 4 becoming active.**
+  When two of those fire, B20 goes first because it's a shared
+  prerequisite.
 
 ### Distribution & reach (turn our work into artifacts others use)
 
@@ -699,6 +827,13 @@ Starting order, once Lever C resolves:
    pays off the instant we need a second model. ~2-3 sessions.
 7. **W4.c** (CPU+GPU layer split) — cheap async probe using
    existing llama.cpp flags. ~1 session.
+7b. **W4.d** (layer-wise KV streaming primitive) — build the sync/
+    handoff layer that W4.e and later Phase 4 DFlash both depend
+    on. Parallel with W4.c since they're independent. ~2-3 sessions.
+7c. **W4.e** (3-phase × 3-island assignment matrix) — depends on
+    W1.a, W2.a, and W4.d landing. Fills the heterogeneous-pipeline
+    cells of the category×backend matrix and produces the
+    context-sensitive policy. ~2 sessions.
 8. **W7.a** (opencode harness bring-up) — parallel; one session
    to get wired, then it runs in the background of every
    subsequent lever.
