@@ -40,7 +40,7 @@ from tokenizers import Tokenizer
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from npu_load_qwen3_bin import CONTEXT_MAX  # noqa: E402
+from npu_load_qwen3_bin import CONTEXT_MAX, IS_LOCAL_W4A16, VARIANT  # noqa: E402
 from npu_short_prompt_probe import HUMANEVAL, load_prompt  # noqa: E402
 from npu_spec_outer_loop import PATH_KEY, run_spec_decode  # noqa: E402
 from npu_spec_outer_loop_async import (  # noqa: E402
@@ -103,6 +103,7 @@ def run_sweep(
     csv_path: Path,
     mode: str = "sync",
     p_min: float = 0.0,
+    quant_specs: dict | None = None,
 ) -> list[dict]:
     """Run the full (prompt x k) matrix, emitting one CSV row per cell."""
     rows: list[dict] = []
@@ -139,16 +140,19 @@ def run_sweep(
                         summary = run_spec_decode_async(
                             cpu_sess, npu_sess, cfg, tok, prompt_ids,
                             k=k, n_predict_target=n_predict, p_min=p_min,
+                            quant_specs=quant_specs,
                         )
                     elif mode == "async-pipelined":
                         summary = run_spec_decode_async_pipelined(
                             cpu_sess, npu_sess, cfg, tok, prompt_ids,
                             k=k, n_predict_target=n_predict, p_min=p_min,
+                            quant_specs=quant_specs,
                         )
                     else:
                         summary = run_spec_decode(
                             cpu_sess, npu_sess, cfg, tok, prompt_ids,
                             k=k, n_predict_target=n_predict,
+                            quant_specs=quant_specs,
                         )
                 except Exception:
                     traceback.print_exc()
@@ -287,11 +291,28 @@ def main() -> int:
             print(f"ERROR: NPU session fell back: {providers}")
             return 2
 
+        # Load per-tensor quant encodings once for w*a16-local* variants.
+        # fp16-local / AI-Hub-compiled binaries fall through with specs=None
+        # and the outer-loop helpers treat feeds as fp32 unchanged.
+        quant_specs = None
+        if IS_LOCAL_W4A16:
+            from npu_load_qwen3_bin import _encodings_path, load_quant_specs
+            enc_path = _encodings_path(PATH_KEY)
+            if not enc_path.exists():
+                print(f"ERROR: {enc_path} missing; w*a16-local variants need encodings.json")
+                return 2
+            runtime_names = (
+                [x.name for x in npu_sess.get_inputs()]
+                + [x.name for x in npu_sess.get_outputs()]
+            )
+            quant_specs = load_quant_specs(enc_path, runtime_names)
+            print(f"  loaded {len(quant_specs)} quant specs ({VARIANT})")
+
         rows = run_sweep(
             cpu_sess, npu_sess, cfg, tok,
             prompt_indices=args.prompts, k_values=args.k_values,
             n_predict=args.n_predict, csv_path=csv_path,
-            mode=args.mode, p_min=args.p_min,
+            mode=args.mode, p_min=args.p_min, quant_specs=quant_specs,
         )
         print_summary_table(rows)
         return 0 if rows else 1

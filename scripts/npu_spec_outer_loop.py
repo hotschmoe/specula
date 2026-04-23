@@ -94,6 +94,7 @@ def draft_k_tokens(
     round_start_committed: int,
     k: int,
     n_layers: int,
+    quant_specs: dict | None = None,
 ) -> tuple[list[int], list[dict]]:
     """Draft k tokens on the NPU, returning k drafts and k past snapshots.
 
@@ -118,9 +119,11 @@ def draft_k_tokens(
             position=L + i,
             valid_past_len=L + i,
             path_key=PATH_KEY,
+            quant_specs=quant_specs,
         )
         past_snapshots.append(npu_rearrange_present_to_past(
             outputs, out_names, n_layers, old_valid_past_len=L + i,
+            quant_specs=quant_specs,
         ))
         drafts.append(int(np.argmax(logits)))
 
@@ -134,6 +137,7 @@ def materialize_snapshot_k(
     round_start_committed: int,
     k: int,
     n_layers: int,
+    quant_specs: dict | None = None,
 ) -> dict:
     """Produce past_snapshots[k] on demand (only called when j == k).
 
@@ -149,9 +153,11 @@ def materialize_snapshot_k(
         position=pos,
         valid_past_len=pos,
         path_key=PATH_KEY,
+        quant_specs=quant_specs,
     )
     return npu_rearrange_present_to_past(
         outputs, out_names, n_layers, old_valid_past_len=pos,
+        quant_specs=quant_specs,
     )
 
 
@@ -193,6 +199,7 @@ def absorb_bonus(
     bonus_id: int,
     bonus_position: int,
     n_layers: int,
+    quant_specs: dict | None = None,
 ) -> tuple[int, dict]:
     """Absorb the bonus token into past_kv and produce the next_candidate.
 
@@ -207,9 +214,11 @@ def absorb_bonus(
         position=bonus_position,
         valid_past_len=bonus_position,
         path_key=PATH_KEY,
+        quant_specs=quant_specs,
     )
     next_past = npu_rearrange_present_to_past(
-        outputs, out_names, n_layers, old_valid_past_len=bonus_position
+        outputs, out_names, n_layers, old_valid_past_len=bonus_position,
+        quant_specs=quant_specs,
     )
     next_candidate = int(np.argmax(logits))
     return next_candidate, next_past
@@ -223,6 +232,7 @@ def run_spec_decode(
     prompt_ids: list[int],
     k: int,
     n_predict_target: int,
+    quant_specs: dict | None = None,
 ) -> dict:
     """Main spec-decode loop. Returns metrics dict."""
     n_layers = cfg["num_hidden_layers"]
@@ -264,7 +274,8 @@ def run_spec_decode(
         # 3. Draft k tokens on NPU.
         t0 = time.perf_counter()
         drafts, past_snapshots = draft_k_tokens(
-            npu_sess, npu_past, next_candidate, L, k, n_layers
+            npu_sess, npu_past, next_candidate, L, k, n_layers,
+            quant_specs=quant_specs,
         )
         draft_wall_s += time.perf_counter() - t0
 
@@ -285,7 +296,8 @@ def run_spec_decode(
             pre_bonus_past = past_snapshots[j]
         else:
             pre_bonus_past = materialize_snapshot_k(
-                npu_sess, past_snapshots[k - 1], drafts[k - 1], L, k, n_layers
+                npu_sess, past_snapshots[k - 1], drafts[k - 1], L, k, n_layers,
+                quant_specs=quant_specs,
             )
         next_candidate, npu_past = absorb_bonus(
             npu_sess,
@@ -293,6 +305,7 @@ def run_spec_decode(
             bonus_id,
             bonus_position=L + j,
             n_layers=n_layers,
+            quant_specs=quant_specs,
         )
         absorb_wall_s += time.perf_counter() - t0
 

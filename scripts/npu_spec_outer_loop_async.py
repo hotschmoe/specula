@@ -96,6 +96,7 @@ def draft_k_tokens_pmin(
     k: int,
     n_layers: int,
     p_min: float = 0.0,
+    quant_specs: dict | None = None,
 ) -> tuple[list[int], list[dict]]:
     """Like draft_k_tokens() but optionally early-exits when argmax prob drops
     below p_min. Returns (drafts, past_snapshots) where len(drafts) <= k.
@@ -115,10 +116,12 @@ def draft_k_tokens_pmin(
             position=L + i,
             valid_past_len=L + i,
             path_key=PATH_KEY,
+            quant_specs=quant_specs,
         )
         past_snapshots.append(
             npu_rearrange_present_to_past(
                 outputs, out_names, n_layers, old_valid_past_len=L + i,
+                quant_specs=quant_specs,
             )
         )
         if p_min > 0.0:
@@ -141,6 +144,7 @@ def run_spec_decode_async(
     k: int,
     n_predict_target: int,
     p_min: float = 0.0,
+    quant_specs: dict | None = None,
 ) -> dict:
     """Async variant of run_spec_decode: overlaps draft phase with verify."""
     n_layers = cfg["num_hidden_layers"]
@@ -193,6 +197,7 @@ def run_spec_decode_async(
             f_drafts = executor.submit(
                 draft_k_tokens_pmin,
                 npu_sess, npu_past, next_candidate, L, k, n_layers, p_min,
+                quant_specs,
             )
 
             t_v0 = time.perf_counter()
@@ -231,6 +236,7 @@ def run_spec_decode_async(
                     L,
                     actual_k,
                     n_layers,
+                    quant_specs=quant_specs,
                 )
             next_candidate, npu_past = absorb_bonus(
                 npu_sess,
@@ -238,6 +244,7 @@ def run_spec_decode_async(
                 bonus_id,
                 bonus_position=L + j,
                 n_layers=n_layers,
+                quant_specs=quant_specs,
             )
             absorb_wall_s += time.perf_counter() - t_a0
 
@@ -303,6 +310,7 @@ def run_spec_decode_async_pipelined(
     k: int,
     n_predict_target: int,
     p_min: float = 0.0,
+    quant_specs: dict | None = None,
 ) -> dict:
     """Design (2) — pipelined variant of design (1).
 
@@ -369,6 +377,7 @@ def run_spec_decode_async_pipelined(
             f_drafts = npu_pool.submit(
                 draft_k_tokens_pmin,
                 npu_sess, npu_past, next_candidate, L, k, n_layers, p_min,
+                quant_specs,
             )
 
             t_v0 = time.perf_counter()
@@ -418,11 +427,12 @@ def run_spec_decode_async_pipelined(
                     materialize_snapshot_k,
                     npu_sess, past_snapshots[actual_k - 1],
                     drafts[actual_k - 1], L, actual_k, n_layers,
+                    quant_specs,
                 ).result()
             f_absorb = npu_pool.submit(
                 absorb_bonus,
                 npu_sess, pre_bonus_past, bonus_id,
-                L + j, n_layers,
+                L + j, n_layers, quant_specs,
             )
             next_candidate, npu_past = f_absorb.result()
             absorb_wall_s += time.perf_counter() - t_a0
