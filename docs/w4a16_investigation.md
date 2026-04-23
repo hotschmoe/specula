@@ -393,36 +393,82 @@ Diagnostics used:
   normalisation `qnn-context-binary-generator` applies.
 - pathbmask sanity rerun via the same probe — green.
 
-### Next-session options (ordered by cheapness)
+### Next-session options — decision tree
 
-1. **x86 fp16-pathb rebuild.** Re-run the local QAIRT pipeline with
-   `--float_bitwidth 32` (no PTQ) on the same pathb ONNX. If fp16-
-   pathb passes cos ≥ 0.95, the compile pipeline is correct and the
-   issue is specifically w4a16 PTQ. If fp16-pathb also fails, the
-   pathb rewrite or prep pipeline changed something a CPU probe
-   wouldn't catch. ~80 seconds of x86 compile time.
-2. **Different PTQ algorithm.** `qairt-quantizer` supports
-   `--act_quantizer {tf,tf_enhanced,cle}`, `--bias_bitwidth`,
-   `--use_adjusted_weights_quantizer`, etc. Default was tf. Try
-   `tf_enhanced` (per-tensor range enhancement) or `cle`
-   (cross-layer equalization) as the most likely accuracy-move-up
-   knobs. Each is one x86 recompile.
-3. **Calibration bundle swap.** Our current bundle is Bundle A
-   (realistic multi-position). Try Bundle B (step-0 only, 20
-   samples). The research question from the perf-levers plan was
-   "does cheap calibration suffice?" — this session inadvertently
-   started answering no, at least for realistic samples.
-4. **AIMET-side pre-quantization.** Explicit per-tensor activation
-   range control — heavier but gives us a knob on the interior
-   activations that encodings.json only reports post-hoc.
-5. **qairt-accuracy-debugger.** Linux-only QAIRT tool that compares
-   per-op outputs between the DLC and a reference runtime. If the
-   user has Linux access on the x86 box or WSL2, this is the
-   definitive localiser for "which op went numerically wrong."
+Grouped by who owns the work. Cost = wall time to get the answer.
+Cut branches as they go negative.
 
-### Standing evidence + artifacts (updated)
+**Active ask to x86 team:** see `docs/phase5_lever_c_x86_ask.md` for
+the focused one-pager handoff with exact commands + NAS drop paths.
 
-## Standing evidence + artifacts
+#### A. x86-side rebuilds (primary path — these answer "what does the compile pipeline do wrong?")
+
+- **A.1 fp16-pathb rebuild** — re-run local QAIRT with
+  `--float_bitwidth 32` (no PTQ) on the same pathb ONNX. **Decisive
+  isolator:** if fp16-pathb passes cos ≥ 0.95, w4a16 PTQ is the
+  culprit (proceed to A.2–A.4); if fp16-pathb also fails, the pathb
+  rewrite or prep pipeline changed something a CPU-level probe
+  missed (skip to D.1).
+  Cost: ~80 s of x86 compile time. **Do this first.**
+- **A.2 PTQ algorithm variants.** `qairt-quantizer` supports
+  `--act_quantizer {tf,tf_enhanced,cle}`, `--bias_bitwidth`,
+  `--use_adjusted_weights_quantizer`. Default on our run was `tf`.
+  Try `tf_enhanced` (per-tensor range enhancement) and `cle`
+  (cross-layer equalisation) — either can rescue accuracy on a
+  transformer with wide activation distributions. Cost: one ~80 s
+  x86 recompile per variant.
+- **A.3 Calibration bundle swap.** Our run used Bundle A (60
+  samples × multi-position). Try Bundle B (20 samples × step-0
+  only) at `models/calibration/bundle_b_pathb_ctx256.npz`. Answers
+  the perf-levers research question "does cheap calibration
+  suffice?" as a side-effect. Cost: ~80 s x86.
+- **A.4 Per-tensor quant overrides.** `qairt-quantizer
+  --quantization_overrides <json>` lets us pin specific tensors to
+  higher bitwidth. If A.2/A.3 narrow the issue to one subgraph
+  (e.g. rotary MatMul), override that subgraph to 16-bit weights
+  or stay fp. Cost: ~2 h to author the overrides JSON + 80 s
+  compile per iteration.
+
+#### B. ARM64-side diagnostics (cheap, done while waiting on A)
+
+- **B.1 Intermediate-activation diff.** Run the pathb ONNX on CPU,
+  dump a layer-0 output (e.g. `/model/layers.0/self_attn/o_proj/...`);
+  compare against a version where we feed the same prefix to the
+  NPU and ask for the intermediate via an ONNX subgraph extraction.
+  Would localise "which layer's output diverged first". Cost: ~2 h
+  scripting + ORT partition dance.
+- **B.2 Quant layer sanity re-use.** We know the quant layer works
+  (0.001% round-trip). Skip this.
+
+#### C. Heavier tooling paths (come back if A + B don't localize)
+
+- **C.1 AIMET pre-quantization.** x86-side AIMET `QuantizationSimModel`
+  emits a pre-quantized ONNX with explicit QDQ pairs, giving us
+  direct control over every activation's scale/offset. Heavier
+  lift (~1 session) but makes the interior quant choices visible
+  and edit-able. Original Option 1 from this doc's option space.
+- **C.2 `qairt-accuracy-debugger`.** Linux-only QAIRT tool that
+  compares per-op outputs between the compiled DLC and a reference
+  runtime, flagging the first op where numerical drift exceeds a
+  threshold. The definitive localiser for "which op went wrong,"
+  but needs Linux (WSL2 on the x86 box would work).
+
+#### D. Nuclear options (if A.1 fails, i.e. fp16-pathb also wrong)
+
+- **D.1 Rewrite pathb to keep rotary inline.** Skip the rotary
+  hoist; use only the additive-mask trick. The pathbmask binary
+  already works at fp16; w4a16-of-pathbmask would skip the whole
+  rotary-hoist risk surface. Cost: ~1 session x86 (revert the
+  `rewrite_qwen3_pathb.py` change; re-run the compile pipeline).
+  Downside: we lose the rotary-hoist as a reusable piece for
+  Qwen3.5 graduation, and we're back to testing whether AI Hub's
+  preserve-list bug still bites a pathbmask-w4a16 compile.
+- **D.2 Close Lever C negative.** Ship the 18.12 t/s Lever B AC
+  baseline as Phase 5.5's final number. File the PTQ correctness
+  finding upstream with Qualcomm. Move to Phase 6 / Qwen3.5
+  graduation with a CPU-only spec decoder.
+
+### Standing evidence + artifacts
 
 - Compiled binary (AI Hub, broken): `models/qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-a.bin`
 - AI Hub log (bug evidence): `results/aihub-compile-jg93r1jqg-pathb-w4a16-a/jg93r1jqg.log`
