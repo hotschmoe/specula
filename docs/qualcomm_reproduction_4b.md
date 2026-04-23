@@ -413,34 +413,50 @@ output scale for the cross-part hidden). The full pipeline runs
 gibberish (`'Ġcls Ġcls Ġcls Ġmat'`) and first-decode logit cosine
 vs Qualcomm oracle is **-0.005** (random).
 
-**Root cause (identified):** calibration-scale mismatch at the
-seams. Part 1's output `/model/embed_tokens/Gather_output_0` was
-calibrated by qairt-quantizer running part 1's own graph — with w4
-weights, so the embed output range is ±0.22. Part 2's input
-`/model/embed_tokens/Gather_output_0` was calibrated with the clean
-fp32 CPU-ORT Gather output (which we pre-computed and wrote as raw
-calibration), range ±0.08. At runtime, part 1 produces values in
-±0.22; when we requant those fp32 values into part 2's ±0.08
-encoding, ~60% of the dynamic range clips, destroying signal. Same
-story at the L11 and L23 seams (each downstream calibrated against
-the clean CPU-ORT output of the upstream, not the w4 output).
+**Initial diagnosis was wrong**; bisection found the real cause.
+The embed seam is *fine* — part 1's DLC reports range ±0.22 but
+that's the worst-case full-embedding range; the actual runtime
+values (and our calibration values) live in ±0.08, matching
+exactly. HTP part 1 output is bit-equivalent to CPU part 1 output
+(cos = 1.000000).
 
-**Fix path (iterative calibration):**
-1. Compile part 1 → w4a16.bin (already done).
-2. Run part 1's HTP session over the 10 calibration samples to
-   generate *quantized* embed_hidden outputs; write those as part 2's
-   calibration input.
-3. Re-quantize part 2 with the new calibration; compile to part 2's
-   bin.
-4. Run parts 1+2 to generate part 3's calibration; quantize +
-   compile part 3. Repeat for part 4.
+**Root cause (actual): calibration-position narrowness.** Our
+`capture_calibration_qwen3_4b.py` captured all 10 samples at
+prefill **position 10** (mid-prefill, narrow-ranged activations).
+qairt-quantizer calibrated `/model/layers.11/Add_1_output_0`
+(the part 2 → part 3 seam) to range **±11.5** based on that data.
 
-This requires a small new script
-(`scripts/capture_calibration_qwen3_4b_split_iterative.py` or an
-extension to the existing split capture) that invokes ORT-QNN
-sessions on upstream `.bin` files to stage each downstream part's
-calibration. One pass per downstream part — ~2.4 s each for 10
-calibration samples at ~240 ms/step.
+At runtime, step 0 = BOS token + empty past_kv. CPU part 2 forward
+produces L11 hidden at range **±16000** — 1000× the calibrated
+range. HTP part 2 output is ±11.5 (saturated at the encoding
+boundary). ~99% of the signal gets clipped on the first decode
+step, cascading into garbage through parts 3 and 4. By step 1+
+past_kv is already poisoned, and the output loops on a stuck
+argmax (`'Ġcls Ġcls Ġcls'`).
+
+Verification trail:
+- Monolithic pathb-ctx512 fp32 CPU-ORT vs Qualcomm oracle step 0:
+  **cos = 0.834** (graph is right).
+- HTP part 1 dequant vs CPU part 1: **cos = 1.000000**.
+- HTP part 2 L11 (with CPU embed input, zero past_kv): range
+  ±11.5 — clipped by the ±11.5 calibrated encoding.
+- CPU part 2 L11 (same feed, no quant): range ±16000 — unclipped
+  true magnitude.
+- Past-kv value doesn't affect part 2 L11 at position 0 (mask
+  correctly blocks all past slots) — range is identical for
+  kv_std ∈ {0, 0.001, 0.01, 0.1}.
+
+**Fix path (calibrate across positions, not just position 10):**
+Modify `capture_calibration_qwen3_4b.py` (and its split variant)
+to capture at positions covering `{0, 1, 5, 10, 20}` per prompt.
+Samples per part go from 10 → 50. qairt-quantizer will then see
+the full activation range including the BOS-degenerate case, so
+L11's calibrated range widens to cover ±16000.
+
+`scripts/recalibrate_4b_iterative.py` is infrastructure for
+compiling-in-the-loop (runs upstream HTP sessions to stage
+downstream calibration); useful for future iterations but NOT the
+fix for this specific bug.
 
 ### Follow-up: generalize the splitter (deferred)
 
