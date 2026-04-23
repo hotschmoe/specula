@@ -40,9 +40,13 @@ pipeline that didn't clear the throughput bar at 0.6B draft size —
 forward-compatible with Qwen3.5 graduation where the draft is
 larger (per-step costs grow, per-step savings become worth more
 vs fixed HTTP verify overhead) and where the same local-QAIRT
-toolchain drops in unchanged. w4a16-local-pr AC sweep queued in
-background (may close some of the gap via 11% faster per-step +
-100% greedy match); results append below when complete. Commits
+toolchain drops in unchanged. w4a16-local-pr AC sweep
+result (18.1 min): k=2 mean 12.22 t/s, 54.51% accept — **worse
+than w8a16-local** (−17 pp accept, −5% t/s). The CPU-ref
+100%-greedy-match DID NOT predict 8B-target greedy-match; top-5
+overlap (3/5 vs w8a16's 4/5) was the more predictive signal.
+Lower accept → more rounds → HTTP-verify overhead swamps the
+per-step latency edge. Decision unchanged. Commits
 48301d9 (quant_specs plumbing + steady-state probe), 435abf1
 (session-18 shotgun probes), {pending} for session-19 sweep
 writeups.)

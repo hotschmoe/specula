@@ -493,17 +493,54 @@ Artifacts worth keeping:
 - `fp16-local` and `w4a16-local-pr` binaries kept on disk; CLE /
   MSE / tfe variants retired as documented.
 
-### w4a16-local-pr AC sweep — queued
+### w4a16-local-pr AC sweep result — worse than w8a16-local
 
-Same harness, `SPECULA_NPU_VARIANT=w4a16-local-pr`. Completion will
-update this section. Hypothesis: 100% probe greedy-match on CPU
-reference implies similar agreement with 8B target top-1, which
-could translate to ~70% accept at k=2 at 21.4 ms/step. If so,
-expected decode t/s ≈ 12.83 × (23.7/21.4) = **~14.2 t/s mean** —
-closing some of the gap to Lever B but still a regression.
-Alternative outcome: lower top-5 overlap (3/5 vs w8a16's 4/5)
-hurts accept more than hoped and this underperforms w8a16. The
-sweep answers it empirically.
+18.1 min wall, 40/40 cells. CSV:
+`results/spec-npu-Qwen3-8B-Q4_K_M-vs-Qwen3-0.6B-pathb-async-pipelined-20260422-224213.csv`.
+
+| k | n | mean_accept | mean_decode t/s | best cell | worst cell |
+|---|---|---:|---:|---:|---:|
+| 2 | 10 | 54.51% | 12.22 | 13.49 (p8, 69.0%) | 9.33 (p0) |
+| 3 | 10 | 44.26% | 10.15 | 11.43 | 8.82 |
+| 4 | 10 | 36.92% | 8.29 | 9.70 | 7.00 |
+| 8 | 10 | 22.22% | 4.37 | 5.67 | 3.48 (p6) |
+
+Direct comparison to w8a16-local at k=2:
+
+| metric | w8a16-local | w4a16-local-pr | delta |
+|---|---:|---:|---:|
+| mean accept | 71.65% | 54.51% | **−17.1 pp** |
+| mean t/s | 12.83 | 12.22 | −5% |
+| best cell t/s | 14.39 | 13.49 | −6% |
+| worst cell t/s | 10.58 | 9.33 | −12% |
+
+**Hypothesis falsified.** The 100% probe greedy-match vs CPU fp32
+reference did NOT translate to w4a16-local-pr matching w8a16-local's
+accept rate vs the 8B target. Top-5 overlap was the more predictive
+signal: w8a16 hit 4/5, w4a16-pr hit 3/5, and the 8B target is
+effectively a stricter top-k filter than single-argmax.
+
+Secondary observation: w4a16-local-pr took **18.1 min** vs
+w8a16-local's 14.2 min for the same sweep. Lower accept rate means
+more rounds per cell → more HTTP verify calls + more NPU calls → the
+per-step latency edge (21.4 vs 23.7 ms) gets swamped by the
+round-overhead multiplication. This is the spec-decode math:
+decode_tps ≈ (1 + mean_accept × k) / round_wall_time, and round
+count scales inversely with accept. Per-step savings in the
+numerator lose to accept losses in the round count.
+
+**Final Lever C ranking on this rig (AC, k=2):**
+
+| variant | mean t/s | mean accept | vs Lever B | notes |
+|---|---:|---:|---:|---|
+| Lever B pathbmask fp16 (baseline) | 18.12 | 81.91% | — | reference |
+| w8a16-local | 12.83 | 71.65% | −29% | best Lever-C variant |
+| w4a16-local-pr | 12.22 | 54.51% | −33% | per-row + w4 |
+| (untested product candidates) | — | — | — | |
+
+**Decision (unchanged):** Lever C closes NEGATIVE as a product.
+Lever B's 18.12 t/s fp16 pathbmask AC remains Phase 5.5's
+high-water mark. Neither Lever-C variant lands above the baseline.
 
 ### Update (session 18, 2026-04-22, battery) — shotgun landed, w8a16-local PASSES
 
