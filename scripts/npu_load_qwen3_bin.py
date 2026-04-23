@@ -67,11 +67,19 @@ CONTEXT_MAX = int(os.environ.get("SPECULA_NPU_CTX", 512))
 VARIANT = os.environ.get("SPECULA_NPU_VARIANT", "")
 _VARIANT_SUFFIX = f".{VARIANT}" if VARIANT else ""
 
+# Local-compile variants (x86 QAIRT pipeline) share three properties that
+# AI-Hub-compiled binaries don't: `--remove_unused_inputs` drops
+# position_ids, qairt-converter's output-rename pass is skipped so
+# outputs stay as `logits` / `present_N_{key,value}`, and the wrapper
+# must declare those names. Values in the set identify the local variants.
+LOCAL_COMPILE_VARIANTS = ("w4a16-local", "fp16-local")
+IS_LOCAL_COMPILE = VARIANT in LOCAL_COMPILE_VARIANTS
+
 # Logits live on the first compiled output. AI-Hub-compiled binaries go
 # through qairt-converter's output-renaming pass so every output ends up
-# as `output_{0..N}`; the x86 local-compile variant (w4a16-local) did
-# not rename and kept the ONNX names, so logits is literally `logits`.
-LOGITS_OUTPUT_NAME = "logits" if VARIANT == "w4a16-local" else "output_0"
+# as `output_{0..N}`; the local-compile variants did not rename and kept
+# the ONNX names, so logits is literally `logits`.
+LOGITS_OUTPUT_NAME = "logits" if IS_LOCAL_COMPILE else "output_0"
 
 # Qwen3-0.6B RoPE params (config.json: head_dim=128, rope_theta=1e6,
 # attention_scaling=1.0). Path B hoists the rotary_emb subgraph out of
@@ -248,8 +256,11 @@ def describe_inputs(cfg: dict, path_key: str) -> list[tuple[str, list[int], int]
     preserved (no underscore rename), (3) uint16 quantized IO for
     every tensor except `input_ids` (int32).
     """
-    if path_key == "pathb" and VARIANT == "w4a16-local":
-        return _describe_inputs_pathb_w4a16_local(cfg)
+    if path_key == "pathb" and IS_LOCAL_COMPILE:
+        return _describe_inputs_pathb_local(
+            cfg,
+            dtype=TensorProto.UINT16 if VARIANT == "w4a16-local" else TensorProto.FLOAT,
+        )
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]
     head_dim = cfg.get("head_dim", cfg["hidden_size"] // cfg["num_attention_heads"])
@@ -273,7 +284,7 @@ def describe_inputs(cfg: dict, path_key: str) -> list[tuple[str, list[int], int]
     return inputs
 
 
-def _describe_inputs_pathb_w4a16_local(cfg: dict) -> list[tuple[str, list[int], int]]:
+def _describe_inputs_pathb_local(cfg: dict, dtype: int) -> list[tuple[str, list[int], int]]:
     # qnn-context-binary-generator normalises dotted tensor names to
     # underscored when emitting the .bin, even though the intermediate
     # DLC / encodings.json retain the dots. Verified by scanning strings
@@ -281,6 +292,9 @@ def _describe_inputs_pathb_w4a16_local(cfg: dict) -> list[tuple[str, list[int], 
     # binary exposes `past_key_values_0_key`, not `past_key_values.0.key`.
     # ORT-QNN's EPContext binder matches by literal name, so the wrapper
     # must use the underscored form.
+    #
+    # `dtype` is UINT16 for w4a16-local (PTQ quantized IO) or FLOAT for
+    # fp16-local (PTQ skipped, IO stays fp32).
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]
     head_dim = cfg.get("head_dim", cfg["hidden_size"] // cfg["num_attention_heads"])
@@ -290,11 +304,11 @@ def _describe_inputs_pathb_w4a16_local(cfg: dict) -> list[tuple[str, list[int], 
         ("input_ids", [1, 1], TensorProto.INT32),
     ]
     for i in range(n_layers):
-        inputs.append((f"past_key_values_{i}_key", [1, n_kv, past_len, head_dim], TensorProto.UINT16))
-        inputs.append((f"past_key_values_{i}_value", [1, n_kv, past_len, head_dim], TensorProto.UINT16))
-    inputs.append(("attention_bias", [1, 1, 1, CONTEXT_MAX], TensorProto.UINT16))
-    inputs.append(("position_ids_cos", [1, 1, head_dim], TensorProto.UINT16))
-    inputs.append(("position_ids_sin", [1, 1, head_dim], TensorProto.UINT16))
+        inputs.append((f"past_key_values_{i}_key", [1, n_kv, past_len, head_dim], dtype))
+        inputs.append((f"past_key_values_{i}_value", [1, n_kv, past_len, head_dim], dtype))
+    inputs.append(("attention_bias", [1, 1, 1, CONTEXT_MAX], dtype))
+    inputs.append(("position_ids_cos", [1, 1, head_dim], dtype))
+    inputs.append(("position_ids_sin", [1, 1, head_dim], dtype))
     return inputs
 
 
@@ -313,8 +327,11 @@ def describe_outputs(cfg: dict, path_key: str = "") -> list[tuple[str, list[int]
     binary exposes the literal ONNX names (`logits` / `present.N.{key,value}`),
     and every output is uint16 per the PTQ.
     """
-    if path_key == "pathb" and VARIANT == "w4a16-local":
-        return _describe_outputs_pathb_w4a16_local(cfg)
+    if path_key == "pathb" and IS_LOCAL_COMPILE:
+        return _describe_outputs_pathb_local(
+            cfg,
+            dtype=TensorProto.UINT16 if VARIANT == "w4a16-local" else TensorProto.FLOAT,
+        )
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]
     head_dim = cfg.get("head_dim", cfg["hidden_size"] // cfg["num_attention_heads"])
@@ -332,9 +349,10 @@ def describe_outputs(cfg: dict, path_key: str = "") -> list[tuple[str, list[int]
     return outputs
 
 
-def _describe_outputs_pathb_w4a16_local(cfg: dict) -> list[tuple[str, list[int], int]]:
+def _describe_outputs_pathb_local(cfg: dict, dtype: int) -> list[tuple[str, list[int], int]]:
     # Same dot→underscore normalisation as inputs, per the binary-strings
     # scan. `logits` has no dots in the source so it passes through.
+    # `dtype` is UINT16 for w4a16-local / FLOAT for fp16-local.
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]
     head_dim = cfg.get("head_dim", cfg["hidden_size"] // cfg["num_attention_heads"])
@@ -342,11 +360,11 @@ def _describe_outputs_pathb_w4a16_local(cfg: dict) -> list[tuple[str, list[int],
     total_len = CONTEXT_MAX
 
     outputs: list[tuple[str, list[int], int]] = [
-        ("logits", [1, 1, vocab], TensorProto.UINT16),
+        ("logits", [1, 1, vocab], dtype),
     ]
     for i in range(n_layers):
-        outputs.append((f"present_{i}_key", [1, n_kv, total_len, head_dim], TensorProto.UINT16))
-        outputs.append((f"present_{i}_value", [1, n_kv, total_len, head_dim], TensorProto.UINT16))
+        outputs.append((f"present_{i}_key", [1, n_kv, total_len, head_dim], dtype))
+        outputs.append((f"present_{i}_value", [1, n_kv, total_len, head_dim], dtype))
     return outputs
 
 

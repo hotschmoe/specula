@@ -5,6 +5,27 @@ Focused one-pager for the x86 compile box. Companion to
 and `docs/phase5_local_qairt_compile_findings.md` (the pipeline you
 already ran).
 
+## Update: A.1 fp16-pathb is CORRECT on ARM64
+
+Your fp16-pathb rebuild at `Z:\exposed\junk\phase5_step15_local_qairt_out_fp16\`
+(MD5 `a4bf0c4e0f8ee9994d0ea2cec998186b`) passes the correctness gate:
+
+| metric | fp16-local | w4a16-local |
+|---|---:|---:|
+| cosine vs CPU fp32 | **0.999959** | 0.33 |
+| argmax match | ✓ | ✗ |
+| multi-step (3 steps) | 100% | 0% |
+| latency per step | 65 ms | 28 ms |
+
+fp16-pathb decodes `'    if n'` identical to the CPU reference on
+fib-p0. So the whole pipeline up to and including
+`qnn-context-binary-generator` on an fp16 DLC is numerically correct.
+**The error is localised to `qairt-quantizer` in w4a16 mode.**
+
+New ask: the follow-ups below, specifically **A.2 `tf_enhanced`** as
+the next single diagnostic to run. A.1 stays retired unless something
+surprises us later.
+
 ## Status from ARM64 side
 
 Your QAIRT 2.42 rebuild landed and is **structurally green**:
@@ -47,19 +68,10 @@ So the error is inside the compile pipeline you own
 (`qairt-converter` → `qairt-quantizer` → `qnn-context-binary-generator`),
 not in our runtime or the ONNX inputs.
 
-## Primary ask — fp16-pathb rebuild (decisive, ~80 s)
+## A.1 fp16-pathb rebuild (COMPLETE — retained for history)
 
-Re-run your pipeline with **no PTQ** on the same pathb ONNX. This
-is the one diagnostic that splits the remaining possibilities:
-
-- If fp16-pathb passes cos ≥ 0.95 on ARM64 → **w4a16 PTQ is the
-  culprit**. We move to A.2 / A.3 / A.4 in the investigation doc
-  (PTQ algorithm variants, calibration bundle swap, per-tensor
-  overrides).
-- If fp16-pathb ALSO fails → the rewritten pathb graph or the
-  prep pipeline lost something our CPU-level probe didn't catch.
-  We fall back to option D.1 (rewrite pathb to keep rotary
-  inline) or revert to pathbmask w4a16 via AIMET pre-quant.
+Ran green. Section kept so the commands below are re-runnable if we
+ever need to sanity-check the pipeline on a different pathb ONNX.
 
 ### Commands (from your `docs/phase5_local_qairt_compile.md` pipeline, with PTQ skipped)
 
@@ -126,62 +138,94 @@ ARM64 will:
    our working case).
 4. Report back: cos vs CPU ground truth + single-step latency.
 
-## Follow-up asks (only if fp16-pathb passes, localising w4a16 PTQ)
+## Primary ask now — A.2 `tf_enhanced` w4a16 rebuild (~80 s)
 
-Each is another ~80 s compile; drop each as a new suffix under
-`Z:\exposed\junk\phase5_step15_local_qairt_out_qairt242_<tag>\`:
-
-### A.2 — tf_enhanced quantizer
-
-Same commands as your w4a16 run, plus:
+Same pipeline as the QAIRT 2.42 w4a16 run, only change is the
+activation quantizer algorithm. Default was `tf` (min/max per
+tensor); `tf_enhanced` uses a tighter range-enhancement heuristic
+that commonly wins on transformer activations with outliers. Step
+3 becomes:
 
 ```bash
-qairt-quantizer ... --act_quantizer tf_enhanced \
+qairt-quantizer \
+    --input_dlc qwen3_0_6b_draft_v81_ctx256.pathb.fp32.dlc \
+    --output_dlc qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local-tfe.dlc \
+    --input_list input_list.txt \
+    --weights_bitwidth 4 \
+    --act_bitwidth 16 \
+    --act_quantizer tf_enhanced \
+    2>&1 | tee qairt_quantizer.tfe.log
+```
+
+Step 4 unchanged, just point at the new DLC and emit a new `.bin`.
+
+NAS drop:
+
+```
+Z:\exposed\junk\phase5_step15_local_qairt_out_qairt242_tfe\
+├── qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local-tfe.bin
+├── qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local-tfe.encodings.json
+├── dlc_info_w4a16_tfe.txt
+├── qairt_compile_log.tfe.txt / qairt_quantizer.tfe.log / qnn_ctx_bin_gen.tfe.log
+└── HANDOFF_tfe.md  (MD5s + compile timings)
+```
+
+ARM64 will consume under `SPECULA_NPU_VARIANT=w4a16-local-tfe` —
+plumbing already supports any `*-local` suffix by convention.
+
+## A.3 backup ask — Bundle B calibration
+
+If A.2 doesn't move cos, swap the calibration bundle. Bundle B is
+20 step-0-only samples vs Bundle A's 60 multi-position. Two
+research questions at once: "is multi-position calibration
+necessary?" (perf-levers research Q) and "is our calibration
+distribution the root cause?" (this investigation).
+
+Bundle B npz lives at `models/calibration/bundle_b_pathb_ctx256.npz`
+on ARM64 (~1.1 GB); we'll push to `phase5_step15_local_qairt_inputs\`
+when A.2 result is in, or push now if you want to run them in
+parallel — just say.
+
+Commands identical to A.2 except `--input_list` points at a Bundle
+B-derived raw layout, and swap `-tfe` suffix for `-b`.
+
+## A.4 backup ask — CLE (cross-layer equalisation)
+
+Heaviest-hitting PTQ rescue for transformer-style graphs with
+per-layer activation-range variance. Try after A.2 if A.2 still
+shows cos < 0.95.
+
+```bash
+qairt-quantizer ... --act_quantizer cle \
+    --use_adjusted_weights_quantizer \
     --weights_bitwidth 4 --act_bitwidth 16 --input_list input_list.txt
 ```
 
-`tf_enhanced` picks a tighter per-tensor range than `tf` default
-on distributions with outliers — common accuracy win on
-transformer activations.
+NAS suffix `-cle`.
 
-### A.3 — Bundle B calibration
+## A.5 backup ask — Per-tensor overrides
 
-The ARM64-side calibration capture built two bundles:
-
-- Bundle A (currently used): 60 samples × multi-decode-position.
-  ~3.3 GB, `models/calibration/bundle_a_pathb_ctx256.npz`.
-- Bundle B: 20 samples × step-0-only, ~1.1 GB,
-  `models/calibration/bundle_b_pathb_ctx256.npz`.
-
-If you want Bundle B, we'll push it to the same NAS
-`phase5_step15_local_qairt_inputs\` staging folder your Bundle A
-came from. Ping when ready.
-
-### A.4 — CLE (cross-layer equalisation)
-
-```bash
-qairt-quantizer ... --use_adjusted_weights_quantizer --act_quantizer cle \
-    --weights_bitwidth 4 --act_bitwidth 16 --input_list input_list.txt
-```
-
-Likely the heaviest-hitting PTQ improvement when activations vary
-per-layer (common in rotary-heavy graphs). Try after A.2.
-
-### A.5 — Per-tensor overrides
-
-If A.2–A.4 narrow the issue to a specific subgraph (e.g. rotary's
-rotate_half StridedSlice/Neg chain), we can hand-author a JSON
-that pins those tensors to higher bitwidth. ARM64 will build the
-JSON once we know which layer's range is off.
+If A.2–A.4 narrow the issue to a specific subgraph (rotary's
+rotate_half StridedSlice/Neg chain is the usual suspect), ARM64
+will author a `--quantization_overrides <json>` that pins those
+tensors to higher bitwidth. Needs localisation evidence first; A.2
+and A.3 don't provide that, C.2 (accuracy-debugger) would.
 
 ## Questions welcome
 
-- If `qairt-quantizer --float_bitwidth 16` misbehaves on our
-  graph, what's the 2.42-SDK-native path to produce a fp16 context
-  binary? (AI Hub's `--quantize_full_type float16` equivalent.)
 - Does `qairt-accuracy-debugger` run on 2.42 Windows, or do we
-  need a Linux host? That tool is the definitive "which op went
-  wrong" localiser and saves us if A.1–A.4 all fail.
+  need a Linux host? That tool compares per-op outputs between
+  the compiled DLC and a reference runtime — the definitive
+  "which op went wrong" localiser. If it's Linux-only, a WSL2
+  invocation on your box would unblock it; if you already have
+  WSL2 + an Ubuntu image, that's the fastest path.
+- Any observations from the compile logs that caught your eye?
+  Our end scanned `qairt_quantizer.log` / `qnn_ctx_bin_gen.log`
+  for `tiling.h:242` chunking warnings on rotate_half
+  StridedSlice, but couldn't identify anything out-of-pattern
+  vs fp16 compile.
 
-ARM64 contact: `docs/w4a16_investigation.md` + commits `0357aa6`
-(w4a16 plumbing) and `5ed37ac` (correctness probe findings).
+ARM64 contact: `docs/w4a16_investigation.md` (full decision tree +
+ruleouts) + commits `0357aa6` (w4a16 plumbing), `5ed37ac` (probe
+findings), and the fp16-local variant wiring landing with this
+update.

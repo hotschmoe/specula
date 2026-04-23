@@ -393,6 +393,56 @@ Diagnostics used:
   normalisation `qnn-context-binary-generator` applies.
 - pathbmask sanity rerun via the same probe — green.
 
+### Update (later, same day) — A.1 result: fp16-pathb is fully correct
+
+x86 shipped the fp16-pathb rebuild at
+`Z:\exposed\junk\phase5_step15_local_qairt_out_fp16\`. See
+`docs/phase5_local_qairt_compile_findings.md` §"fp16-pathb rebuild (A.1
+isolator)" for the pipeline.
+
+Runtime wiring extended to support both local variants under a single
+`IS_LOCAL_COMPILE = VARIANT in ("w4a16-local", "fp16-local")` flag.
+Shared `_describe_inputs_pathb_local(cfg, dtype)` /
+`_describe_outputs_pathb_local(cfg, dtype)` route the schema with
+`UINT16` for w4a16-local / `FLOAT` for fp16-local. Probe's position_ids
+skip + `present_N_*` output-name lookup gated on `IS_LOCAL_COMPILE`
+(previously only quant-specs-bearing w4a16-local).
+
+Probe result on fib-p0, `SPECULA_NPU_VARIANT=fp16-local`:
+
+```
+argmax match      : True  (cpu=262, npu=262)
+top-5 overlap     : 5 / 5
+cosine sim        : 0.999959
+max |delta|       : 0.1404
+multi-step match  : 100% (3/3)   stream: '    if n'
+npu step latency  : 64.7 ms      (vs w4a16-local 28-30 ms)
+```
+
+**Full green.** Same probe through the same code returns cos=0.9999
+for fp16-pathb; for w4a16-pathb-local it still returns cos=0.33. The
+branch is therefore:
+
+- Pathb rewrite: correct. ✓
+- prep_onnx_for_ai_hub + ORT-BASIC fold: correct. ✓
+- qairt-converter on pathb: correct. ✓
+- qnn-context-binary-generator on fp16 pathb: correct. ✓
+- qairt-quantizer w4a16 PTQ: **breaks numerical correctness**. ✗
+
+D.1 (rewrite pathb with rotary inline) is **eliminated** — not needed.
+Next action is A.2 (tf_enhanced), A.3 (Bundle B), A.4 (per-tensor
+overrides), or C.1/C.2 depending on results.
+
+Bonus observation — the fp16-pathb binary runs at ~65 ms/step, same
+ballpark as fp16 pathbmask (no latency win from the rotary hoist
+alone). So fp16-pathb is not a usable product deliverable; it was a
+diagnostic. The throughput payoff of Lever C still depends on
+landing a correct w4a16 binary, which the ~2× latency gap to
+w4a16-local (28-30 ms) confirms is the real target.
+
+Current x86 ask: `docs/phase5_lever_c_x86_ask.md` §"Follow-up asks" —
+A.2 `tf_enhanced` PTQ variant is the cheapest next attempt.
+
 ### Next-session options — decision tree
 
 Grouped by who owns the work. Cost = wall time to get the answer.

@@ -63,6 +63,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from npu_load_qwen3_bin import (  # noqa: E402
     CONTEXT_MAX,
+    IS_LOCAL_COMPILE,
     LOGITS_OUTPUT_NAME,
     VARIANT,
     QuantSpec,
@@ -83,13 +84,13 @@ from npu_vs_cpu_correctness import (  # noqa: E402
     load_npu_session,
 )
 
-# When VARIANT == "w4a16-local" the binary drops position_ids entirely
-# (--remove_unused_inputs on the x86 qairt-converter step), renames dots
-# to underscores on outputs (present_N_key vs output_N), and quantizes
-# every IO except input_ids to uint16. Rather than fork the whole
-# decode path, the probe keeps an fp32-internal representation of
-# npu_past/attention_bias/cos/sin and quantizes only at the session-feed
-# boundary — symmetric dequant on the way back.
+# The x86 local-compile variants (w4a16-local, fp16-local) both drop
+# position_ids via `--remove_unused_inputs` and expose `logits` /
+# `present_N_{key,value}` output names (no qairt-converter rename). The
+# w4a16-local variant additionally quantizes every IO except input_ids
+# to uint16; fp16-local keeps IO at fp32. The probe keeps an fp32-internal
+# representation and quantizes only at the session-feed boundary for
+# w4a16-local — symmetric dequant on the way back.
 IS_W4A16_LOCAL = VARIANT == "w4a16-local"
 
 HUMANEVAL = REPO_ROOT / "prompts" / "humaneval_subset.jsonl"
@@ -248,9 +249,10 @@ def npu_single_step_short_prompt(
         "input_ids": np.array([[input_id]], dtype=np.int32),
         "attention_bias": build_masked_bias(valid_past_len),
     }
-    if quant_specs is None:
-        # Legacy fp16 paths (patha / pathbmask / pathb fp16) expect INT32
-        # position_ids; the w4a16-local binary doesn't have that input.
+    if not IS_LOCAL_COMPILE:
+        # AI-Hub-compiled variants (patha / pathbmask / pathb fp16) expect
+        # INT32 position_ids; both x86 local-compile variants used
+        # --remove_unused_inputs and dropped it.
         feed["position_ids"] = np.array([[position]], dtype=np.int32)
     if path_key == "pathb":
         cos, sin = rope_tables(position)
@@ -308,18 +310,20 @@ def npu_rearrange_present_to_past(
       new_past[P]      = present[511]   (the token we just fed moves in)
       new_past[P+1..510] = zeros
 
-    w4a16-local routing: outputs are named `present_{i}_{key,value}`
-    (not `output_N`) and are uint16-quantized with per-tensor scale/offset
-    that differs from the input past_kv tensor's scale/offset. The caller
-    keeps an fp32-internal npu_past, so we dequant the present slice to
-    fp32 here; quantization back to uint16 happens at the next
-    session-feed boundary under the input-side scale/offset.
+    Local-compile routing: both fp16-local and w4a16-local expose outputs
+    as `present_{i}_{key,value}` (no qairt-converter rename). w4a16-local
+    additionally quantizes present with per-tensor scale/offset that
+    differs from the input past_kv's scale/offset, so the caller keeps
+    an fp32-internal npu_past and we dequant here; quant back to uint16
+    happens at the next session-feed boundary. fp16-local passes fp32
+    present straight through.
     """
+    use_local_names = quant_specs is not None or IS_LOCAL_COMPILE
     use_w4a16 = quant_specs is not None
     next_past: dict[str, np.ndarray] = {}
     new_slot = old_valid_past_len
     for i in range(n_layers):
-        if use_w4a16:
+        if use_local_names:
             k_name = f"present_{i}_key"
             v_name = f"present_{i}_value"
         else:
@@ -411,6 +415,12 @@ def main() -> int:
         )
         quant_specs = load_quant_specs(enc_path, runtime_names)
         print(f"  loaded {len(quant_specs)} quant specs (w4a16-local)")
+    elif IS_LOCAL_COMPILE:
+        # fp16-local variant: no quant layer, but the wrapper schema
+        # differs from AI-Hub fp16 pathb (dropped position_ids, logits
+        # output name). describe_inputs/outputs already handle this
+        # via IS_LOCAL_COMPILE in npu_load_qwen3_bin.
+        print(f"  {VARIANT}: fp32 IO, no quant_specs required")
 
     print(f"\n--- CPU prefill to past_len={prompt_len} ---")
     t0 = time.perf_counter()
