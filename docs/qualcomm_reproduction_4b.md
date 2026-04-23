@@ -1,7 +1,9 @@
 # Reproducing the Qualcomm Qwen3-4B w4a16 reference bundle
 
-**Status:** in-progress 2026-04-23. Phases 0-2 complete; Phase 3 (single-part
-w4a16 compile) running.
+**Status:** in-progress 2026-04-23. Phases 0-2 complete; Phase 3 hit the
+single-bin HTP ceiling (structural, not a bug); Phase 5 (multi-part
+weight-shared compile) started. ONNX split + CPU round-trip green; QAIRT
+pipeline scripted, awaiting x86_64 run.
 
 ## Goal
 
@@ -279,6 +281,134 @@ what changes the most between our default and theirs:
    pressure during load); Phase 5 separately scopes whether to chase
    this or stay single-bin.
 
-## Phase 5 — multi-part weight-shared compile (planned)
+## Phase 5 — multi-part weight-shared compile (in progress)
 
-**TBD — only attempt once Phases 3+4 land cleanly.**
+Phase 3c showed single-bin 4B compile hits a 3.67 GB HTP serializer
+ceiling; Qualcomm splits across 4 weight-shared binaries for that
+reason. Phase 5 reproduces the same layout: 4 sub-ONNXs at the same
+seams, 4 DLCs, one invocation of `qnn-context-binary-generator` with
+`weight_sharing_enabled`.
+
+### 5a. ONNX split — green
+
+`scripts/split_qwen3_4b_pathb.py` backward-BFS's from each part's
+declared outputs through the source pathb-ctx512 graph, emitting 4
+independent sub-ONNXs with their own external-data files:
+
+| part | scope | nodes | initializers | weights |
+|---|---|---:|---:|---:|
+| 1 | embed only | 1 | 1 | 1.56 GB |
+| 2 | layers 0-11 | 3,052 | 132 | 4.84 GB |
+| 3 | layers 12-23 | 3,052 | 132 | 4.84 GB |
+| 4 | layers 24-35 + norm + lm_head | 3,066 | 134 | 6.40 GB |
+
+Node total 9,171 vs source 9,163 (+8 shared `Constant_NNNNN` nodes
+duplicated into each consuming part — expected for independent
+sub-graphs). Initializer total 399 matches source exactly; every
+weight tensor is layer-specific and lands in exactly one part.
+
+Seam tensors (each has exactly one consumer in the source graph, all
+in the first layer of the next part):
+
+- part1 → part2 : `/model/embed_tokens/Gather_output_0`
+- part2 → part3 : `/model/layers.11/Add_1_output_0`
+- part3 → part4 : `/model/layers.23/Add_1_output_0`
+
+### 5b. CPU round-trip vs monolithic — green
+
+`scripts/validate_split_cpu.py` runs the monolithic pathb-ctx512 graph
+and the 4-part chain side-by-side on synthetic fp32 inputs. All
+probes:
+
+| tensor | cos | max_abs_diff |
+|---|---:|---:|
+| logits | 1.000000000 | 0.000e+00 |
+| present.{0,11,12,23,24,35}.{key,value} | 1.000000000 | 0.000e+00 |
+
+Bit-for-bit identical. Split is numerically exact before quant.
+
+### 5c. Per-part calibration capture — green
+
+`scripts/capture_calibration_qwen3_4b_split.py` re-uses the 10
+humaneval calibration samples from Phase 3, runs them through split
+parts 1-3 on CPU-ORT to derive the cross-part hidden states, then
+writes per-part raw directories under `models/calibration/`:
+
+| part | calibration size | inputs per sample |
+|---|---:|---:|
+| 1 | 80 B | 1 (input_ids) |
+| 2 | 502 MB | 28 (embed_hidden + mask + cos + sin + 12×2 past_kv) |
+| 3 | 502 MB | 28 |
+| 4 | 502 MB | 28 |
+
+### 5d. QAIRT converter + quantizer — scripted, pending run
+
+Drivers (`scripts/qairt_convert_4b_parts.py`,
+`scripts/qairt_quantize_4b_parts.py`) invoke `qairt-converter` and
+`qairt-quantizer` for each of the 4 parts. Converter produces
+`.fp32.dlc` per part; quantizer produces `.w4a16-local.dlc` per part
+using that part's calibration raw list with
+`--weights_bitwidth 4 --act_bitwidth 16`. The Phase 3b int64→int32
+`input_ids.raw` patch is applied in-place by the quantizer driver.
+
+Outputs land in `results/phase5_qwen3_4b_bundle/`.
+
+To run (from `.venv-qairt` with QAIRT 2.45 on PATH):
+
+```
+.venv-qairt/Scripts/python.exe scripts/qairt_convert_4b_parts.py
+.venv-qairt/Scripts/python.exe scripts/qairt_quantize_4b_parts.py
+```
+
+### 5e. qnn-context-binary-generator — scripted, pending run
+
+`scripts/compile_4b_bundle_ctx_bin_gen.py` calls
+`qnn-context-binary-generator` with `--dlc_path` as a comma-separated
+list of all 4 `.w4a16-local.dlc` files plus the Phase 3
+`compile_config.json` / `htp_backend_ext_config.json` (already sets
+`weight_sharing_enabled: true`). Emits
+`qwen3_4b_4part_w4a16_{1..4}.bin` under
+`results/phase5_qwen3_4b_bundle/`.
+
+Each per-part allocation should be ~1.2 GB (4B model ÷ 4, plus the
+~2.7 GB activation/KV/scratch split proportionally), comfortably
+under the 3.67 GB HTP ceiling that blocked the single-bin 4B compile.
+
+### 5f. Wrapper ONNX + oracle cos — scripted, pending DLC
+
+`scripts/build_specula_4b_wrappers.py` emits 4 EPContext wrapper
+ONNXs (one per .bin) declaring the part's I/O contract and embedding
+the bin path via `ep_cache_context`. Final IO dtypes will be
+auto-adjusted from the DLC's actual port dtypes once the DLCs exist
+(the quantizer with default flags produces a DLC with quantized
+activations — uint8/uint16 on the IO — we'll read those from
+`qairt-dlc-to-json` and declare them in the wrapper).
+
+The final cos-vs-oracle gate (>= 0.95 on first decode step) will be
+measured by a small adaptation of
+`scripts/qualcomm_qwen3_4b_oracle.py` that drives our bundle instead
+of Qualcomm's. That harness is deferred until the wrappers + DLC IO
+dtypes are known.
+
+### Follow-up: generalize the splitter (deferred)
+
+`scripts/split_qwen3_4b_pathb.py` hard-codes Qwen3-4B's layer count
+(36), part boundaries (12/12/12), hidden dim (2560), vocab (151936),
+ctx (512), head count (8), head dim (128). The backward-BFS core is
+model-agnostic — only `build_part_specs()` assumes these constants.
+
+Generalization plan (defer until Qwen3-4B end-to-end reproduction
+lands):
+- Read `config.json` next to the source ONNX to pick up
+  `num_hidden_layers`, `hidden_size`, `num_key_value_heads`,
+  `head_dim`, `vocab_size`.
+- Accept `--num-parts N` and slice layers evenly (with the last part
+  absorbing the remainder + norm + lm_head, matching Qualcomm's
+  shipping convention).
+- Accept `--ctx` and derive `past = ctx - 1`.
+- Keep `--model-stem` consistent with the rewrite scripts so the same
+  invocation pattern works for 0.6B / 4B / Qwen3.5 / Qwen3.6.
+
+Not started intentionally — doing this before the end-to-end 4B
+reproduction is green would add variables to a pipeline that still
+has unknowns.
