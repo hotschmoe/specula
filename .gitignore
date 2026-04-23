@@ -21,6 +21,10 @@ __pycache__/
 # results/*.csv
 # results/*.log
 
+# Large per-step logit / KV dumps — regenerable from scripts; tracked .md
+# reports next to them carry the human-readable findings.
+results/*.npz
+
 # Editor
 .vscode/
 .idea/
