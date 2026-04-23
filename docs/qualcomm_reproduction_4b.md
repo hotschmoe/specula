@@ -153,21 +153,104 @@ QAIRT toolchain on the X2E:
 - check-python-dependency installed all 33 pinned deps cleanly into
   `.venv-qairt/`.
 
-### 3a. qairt-converter (ONNX → fp32 DLC)
+### 3a. qairt-converter (ONNX → fp32 DLC) — green
 
-**TBD — fill in once compile completes.**
+```
+qairt-converter --input_network qwen3-4b-arm-pathb-ctx512/model.onnx \
+                --output_path qwen3_4b_arm_pathb_ctx512.fp32.dlc \
+                --preserve_onnx_output_order --remove_unused_inputs
+```
 
-### 3b. qairt-quantizer (fp32 DLC → w4a16 DLC)
+Total Params Count: 4,022,272,000 (matches HF Qwen3-4B exactly).
+Total MACs: 4,142,761,984. Conversion completed in ~70 s on the
+emulated x86_64 Python 3.10 venv. Output: 17.6 GB fp32 DLC (same as
+ONNX-side weights, just re-laid in DLC format).
 
-**TBD — fill in once compile completes.**
+Note `--remove_unused_inputs` drops the now-unused `position_ids` input
+(it was only consumed by the rotary subgraph that Path B hoisted out).
+Calibration prep must follow suit — see Phase 3 prep commit.
 
-### 3c. qnn-context-binary-generator (w4a16 DLC → .bin)
+### 3b. qairt-quantizer (fp32 DLC → w4a16 DLC) — green
 
-**TBD — fill in once compile completes.**
+```
+qairt-quantizer --input_dlc ...fp32.dlc --output_dlc ...w4a16-local.dlc \
+                --input_list calibration/qwen3_4b_ctx512_a_raw/input_list.txt \
+                --weights_bitwidth 4 --act_bitwidth 16
+```
 
-### 3d. cos vs Qualcomm oracle
+Calibration: 10 samples captured from humaneval-subset prompts at
+decode position 10 via `scripts/capture_calibration_qwen3_4b.py`.
+PTQ ran in ~95 s on the emulated x86_64 venv. Output: 4.8 GB w4a16
+DLC (27% of fp32 size — w4 weight packing + uint16 activation
+scales).
 
-**TBD — fill in once binary loads via ORT-QNN.**
+Three blockers surfaced and fixed before this ran clean:
+- `position_ids` removed from input_list.txt (DLC has 76 inputs, not 77)
+- input_list.txt paths must be ABSOLUTE (relative paths resolve against
+  CWD, not the list file)
+- `input_ids` raw bytes must be int32 (4 B per sample) not int64 — the
+  capture script writes int64 but the DLC's APP_WRITE port is int32
+
+### 3c. qnn-context-binary-generator — RED, structural ceiling hit
+
+```
+qnn-context-binary-generator --backend QnnHtp.dll \
+                             --dlc_path ...w4a16-local.dlc \
+                             --binary_file ...w4a16-local \
+                             --config_file compile_config.json
+```
+
+(With `compile_config.json` referencing `htp_backend_ext_config.json`
+which sets `weight_sharing_enabled: true` per Qualcomm's reference.)
+
+**Compile reaches the final "Finalizing Graph Sequence" stage**
+(takes ~4 min) **then dies at serialization with:**
+
+```
+graph requires estimated allocation of 4861664 KB, limit is 3670016 KB
+error during serialize: memory usage too large
+Failed to finalize graph (id: 1) with err 1002
+```
+
+The 4.86 GB allocation request exceeds the HTP serializer's hard
+3.67 GB ceiling. `weight_sharing_enabled: true` doesn't help in
+single-DLC mode — that flag only matters when multiple DLC files
+share weight memory across them, which is the multi-part case.
+
+**This is a structural finding, not a bug.** The 0.6B w4a16 single-bin
+pipeline (~0.3 GB weights + buffers, total under 1 GB) fits trivially.
+4B w4a16 is ~2 GB weights + ~2.7 GB activations / KV / scratch — past
+the threshold. Qualcomm's reference bundle splits across 4 .bin files
+specifically to stay under this limit per part. **Multi-part compile
+isn't an optimization for 4B — it's the only path that works.**
+
+### 3d. cos vs Qualcomm oracle — N/A (no binary produced)
+
+Phase 3's gate (cos >= 0.95 vs oracle on first decode step) cannot be
+measured because Phase 3c produces no binary. The pipeline up to step
+3b is fully verified on the 4B graph, but the structural test that
+phase 3 was meant to provide ("single-bin compile produces a runnable
+binary") is unattainable on this size class.
+
+### Phase 3 recap
+
+| step | result |
+|---|---|
+| 3a converter | green |
+| 3b quantizer | green |
+| 3c ctx-bin-gen | red (HTP allocation ceiling) |
+| 3d cos vs oracle | not measurable |
+
+**What this tells us about the pipeline:**
+
+- The export + rewrite + shape-pin + calibration capture + converter +
+  quantizer chain is fully verified on the 4B graph. None of these
+  steps care about model size beyond runtime.
+- The single-bin compile path is bound to small models (≤ ~1 GB total
+  graph allocation = roughly ≤ 1B params at w4a16). Beyond that,
+  multi-part compilation with weight sharing is structurally required.
+- Phase 5 (multi-part) is therefore promoted from "stretch goal" to
+  "required to complete the reproduction."
 
 ## Phase 4 — structural-match levers (planned)
 
