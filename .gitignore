@@ -25,6 +25,11 @@ __pycache__/
 # reports next to them carry the human-readable findings.
 results/*.npz
 
+# QAIRT compile intermediates (DLCs, output dirs) — large and regenerable.
+# The .log/.md files in the same dir ARE tracked.
+results/**/*.dlc
+results/**/output/
+
 # Editor
 .vscode/
 .idea/
