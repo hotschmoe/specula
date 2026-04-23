@@ -12,22 +12,25 @@ Gate (per docs/phase5_export_on_x86.md, Path B section):
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
 
 REPO = Path(__file__).resolve().parents[1]
-REF = REPO / "models" / "qwen3-0.6b-optimum" / "model.onnx"
-NEW = REPO / "models" / "qwen3-0.6b-pathb" / "model.onnx"
 
-# Qwen3-0.6B
+# Defaults match the original Qwen3-0.6B target. Override via CLI for
+# 4B (or any other Qwen3-family) reproduction.
+DEFAULT_STEM = "qwen3-0.6b"
+DEFAULT_NUM_LAYERS = 28
+
+# Qwen3 family architectural constants (head_dim/num_kv_heads/rope_theta
+# happen to match across 0.6B and 4B per their config.json).
 HEAD_DIM = 128
-NUM_LAYERS = 28
 NUM_KV_HEADS = 8
 ROPE_THETA = 1_000_000.0
 BOS = 151643
-CTX = 256          # arbitrary; pathb keeps decode-step shape symbolic
 
 
 def rope_tables(position_id: int) -> tuple[np.ndarray, np.ndarray]:
@@ -45,10 +48,10 @@ def rope_tables(position_id: int) -> tuple[np.ndarray, np.ndarray]:
     return cos, sin
 
 
-def make_zero_kv(past_len: int) -> dict[str, np.ndarray]:
+def make_zero_kv(past_len: int, num_layers: int) -> dict[str, np.ndarray]:
     """Build all-zero past_key_values for empty-KV decode probe."""
     feed = {}
-    for i in range(NUM_LAYERS):
+    for i in range(num_layers):
         kv_shape = (1, NUM_KV_HEADS, past_len, HEAD_DIM)
         feed[f"past_key_values.{i}.key"] = np.zeros(kv_shape, dtype=np.float32)
         feed[f"past_key_values.{i}.value"] = np.zeros(kv_shape, dtype=np.float32)
@@ -72,6 +75,23 @@ def cosine(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model-stem", default=DEFAULT_STEM,
+                        help=f"Model directory stem (default: {DEFAULT_STEM!r}). "
+                             f"REF=models/<stem>-optimum, NEW=models/<stem>-pathb")
+    parser.add_argument("--ref", type=Path, default=None,
+                        help="Override REF model.onnx (default: models/<stem>-optimum/model.onnx)")
+    parser.add_argument("--new", type=Path, default=None,
+                        help="Override NEW model.onnx (default: models/<stem>-pathb/model.onnx)")
+    parser.add_argument("--num-layers", type=int, default=DEFAULT_NUM_LAYERS,
+                        help=f"Number of transformer layers (default: {DEFAULT_NUM_LAYERS}). "
+                             "Qwen3-0.6B=28, Qwen3-4B=36.")
+    args = parser.parse_args()
+
+    REF = args.ref or (REPO / "models" / f"{args.model_stem}-optimum" / "model.onnx")
+    NEW = args.new or (REPO / "models" / f"{args.model_stem}-pathb" / "model.onnx")
+    num_layers = args.num_layers
+
     print(f"loading REF: {REF}")
     s_ref = ort.InferenceSession(str(REF), providers=["CPUExecutionProvider"])
     print(f"loading NEW: {NEW}")
@@ -94,7 +114,7 @@ def main() -> None:
     cos, sin = rope_tables(pos)
 
     past_len = 0   # zero-KV
-    kv_zero = make_zero_kv(past_len)
+    kv_zero = make_zero_kv(past_len, num_layers)
 
     # REF feed (uses HF-style attention_mask covering total length = past + new = 1)
     ref_feed = {
@@ -147,7 +167,7 @@ def main() -> None:
     past_len = 5
     rng = np.random.default_rng(0)
     kv_small = {}
-    for i in range(NUM_LAYERS):
+    for i in range(num_layers):
         kv_shape = (1, NUM_KV_HEADS, past_len, HEAD_DIM)
         kv_small[f"past_key_values.{i}.key"] = rng.standard_normal(kv_shape).astype(np.float32) * 0.01
         kv_small[f"past_key_values.{i}.value"] = rng.standard_normal(kv_shape).astype(np.float32) * 0.01
