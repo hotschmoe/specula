@@ -1,5 +1,20 @@
 # Phase 5 — ONNX export on an x86_64 machine
 
+Revised 2026-04-23 — **the X2E can now do this export natively.**
+PyTorch 2.7+ ships `cp312-cp312-win_arm64` CPU wheels via
+`download.pytorch.org/whl/cpu/`. The "Local export on the X2E" attempt
+listed below as ruled out (`torch has no win_arm64 wheel`) is no longer
+true — that constraint held when this doc was written but lifted in
+April 2025 with the Microsoft + Arm collaboration. Smoke-tested
+2026-04-23: optimum 2.1.0 export on torch 2.10.0+cpu produces a graph
+bit-identical to the x86 baseline (7,667 nodes, same input/output
+schema, same file size; logits cos=0.9999999995 vs the x86 ONNX on
+CPU-ORT). See `docs/exporting_on_arm.md` for the verified install +
+run recipe. This x86 doc is retained because (a) the in-repo evidence
+trail and `status_x86.md` log all live here, and (b) x86 is still a
+useful fallback if you want `torch==2.11.0` (no win_arm64 wheel for
+2.11 yet).
+
 Revised 2026-04-22 session 12 — **w4a16 compile requires Path B
 (RoPE externalization).** Our existing `pathbmask` artifact (additive
 FP16 mask, inline rotary_emb) compiles and runs at FP16 cleanly, but
@@ -40,10 +55,15 @@ Elite Extreme laptop running Windows on ARM64.
 Three attempts at producing that ONNX on the X2E itself have already
 been ruled out:
 
-1. **Local `optimum.exporters.onnx` export on the X2E.** Requires
-   torch. torch has no `cp312 win_arm64` wheel (older torch 2.1.2
-   ships cp38-cp311 win_arm64 only; nothing newer ships win_arm64 at
-   all). Hard wall.
+1. **Local `optimum.exporters.onnx` export on the X2E.** Originally
+   ruled out because torch had no `cp312 win_arm64` wheel. **No longer
+   true as of 2026-04-23** — PyTorch 2.7+ ships win_arm64 wheels on
+   `download.pytorch.org/whl/cpu/` (not on PyPI, which is why
+   `pip install torch` still fails on the X2E). Smoke-tested
+   2026-04-23 with `torch==2.10.0+cpu`: produces a numerically
+   equivalent graph to the x86 export. Use `docs/exporting_on_arm.md`
+   for the recipe. The x86 path below remains as a fallback /
+   reference but is no longer the only option.
 2. **Use the `onnx-community/Qwen3-0.6B-ONNX` pre-export from HF Hub.**
    Works as an artefact, but the graph uses four ORT-internal fused
    ops that QAIRT's QNN converter doesn't recognise:

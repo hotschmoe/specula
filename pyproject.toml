@@ -47,13 +47,33 @@ npu = [
     "qai-hub>=0.48",
     "onnx>=1.17",
     # Hugging Face tooling for downloading pre-exported ONNX + BPE tokenizer.
-    # NOTE: torch + optimum were initially in this list for a local
-    # Qwen3 ONNX export, but torch has no cp312 win_arm64 wheel (only
-    # cp38-cp311 on older 2.1.2). We bypass by using onnx-community's
-    # pre-exported Qwen3-0.6B-ONNX instead. Local re-export would need
-    # a non-WoA machine.
+    # NOTE (historical): torch + optimum were initially excluded because
+    # torch had no cp312 win_arm64 wheel. As of 2026-04-23 this is no
+    # longer true — PyTorch 2.7+ ships win_arm64 cp312 wheels via
+    # download.pytorch.org/whl/cpu/ (not on PyPI). The export toolchain
+    # lives in the optional `npu-export` extra below; it's not pulled
+    # into `npu` because the inference path doesn't need it.
     "huggingface-hub>=0.24",
     "tokenizers>=0.20",
+]
+
+# Local ONNX export pipeline on Windows-on-ARM (and x86, identical pins).
+# Verified on the X2E 2026-04-23 — see docs/exporting_on_arm.md.
+# Install with: uv pip install -e .[npu-export] \
+#   --extra-index-url https://download.pytorch.org/whl/cpu
+npu-export = [
+    # torch 2.10.0+cpu is the latest with a cp312-cp312-win_arm64 wheel
+    # at time of writing. 2.11.0 has no win_arm64 wheel yet.
+    "torch==2.10.0",
+    "optimum==2.1.0",
+    "optimum-onnx==0.1.0",
+    "transformers==4.57.6",
+    "onnx==1.21.0",
+    "onnx-graphsurgeon==0.6.1",
+    # onnxruntime CPU-only (no QNN) — the export pipeline only needs
+    # CPU-ORT for the cos-vs-source equivalence probes. Pinned to match
+    # the QAIRT version on the inference side (see `npu` extra above).
+    "onnxruntime==1.24.4",
 ]
 
 [tool.uv]
