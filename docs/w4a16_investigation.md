@@ -229,6 +229,108 @@ Hub's quantizer orchestration mis-formats the preserve list) is
 publishable and filed upstream. Strong prior that we'll get it
 working before falling through.
 
+## Update 2026-04-22 (session 15) — Option 2 executed, w4a16 binary loads
+
+Picked Option 2 (local QAIRT) per the decided order. Outcome: **the
+Phase 5.5 Lever C runtime block is cleared.** The w4a16 binary now
+loads on ORT-QNN 1.24.4 and runs a zero-feed forward pass in 30.66 ms
+(structural validation only; correctness gate still ahead).
+
+### x86 compile path (handoff-doc companion)
+
+- Plan: `docs/phase5_local_qairt_compile.md`.
+- Findings: `docs/phase5_local_qairt_compile_findings.md` — five
+  deviations from the plan, all documented with causes, none blockers.
+- First try used QAIRT **2.45.40** (the only SDK on the x86 box at the
+  time). Built in ~60 seconds. Binary handed off to
+  `Z:\exposed\junk\phase5_step15_local_qairt_out\`.
+  - ARM64 load: `LoadCachedQnnContextFromBuffer Error 5000` — Qualcomm's
+    compat matrix is explicit that 2.43+-built binaries are not
+    backward-compatible with 2.42 runtime (`docs/QAIRT-Docs/QNN/general/htp/htp_backend.html`).
+- Escape-hatch probe: ORT-QNN **2.1.0** in isolated `.venv-ort21/`
+  (bundles QAIRT 2.45.40, matches binary). Three load attempts, all
+  fail (summary: `results/preflight_w4a16_local_ort21_summary.md`):
+  - legacy `providers=[(...)]` → silent CPU fallback (2.x is plugin-EP)
+  - plugin-EP + `disable_file_mapped_weights=1` → option not honoured
+    by the EP; crash at same file-mapping warning
+  - plugin-EP + `embed_mode=1` → farthest yet, past "Disabling file
+    mapping for this node", crash in `LoadCachedQnnContextFromBuffer`
+  - Confirms the existing ORT-side bug catalogued in
+    `docs/npu_ort_qnn_version_match.md`. Revisit when 2.1.1 / 2.2.x ships.
+- Second try: x86 downloaded QAIRT **2.42.0.251225** from
+  `https://softwarecenter.qualcomm.com/api/download/software/sdks/Qualcomm_AI_Runtime_Community/All/2.42.0.251225/v2.42.0.251225.zip`
+  (Qualcomm gateway 403s on HEAD / curl UA — use `curl -sL -A "Mozilla/5.0"`).
+  Required `onnx<1.15` downgrade (2.42 tools import removed
+  `onnx.mapping`) and `shared_library_path` repointed to the 2.42
+  extensions DLL. Rebuilt in ~72 seconds. New NAS drop at
+  `Z:\exposed\junk\phase5_step15_local_qairt_out_qairt242\`.
+
+### ARM64 runtime wiring
+
+- Variant-aware schema in `scripts/npu_load_qwen3_bin.py`:
+  `SPECULA_NPU_VARIANT=w4a16-local` routes `describe_inputs` /
+  `describe_outputs` through `_describe_*_pathb_w4a16_local` with
+  **60 inputs** (position_ids dropped by x86's `--remove_unused_inputs`),
+  all quantized IO as `TensorProto.UINT16`, only `input_ids` as int32.
+- `LOGITS_OUTPUT_NAME` now conditional: the local-compile pipeline
+  did NOT apply qairt-converter's output-rename pass, so the binary
+  exposes `logits` / `present_N_{key,value}` instead of
+  `output_0..output_56`.
+- `build_zero_feed` extended with `tensor(uint16)` / `tensor(uint8)`
+  dtype entries for smoke-test purposes.
+
+### Naming gotcha — dots vs underscores
+
+`qnn-context-binary-generator` normalises dotted tensor names to
+underscored when emitting the `.bin`, **even though the intermediate
+DLC and `qairt-dlc-to-json` / `dlc-info` keep the dots**. So:
+
+- DLC info text + `encodings.json` → `past_key_values.0.key`,
+  `present.0.key`
+- Binary's internal graph IO map → `past_key_values_0_key`,
+  `present_0_key`
+- ORT-QNN binds by literal name, so the wrapper ONNX must use the
+  underscored form or `GetGraphInputIndex` fails with "Input name not
+  found".
+
+Verified by scanning printable strings in the `.bin` tail. First
+ARM64 load attempt after the 2.42 rebuild hit exactly this mismatch;
+underscore-swap in `_describe_inputs_pathb_w4a16_local` /
+`_describe_outputs_pathb_w4a16_local` fixed it.
+
+### Preflight result
+
+```
+session providers   : ['QNNExecutionProvider', 'CPUExecutionProvider']
+inputs (60): input_ids int32, past_key_values_*_{key,value} uint16,
+             attention_bias uint16, position_ids_{cos,sin} uint16
+outputs (57): logits uint16, present_*_{key,value} uint16
+run latency       : 30.66 ms   (first call; includes warmup)
+logits shape      : (1, 1, 151936)  finite, non-constant
+```
+
+Log: `results/preflight_w4a16_local_qairt242_v2.stdout`.
+
+### Remaining work
+
+Open stages from the original Lever C plan:
+
+1. QuantSpec runtime layer — parse `encodings.json`, build
+   per-tensor `{name → (scale, offset, bitwidth)}` map, wrap
+   `session.run()` with fp32 → uint16 feed quant + uint16 → fp32
+   dequant on logits.
+2. Correctness probe (`npu_short_prompt_probe.py` +
+   `npu_vs_cpu_correctness.py`) with gate cos ≥ 0.95 single-step,
+   multi-step ≥ 66% argmax match.
+3. AC sweep vs the 18.12 t/s fp16 baseline.
+
+Option 3 (preserve-guard surgery) and Option 4 (narrow runtime
+uint8 patch) are now **moot** — Option 2 delivered. If the
+correctness gate fails downstream, those options remain available
+but the higher-priority recovery move would be re-running PTQ on
+x86 with a different calibration distribution (Bundle B, or a
+subset of step-0-only samples from Bundle A).
+
 ## Standing evidence + artifacts
 
 - Compiled binary (broken): `models/qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-a.bin`

@@ -1,0 +1,12 @@
+=== step 5 - load compiled HTP context binary (pathb) ===
+
+bin size            : 875.4 MB
+model layers/kv_heads/head_dim : 28/8/128
+
+--- build EPContext wrapper ONNX ---
+  wrote qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local.wrapper.onnx (8255 bytes)
+
+--- load wrapper via legacy QNN EP (ORT 1.24.4) ---
+  loading wrapper ONNX qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local.wrapper.onnx via legacy QNN EP ...
+
+load FAILED:

@@ -157,6 +157,13 @@ def describe_inputs(cfg: dict, path_key: str) -> list[tuple[str, list[int], int]
 
 
 def _describe_inputs_pathb_w4a16_local(cfg: dict) -> list[tuple[str, list[int], int]]:
+    # qnn-context-binary-generator normalises dotted tensor names to
+    # underscored when emitting the .bin, even though the intermediate
+    # DLC / encodings.json retain the dots. Verified by scanning strings
+    # in models/qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local.bin —
+    # binary exposes `past_key_values_0_key`, not `past_key_values.0.key`.
+    # ORT-QNN's EPContext binder matches by literal name, so the wrapper
+    # must use the underscored form.
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]
     head_dim = cfg.get("head_dim", cfg["hidden_size"] // cfg["num_attention_heads"])
@@ -166,8 +173,8 @@ def _describe_inputs_pathb_w4a16_local(cfg: dict) -> list[tuple[str, list[int], 
         ("input_ids", [1, 1], TensorProto.INT32),
     ]
     for i in range(n_layers):
-        inputs.append((f"past_key_values.{i}.key", [1, n_kv, past_len, head_dim], TensorProto.UINT16))
-        inputs.append((f"past_key_values.{i}.value", [1, n_kv, past_len, head_dim], TensorProto.UINT16))
+        inputs.append((f"past_key_values_{i}_key", [1, n_kv, past_len, head_dim], TensorProto.UINT16))
+        inputs.append((f"past_key_values_{i}_value", [1, n_kv, past_len, head_dim], TensorProto.UINT16))
     inputs.append(("attention_bias", [1, 1, 1, CONTEXT_MAX], TensorProto.UINT16))
     inputs.append(("position_ids_cos", [1, 1, head_dim], TensorProto.UINT16))
     inputs.append(("position_ids_sin", [1, 1, head_dim], TensorProto.UINT16))
@@ -209,6 +216,8 @@ def describe_outputs(cfg: dict, path_key: str = "") -> list[tuple[str, list[int]
 
 
 def _describe_outputs_pathb_w4a16_local(cfg: dict) -> list[tuple[str, list[int], int]]:
+    # Same dot→underscore normalisation as inputs, per the binary-strings
+    # scan. `logits` has no dots in the source so it passes through.
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]
     head_dim = cfg.get("head_dim", cfg["hidden_size"] // cfg["num_attention_heads"])
@@ -219,8 +228,8 @@ def _describe_outputs_pathb_w4a16_local(cfg: dict) -> list[tuple[str, list[int],
         ("logits", [1, 1, vocab], TensorProto.UINT16),
     ]
     for i in range(n_layers):
-        outputs.append((f"present.{i}.key", [1, n_kv, total_len, head_dim], TensorProto.UINT16))
-        outputs.append((f"present.{i}.value", [1, n_kv, total_len, head_dim], TensorProto.UINT16))
+        outputs.append((f"present_{i}_key", [1, n_kv, total_len, head_dim], TensorProto.UINT16))
+        outputs.append((f"present_{i}_value", [1, n_kv, total_len, head_dim], TensorProto.UINT16))
     return outputs
 
 
