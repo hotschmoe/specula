@@ -500,6 +500,152 @@ more because it's the external-facing artifact.
 **Transfer.** Full — same harness covers Qwen3.5 / Qwen3.6 /
 Gemma4 without reconfiguration.
 
+## Rolling backlog — ideas captured before they're forgotten
+
+Everything below is a "capture now, formalize when it matures"
+item. Promote to a proper Wn workstream when the question
+sharpens or a session slot opens up. Group-numbered (B1, B2, …)
+so later cross-refs don't churn.
+
+### Measurement & characterization
+
+- **B1. Joules/token power-rail measurement.** Windows ETW +
+  Qualcomm telemetry to expose per-rail (CPU/GPU/NPU) power
+  during decode. AC-vs-battery answers *"can I sustain this?"*;
+  J/token answers *"how much battery does one agentic loop
+  cost?"* — the question a laptop buyer actually has. Plug into
+  the W7 opencode harness so every task has a power-cost column.
+- **B2. Sustained-throughput thermal curve.** Formal
+  characterization over 30-minute continuous decode: t/s vs
+  time, with throttle-knee identification. Separates burst
+  numbers (what we report today) from real-world numbers (what
+  an agentic loop actually gets). Applies to every binary we
+  benchmark; one harness, many curves.
+- **B3. Performance regression CI.** Nightly / per-HEAD micro-
+  harness that reruns one canonical prompt at k=2 steady-state
+  against llama.cpp HEAD + ORT-QNN + QAIRT. Catches upstream
+  regressions before they cost us a session of "why did the
+  number change." Cheap once the sweep harness exists.
+
+### Runtime architecture (structural, expensive, compounding)
+
+- **B4. Upstream llama.cpp QNN backend.** Community interest
+  exists; no one has landed a first-class QNN ggml backend.
+  Would collapse our external-drafter sidecar into stock
+  `--draft` flags. Multi-session contribution but potentially
+  project-defining — future specula versions could be "three
+  llama.cpp flags" instead of "custom sidecar + wrapper ONNX
+  + QAIRT pipeline." Gate on W5.a landing so we know the ARM
+  compile path for the EP.
+- **B5. Long-context compile tiers.** Our binary bakes ctx=256.
+  Qwen3 supports 32K+. Qualcomm's reference ships 5 tiers
+  (512/1024/2048/3072/4096) with weight-sharing. A tiered
+  loader that picks the smallest tier ≥ current prompt is a
+  real runtime feature — not a benchmark number. Cost:
+  multiple compiles × one wrapper selector. Payoff: the project
+  handles realistic conversation / codebase contexts, not just
+  humaneval-scale prompts.
+- **B6. Concurrent-session KV memory model.** W7.b asks "can 2
+  users share one server." The deeper question: can we
+  partition 48 GB so N sessions each get their own NPU KV slice
+  without re-uploading weights? Touches QAIRT's
+  `weight_sharing_enabled` flag (Qualcomm's reference uses it)
+  + session-level KV allocation in our wrapper.
+- **B7. Continuous batching × spec-decode interaction.**
+  llama-server supports continuous batching. Our sidecar doesn't
+  participate. When two users' prompts arrive mid-round, does
+  spec-decode correctly pause / resume? Untested. Feature gap
+  surfaces the moment B6 lands.
+
+### Stalled workstreams worth un-stalling
+
+- **B8. KleidiAI / SME2 retry.** Phase 0 deferred this because
+  runtime SME2 trapped. Compiler probe already passes
+  (`HAVE_SME - Success`). If SME2 lands, CPU PP + TG move
+  materially and every "NPU vs CPU" ratio we cite shifts. Worth
+  one focused session once the current phase winds down.
+  `scripts/build_llama_cpp.ps1 -Preset cpu-kleidiai` wires the
+  build; the ZA-tile user-mode state is the runtime suspicion.
+- **B9. EAGLE-3 on NPU draft.** Demoted pre-Phase-5 because it
+  only moves accept rate, and CPU wasn't accept-bound. On NPU
+  where per-step is the bottleneck, EAGLE's smaller-per-step
+  profile might change the calculus. One-session revisit
+  post-Lever-C; inexpensive because the llama.cpp PR exists.
+
+### Distribution & reach (turn our work into artifacts others use)
+
+- **B10. Publish HTP binaries to HuggingFace.** Upload
+  `qwen3_0_6b_draft_v81_ctx256.pathb.w8a16-local.bin` +
+  wrapper + README as a HF model. Zero-effort reproduction
+  for anyone else with an X2E laptop. Becomes a near-trivial
+  release cadence once W9.b exists and we can automate.
+- **B11. Snapdragon SKU-transfer survey.** X2 Elite Extreme is
+  one SKU; X2 Elite (non-Extreme), X1 Elite, and phone-class
+  Snapdragon 8 Gen 4 share Hexagon v75-v81. Do our
+  w8a16-local binaries load on them? 4-hour probe gives us a
+  "covered hardware" footprint to claim. Likely requires
+  borrowing hardware or CI cloud instances.
+- **B12. Cross-runtime bake-off.** MLC-LLM, direct-QNN
+  (no ORT), ort-QNN, llama.cpp+QNN (once B4 lands), Genie SDK.
+  Same Qwen3-0.6B model, same prompt, per-runtime t/s. Tells
+  us whether ORT-QNN is actually the right runtime or we're
+  sitting in a local optimum. Pairs with B4 (if QNN-in-
+  llama.cpp wins, that becomes our default).
+- **B13. Cross-platform laptop bake-off.** M-series ANE (via
+  MLX), RTX 4070/5070 laptops, Intel Core Ultra NPU (OpenVINO).
+  Same draft/target model pair, same prompts. "Which laptop is
+  best for local LLM" is a real consumer question with no clean
+  answer today; one published table is high-visibility.
+  Requires access to each platform — partner / borrow / rent.
+
+### Stretch features (Qwen3.6 / Gemma4 era)
+
+- **B14. Multimodal on NPU/GPU.** Gemma4 is almost certainly
+  multimodal. Vision encoder mapping on NPU (image tower →
+  adapter → text decoder on CPU-spec). Whole new kernel-
+  coverage audit. Flag as soon as Gemma4 weights land.
+- **B15. On-device LoRA / adapter swap.** Task-specific
+  drafters loaded at runtime without recompile. Needs QAIRT
+  to expose weight-patch APIs; probably not today. Track QAIRT
+  release notes for when it becomes possible.
+- **B16. Power-aware adaptive policy.** Runtime drops from
+  k=3 → k=2 → greedy based on battery-charge + prompt-length.
+  Feature, not a benchmark. Layers on top of B1's power
+  measurements.
+- **B17. Draft distillation on-device.** Task-adaptive
+  drafter: collect the user's real usage (with consent) and
+  fine-tune a LoRA on the draft to match their prompt
+  distribution. Research-heavy but a real differentiator for
+  local inference.
+
+### Meta
+
+- **B18. Closing paper / blog post.** When the project arc
+  settles — first open benchmarks + pipeline + upstream
+  contributions for local spec-decode on Snapdragon X2 laptops
+  — it's worth writing up once externally. Flag now so it
+  doesn't become a "we never wrote it up" regret. Natural
+  artifact after W7 + W9 + B10/B12 all land.
+- **B19. Security / privacy posture.** Local inference's
+  selling point. What isolation does the user actually get? Are
+  HTP buffers cleared between sessions? Are weights protected
+  from other processes? Audit question; relevant for any
+  opencode-style deployment where tool-calling touches the
+  filesystem.
+
+### Promotion criteria
+
+Move a B-item to a W-workstream when ANY of:
+(i) a closed W-workstream answered the prerequisite;
+(ii) the question sharpens enough to have a gate condition;
+(iii) an external event (Gemma4 ships, upstream PR merges,
+     hardware arrives) makes it the right moment.
+
+Re-read this section at the start of every new phase. Items
+stale-out: if a B-item sits untouched for 3 months AND no
+promotion criterion fired, move it to a separate "parked"
+sub-section. Keeps the list honest.
+
 ## Prioritization
 
 Dependency graph (→ means "enables"):
