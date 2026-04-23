@@ -311,36 +311,138 @@ logits shape      : (1, 1, 151936)  finite, non-constant
 
 Log: `results/preflight_w4a16_local_qairt242_v2.stdout`.
 
-### Remaining work
+### QuantSpec runtime layer — DONE
 
-Open stages from the original Lever C plan:
+Added `QuantSpec` dataclass + `load_quant_specs` / `quant_to_uint16`
+/ `dequant_from_uint16` / `quantized_zero` to `npu_load_qwen3_bin.py`.
+Encodings-name translation (binary uses underscored names, encodings
+JSON keeps dotted) is handled in `_dot_form`. The smoke-test feed
+gets the quant-zero uint16 per-tensor instead of literal uint16=0,
+and logits are dequanted for reporting.
 
-1. QuantSpec runtime layer — parse `encodings.json`, build
-   per-tensor `{name → (scale, offset, bitwidth)}` map, wrap
-   `session.run()` with fp32 → uint16 feed quant + uint16 → fp32
-   dequant on logits.
-2. Correctness probe (`npu_short_prompt_probe.py` +
-   `npu_vs_cpu_correctness.py`) with gate cos ≥ 0.95 single-step,
-   multi-step ≥ 66% argmax match.
-3. AC sweep vs the 18.12 t/s fp16 baseline.
+Quant formula (verified against every declared min/max in
+`dlc_info_w4a16.txt`):
 
-Option 3 (preserve-guard surgery) and Option 4 (narrow runtime
-uint8 patch) are now **moot** — Option 2 delivered. If the
-correctness gate fails downstream, those options remain available
-but the higher-priority recovery move would be re-running PTQ on
-x86 with a different calibration distribution (Bundle B, or a
-subset of step-0-only samples from Bundle A).
+```
+x_fp32   = (q_uint16 + offset) * scale
+q_uint16 = clip(round(x / scale) - offset, 0, 65535)
+```
+
+Round-trip diagnostic (`scripts/probe_w4a16_quant_roundtrip.py`) on
+fib-p0: worst per-tensor RMS error 0.001%, zero out-of-range
+clipping on all 56 past_kv + attention_bias + cos + sin. Quant layer
+is numerically healthy.
+
+### Correctness probe — FAILS with cos≈0.29–0.33 (not a quant issue)
+
+`npu_short_prompt_probe.py --path pathb` extended to accept
+optional `quant_specs`; position_ids dropped from feed (not an
+input in this binary), fp32 inputs quantized at the session
+boundary, uint16 logits dequanted on return, KV chain dequant-
+and-requanted between steps.
+
+Results:
+
+| scenario | cos | argmax match | top-5 overlap | multi-step |
+|---|---:|:-:|:-:|:-:|
+| pathbmask fp16 (reference, same probe) | 0.9999 | ✓ | 5/5 | 100% |
+| **pathb w4a16-local, fib-p0 (prompt_len=16)** | **0.33** | ✗ | 1/5 | 0% |
+| **pathb w4a16-local, pos=0 identity rotary, BOS-only** | **0.29** | ✗ | 0/5 | n/a |
+
+The pos=0 identity-rotary case is the decisive isolator. At pos=0,
+`rope_tables(0)` produces cos=all-1.0, sin=all-0.0 so rotary becomes
+an identity. Past_kv is zero. Attention_bias masks all past slots.
+Only `input_ids=1` at position 0 matters. Even this trivial case
+hits cos=0.29 vs the optimum CPU reference.
+
+What this rules out:
+
+- Probe infrastructure regression — pathbmask still 0.9999 through
+  the same code.
+- Quant formula — round-trip 0.001% RMS, every fp32 input fits
+  inside its calibrated range.
+- rope_tables formula — pos=0 makes rotary identity; formula is
+  bypassed.
+- Rotary hoist equivalence — x86's `probe_pathb_equivalence.py`
+  already validated NEW-ONNX vs REF-ONNX at cos=1.0 on pos=0 + pos=5.
+- Wrapper schema — 60 uint16 inputs + `input_ids` int32 match the
+  binary exactly; pos=0 probe feeds every required tensor.
+
+What this points at (in the x86 compile pipeline):
+
+1. **PTQ calibration picked bad activation ranges on some interior
+   tensor.** encodings.json captures IO scale/offset; the ~2200
+   internal activation tensors each have their own calibration-
+   derived scale that we can't inspect cheaply from ARM64.
+2. **qairt-converter or qairt-quantizer did something subtly wrong
+   on the hoisted-rotary graph.** Compare-and-contrast: pathbmask
+   (rotary inline) works, pathb w4a16 (rotary hoisted, quantized)
+   doesn't. Two things differ simultaneously.
+3. **A specific op's HTP kernel behaves differently under w4a16
+   quant than we'd expect from fp16.** QAIRT's HTP quant has known
+   corner cases around Neg/StridedSlice (rotate_half lowering) and
+   RmsNorm.
+
+Diagnostics used:
+
+- `scripts/probe_w4a16_quant_roundtrip.py` — per-tensor quant round
+  trip on real fib-p0 feed.
+- `scripts/probe_ort21_w4a16_local.py` — escape-hatch attempt on the
+  2.45 binary (negative, preserved for future re-runs).
+- Binary string-scan — confirmed the dot→underscore name
+  normalisation `qnn-context-binary-generator` applies.
+- pathbmask sanity rerun via the same probe — green.
+
+### Next-session options (ordered by cheapness)
+
+1. **x86 fp16-pathb rebuild.** Re-run the local QAIRT pipeline with
+   `--float_bitwidth 32` (no PTQ) on the same pathb ONNX. If fp16-
+   pathb passes cos ≥ 0.95, the compile pipeline is correct and the
+   issue is specifically w4a16 PTQ. If fp16-pathb also fails, the
+   pathb rewrite or prep pipeline changed something a CPU probe
+   wouldn't catch. ~80 seconds of x86 compile time.
+2. **Different PTQ algorithm.** `qairt-quantizer` supports
+   `--act_quantizer {tf,tf_enhanced,cle}`, `--bias_bitwidth`,
+   `--use_adjusted_weights_quantizer`, etc. Default was tf. Try
+   `tf_enhanced` (per-tensor range enhancement) or `cle`
+   (cross-layer equalization) as the most likely accuracy-move-up
+   knobs. Each is one x86 recompile.
+3. **Calibration bundle swap.** Our current bundle is Bundle A
+   (realistic multi-position). Try Bundle B (step-0 only, 20
+   samples). The research question from the perf-levers plan was
+   "does cheap calibration suffice?" — this session inadvertently
+   started answering no, at least for realistic samples.
+4. **AIMET-side pre-quantization.** Explicit per-tensor activation
+   range control — heavier but gives us a knob on the interior
+   activations that encodings.json only reports post-hoc.
+5. **qairt-accuracy-debugger.** Linux-only QAIRT tool that compares
+   per-op outputs between the DLC and a reference runtime. If the
+   user has Linux access on the x86 box or WSL2, this is the
+   definitive localiser for "which op went numerically wrong."
+
+### Standing evidence + artifacts (updated)
 
 ## Standing evidence + artifacts
 
-- Compiled binary (broken): `models/qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-a.bin`
+- Compiled binary (AI Hub, broken): `models/qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-a.bin`
 - AI Hub log (bug evidence): `results/aihub-compile-jg93r1jqg-pathb-w4a16-a/jg93r1jqg.log`
+- Compiled binary (x86 QAIRT 2.45, rejects on ORT-QNN 1.24.4): NAS at
+  `Z:\exposed\junk\phase5_step15_local_qairt_out\`
+- Compiled binary (x86 QAIRT 2.42, **loads but numerically wrong**):
+  `models/qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local.bin`
+  + `.encodings.json`. Loads on ORT-QNN 1.24.4 cleanly, 28 ms/step,
+  logits finite but cos≈0.3 vs CPU fp32.
 - Calibration bundle (reusable): `models/calibration/bundle_a_pathb_ctx256.npz`
   (60 samples × 61 inputs, 3.27 GB)
 - pathb ONNX (reusable): `models/qwen3-0.6b-pathb/` — 61 inputs,
   rotary hoisted, cos=1.0 vs optimum source
-- X2E plumbing (reusable): commit `1423f6c`
+- X2E plumbing (reusable): commit `1423f6c`; variant-aware w4a16 plumbing commit `0357aa6`
 - Qualcomm reference metadata: `models/qualcomm-qwen3-4b-ref/qwen3_4b-genie-w4a16-qualcomm_snapdragon_x2_elite/metadata.yaml`
+- Runtime diagnostics: `scripts/probe_w4a16_quant_roundtrip.py`,
+  `scripts/probe_ort21_w4a16_local.py`
+- Correctness evidence: `results/correctness_w4a16_local_p0.stdout`
+  (cos=0.33 fib-p0), `results/preflight_w4a16_local_qairt242_v3.stdout`
+  (structural load ok)
 
 ## Open questions
 

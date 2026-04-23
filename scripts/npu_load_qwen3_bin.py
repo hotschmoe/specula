@@ -39,6 +39,7 @@ import os
 import sys
 import time
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -105,9 +106,125 @@ def _wrapper_path(path_key: str) -> Path:
     return REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.{path_key}{_VARIANT_SUFFIX}.wrapper.onnx"
 
 
+def _encodings_path(path_key: str) -> Path:
+    return REPO_ROOT / "models" / f"qwen3_0_6b_draft_v81_ctx{CONTEXT_MAX}.{path_key}{_VARIANT_SUFFIX}.encodings.json"
+
+
 def _config_json(path_key: str) -> Path:
     source_dir = REPO_ROOT / "models" / f"qwen3-0.6b-{path_key}"
     return source_dir / "config.json"
+
+
+# ---------------------------------------------------------------------------
+# W4A16 asymmetric uint16 quantization helpers.
+#
+# QAIRT convention (verified against dlc_info_w4a16.txt min/max boundaries):
+#     x_fp32   = (q_uint16 + offset) * scale     # dequant
+#     q_uint16 = clip(round(x / scale) - offset, 0, 65535)   # quant
+#
+# `offset` is stored in the DLC as a negative integer (the negated
+# zero-point, per QNN SDK convention). For layer-0 past_kv.0.key the
+# declared encoding is scale=0.014685, offset=-33631, min=-493.88, max=468.52;
+# q=0 dequants to -493.88 and q=65535 to 468.52, matching exactly.
+#
+# Tensor-name matching: the .bin uses underscored names
+# (`past_key_values_0_key`), but `encodings.json` keeps the dotted names
+# from the upstream ONNX (`past_key_values.0.key`). `load_quant_specs`
+# does the translation at load time, keyed by the wrapper's runtime
+# tensor names so downstream code can just do specs[sess_input.name].
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class QuantSpec:
+    scale: float
+    offset: int
+    bitwidth: int
+
+    @property
+    def qmax(self) -> int:
+        return (1 << self.bitwidth) - 1
+
+
+def _dot_form(underscored: str) -> str:
+    """Translate binary-internal name to encodings.json key.
+
+    `past_key_values_0_key` <-> `past_key_values.0.key`
+    `present_12_value`      <-> `present.12.value`
+    Everything else (input_ids, attention_bias, position_ids_{cos,sin},
+    logits) passes through unchanged.
+    """
+    for prefix in ("past_key_values_", "present_"):
+        if underscored.startswith(prefix):
+            tail = underscored[len(prefix):]
+            # tail is like "12_key" / "12_value" — split on the LAST underscore
+            head, _, kind = tail.rpartition("_")
+            if head and kind in ("key", "value"):
+                return f"{prefix.rstrip('_')}.{head}.{kind}"
+    return underscored
+
+
+def load_quant_specs(
+    encodings_path: Path,
+    runtime_names: list[str],
+) -> dict[str, QuantSpec]:
+    """Build {runtime_name -> QuantSpec} for each named tensor.
+
+    Skips tensors that are not quantized (data_type 50 = int32 on input_ids;
+    `quant_params.scale_offset.bitwidth == 0` marks the sentinel "no
+    encoding" state seen on `input_ids`).
+    """
+    with encodings_path.open() as f:
+        graph_tensors = json.load(f)["graph"]["tensors"]
+
+    specs: dict[str, QuantSpec] = {}
+    missing: list[str] = []
+    unquantized: list[str] = []
+    for name in runtime_names:
+        key = _dot_form(name)
+        tensor = graph_tensors.get(key)
+        if tensor is None:
+            missing.append(name)
+            continue
+        qp = tensor.get("quant_params", {}).get("scale_offset", {})
+        bw = int(qp.get("bitwidth", 0) or 0)
+        if bw == 0:
+            unquantized.append(name)
+            continue
+        specs[name] = QuantSpec(
+            scale=float(qp["scale"]),
+            offset=int(qp["offset"]),
+            bitwidth=bw,
+        )
+    if missing:
+        raise KeyError(
+            f"encodings.json lacks {len(missing)} runtime-named tensor(s); "
+            f"first few: {missing[:3]}"
+        )
+    # `unquantized` is expected (input_ids). Don't raise.
+    return specs
+
+
+def quant_to_uint16(arr: np.ndarray, spec: QuantSpec) -> np.ndarray:
+    if spec.bitwidth != 16:
+        raise ValueError(f"quant_to_uint16 requires bitwidth=16, got {spec.bitwidth}")
+    q = np.rint(arr.astype(np.float32) / spec.scale) - spec.offset
+    return np.clip(q, 0, spec.qmax).astype(np.uint16)
+
+
+def dequant_from_uint16(arr: np.ndarray, spec: QuantSpec) -> np.ndarray:
+    if spec.bitwidth != 16:
+        raise ValueError(f"dequant_from_uint16 requires bitwidth=16, got {spec.bitwidth}")
+    # int32 intermediate so (q + offset) doesn't underflow uint16 when offset < 0
+    return (arr.astype(np.int32) + spec.offset).astype(np.float32) * spec.scale
+
+
+def quantized_zero(spec: QuantSpec) -> int:
+    """The uint16 representation of fp32 == 0 under this spec. Always `-offset`
+    mod qmax+1 in practice; clip for safety against pathologically-offset
+    tensors like attention_bias (offset -65535 -> q_zero = 65535, which is
+    the actual max)."""
+    return int(np.clip(0 - spec.offset, 0, spec.qmax))
 
 
 def describe_inputs(cfg: dict, path_key: str) -> list[tuple[str, list[int], int]]:
@@ -318,8 +435,19 @@ def summarize_io(sess: ort.InferenceSession) -> dict:
     return {"inputs": inputs, "outputs": outputs}
 
 
-def build_zero_feed(sess: ort.InferenceSession) -> dict:
-    """Build a feed of zeros matching the session's actual input spec."""
+def build_zero_feed(
+    sess: ort.InferenceSession,
+    quant_specs: dict[str, QuantSpec] | None = None,
+) -> dict:
+    """Build a feed of zeros matching the session's actual input spec.
+
+    For quantized uint16 inputs (w4a16-local variant), literal uint16=0
+    dequantizes to the most-NEGATIVE representable fp32 value under each
+    tensor's scale/offset — meaningless as a "zero KV". When `quant_specs`
+    is provided (keyed by runtime input name), produces the uint16 value
+    that dequantizes to fp32==0 for each quantized tensor. Non-quantized
+    inputs (input_ids, position_ids) keep their previous semantics.
+    """
     dtype_map = {
         "tensor(int64)": np.int64,
         "tensor(int32)": np.int32,
@@ -338,6 +466,8 @@ def build_zero_feed(sess: ort.InferenceSession) -> dict:
             feed[x.name] = np.ones(shape, dtype=np_dtype)
         elif x.name == "position_ids":
             feed[x.name] = np.full(shape, CONTEXT_MAX - 1, dtype=np_dtype)
+        elif quant_specs is not None and x.name in quant_specs:
+            feed[x.name] = np.full(shape, quantized_zero(quant_specs[x.name]), dtype=np_dtype)
         else:
             feed[x.name] = np.zeros(shape, dtype=np_dtype)
     return feed
@@ -391,22 +521,41 @@ def main() -> int:
     print("\n--- IO signature ---")
     summarize_io(sess)
 
-    print("\n--- single forward pass with zero KV + BOS-ish token ---")
-    feed = build_zero_feed(sess)
+    # For w4a16-local, load the encodings.json so the zero feed quantizes
+    # correctly and we can dequant the uint16 logits into a float view.
+    quant_specs = None
+    logits_spec: QuantSpec | None = None
+    if VARIANT == "w4a16-local":
+        enc_path = _encodings_path(args.path)
+        if not enc_path.exists():
+            print(f"ERROR: {enc_path} missing (w4a16-local requires the quant encodings)")
+            return 2
+        runtime_in_names = [x.name for x in sess.get_inputs()]
+        runtime_out_names = [x.name for x in sess.get_outputs()]
+        quant_specs = load_quant_specs(enc_path, runtime_in_names + runtime_out_names)
+        logits_spec = quant_specs.get(LOGITS_OUTPUT_NAME)
+        print(f"  loaded {len(quant_specs)} quant specs from encodings.json")
+
+    print("\n--- single forward pass with fp32-zero KV + BOS-ish token ---")
+    feed = build_zero_feed(sess, quant_specs=quant_specs)
     t0 = time.perf_counter_ns()
     outputs = sess.run(None, feed)
     t1 = time.perf_counter_ns()
     ms = (t1 - t0) / 1e6
     names = [o.name for o in sess.get_outputs()]
     logits_idx = names.index(LOGITS_OUTPUT_NAME)
-    logits = outputs[logits_idx]
+    logits_raw = outputs[logits_idx]
+    logits = (
+        dequant_from_uint16(logits_raw, logits_spec)
+        if logits_spec is not None
+        else logits_raw
+    )
     print(f"  run latency       : {ms:.2f} ms")
-    print(f"  logits shape      : {logits.shape}")
-    print(f"  logits dtype      : {logits.dtype}")
-    print(f"  logits finite frac: {float(np.isfinite(logits).mean()):.4f}")
-    print(f"  logits min/max    : {float(np.nanmin(logits)):.3f} / {float(np.nanmax(logits)):.3f}")
+    print(f"  logits raw dtype  : {logits_raw.dtype}  shape {logits_raw.shape}")
+    print(f"  logits fp32 min/max: {float(np.nanmin(logits)):.3f} / {float(np.nanmax(logits)):.3f}")
+    print(f"  logits finite frac : {float(np.isfinite(logits).mean()):.4f}")
     top5 = np.argsort(-logits[0, -1].astype(np.float32))[:5]
-    print(f"  argmax top 5 ids  : {top5.tolist()}")
+    print(f"  argmax top 5 ids   : {top5.tolist()}")
 
     healthy = (
         logits.shape[-1] == cfg["vocab_size"]

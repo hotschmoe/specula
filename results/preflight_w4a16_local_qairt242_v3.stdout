@@ -1,0 +1,36 @@
+=== step 5 - load compiled HTP context binary (pathb) ===
+
+bin size            : 875.4 MB
+model layers/kv_heads/head_dim : 28/8/128
+
+--- build EPContext wrapper ONNX ---
+  wrote qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local.wrapper.onnx (8255 bytes)
+
+--- load wrapper via legacy QNN EP (ORT 1.24.4) ---
+  loading wrapper ONNX qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local.wrapper.onnx via legacy QNN EP ...
+
+session providers   : ['QNNExecutionProvider', 'CPUExecutionProvider']
+
+--- IO signature ---
+  inputs (60):
+    input_ids                              [1, 1]                   tensor(int32)
+    past_key_values_0_key                  [1, 8, 255, 128]         tensor(uint16)
+    past_key_values_0_value                [1, 8, 255, 128]         tensor(uint16)
+    past_key_values_1_key                  [1, 8, 255, 128]         tensor(uint16)
+    past_key_values_1_value                [1, 8, 255, 128]         tensor(uint16)
+    ... (55 more)
+  outputs (57):
+    logits                                 [1, 1, 151936]           tensor(uint16)
+    present_0_key                          [1, 8, 256, 128]         tensor(uint16)
+    present_0_value                        [1, 8, 256, 128]         tensor(uint16)
+    ... (54 more)
+  loaded 116 quant specs from encodings.json
+
+--- single forward pass with fp32-zero KV + BOS-ish token ---
+  run latency       : 28.21 ms
+  logits raw dtype  : uint16  shape (1, 1, 151936)
+  logits fp32 min/max: -17.259 / 14.009
+  logits finite frac : 1.0000
+  argmax top 5 ids   : [24004, 119427, 20022, 91235, 79165]
+
+=== STATUS: ok ===

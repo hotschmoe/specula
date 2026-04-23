@@ -61,7 +61,17 @@ from tokenizers import Tokenizer
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from npu_load_qwen3_bin import CONTEXT_MAX, LOGITS_OUTPUT_NAME, rope_tables  # noqa: E402
+from npu_load_qwen3_bin import (  # noqa: E402
+    CONTEXT_MAX,
+    LOGITS_OUTPUT_NAME,
+    VARIANT,
+    QuantSpec,
+    _encodings_path,
+    dequant_from_uint16,
+    load_quant_specs,
+    quant_to_uint16,
+    rope_tables,
+)
 from npu_vs_cpu_correctness import (  # noqa: E402
     CONFIG_JSON,
     CPU_ONNX,
@@ -72,6 +82,15 @@ from npu_vs_cpu_correctness import (  # noqa: E402
     load_cpu_session,
     load_npu_session,
 )
+
+# When VARIANT == "w4a16-local" the binary drops position_ids entirely
+# (--remove_unused_inputs on the x86 qairt-converter step), renames dots
+# to underscores on outputs (present_N_key vs output_N), and quantizes
+# every IO except input_ids to uint16. Rather than fork the whole
+# decode path, the probe keeps an fp32-internal representation of
+# npu_past/attention_bias/cos/sin and quantizes only at the session-feed
+# boundary — symmetric dequant on the way back.
+IS_W4A16_LOCAL = VARIANT == "w4a16-local"
 
 HUMANEVAL = REPO_ROOT / "prompts" / "humaneval_subset.jsonl"
 
@@ -207,6 +226,7 @@ def npu_single_step_short_prompt(
     position: int,
     valid_past_len: int,
     path_key: str = "pathbmask",
+    quant_specs: dict[str, QuantSpec] | None = None,
 ) -> tuple[np.ndarray, list[np.ndarray], list[str]]:
     """Single decode step on NPU Path B-mask / Path B with masked bias.
 
@@ -216,21 +236,55 @@ def npu_single_step_short_prompt(
     position_ids_cos / position_ids_sin. Returns (logits,
     present_outputs, output_names) so the caller can reshape the
     present KV for the next step.
+
+    `quant_specs` (w4a16-local only): if provided, every fp32 input is
+    quantized per its spec before session.run, position_ids is dropped
+    from the feed (not an input in that binary), and the uint16 logits
+    are dequanted back to fp32 before the return.
     """
     out_names = [o.name for o in sess.get_outputs()]
     logits_idx = out_names.index(LOGITS_OUTPUT_NAME)
     feed: dict[str, np.ndarray] = {
         "input_ids": np.array([[input_id]], dtype=np.int32),
-        "position_ids": np.array([[position]], dtype=np.int32),
         "attention_bias": build_masked_bias(valid_past_len),
     }
+    if quant_specs is None:
+        # Legacy fp16 paths (patha / pathbmask / pathb fp16) expect INT32
+        # position_ids; the w4a16-local binary doesn't have that input.
+        feed["position_ids"] = np.array([[position]], dtype=np.int32)
     if path_key == "pathb":
         cos, sin = rope_tables(position)
         feed["position_ids_cos"] = cos
         feed["position_ids_sin"] = sin
     feed.update(npu_past)
+    if quant_specs is not None:
+        feed = _quantize_feed(feed, quant_specs)
     outputs = sess.run(None, feed)
-    return outputs[logits_idx][0, -1], outputs, out_names
+    logits_raw = outputs[logits_idx][0, -1]
+    if quant_specs is not None and LOGITS_OUTPUT_NAME in quant_specs:
+        logits_raw = dequant_from_uint16(logits_raw, quant_specs[LOGITS_OUTPUT_NAME])
+    return logits_raw, outputs, out_names
+
+
+def _quantize_feed(
+    feed_fp32: dict[str, np.ndarray],
+    quant_specs: dict[str, QuantSpec],
+) -> dict[str, np.ndarray]:
+    """Return a copy of feed where every name in `quant_specs` is uint16-quantized.
+
+    input_ids has no spec (int32 passthrough); any other name without a
+    spec is a bug and we fail fast.
+    """
+    out: dict[str, np.ndarray] = {}
+    for name, arr in feed_fp32.items():
+        spec = quant_specs.get(name)
+        if spec is None:
+            if name != "input_ids":
+                raise KeyError(f"no quant spec for w4a16-local input '{name}'")
+            out[name] = arr
+        else:
+            out[name] = quant_to_uint16(arr, spec)
+    return out
 
 
 def npu_rearrange_present_to_past(
@@ -238,6 +292,7 @@ def npu_rearrange_present_to_past(
     out_names: list[str],
     n_layers: int,
     old_valid_past_len: int,
+    quant_specs: dict[str, QuantSpec] | None = None,
 ) -> dict[str, np.ndarray]:
     """Build the next-step past_kv after a short-prompt NPU decode step.
 
@@ -252,12 +307,29 @@ def npu_rearrange_present_to_past(
       new_past[0..P-1] = present[0..P-1]
       new_past[P]      = present[511]   (the token we just fed moves in)
       new_past[P+1..510] = zeros
+
+    w4a16-local routing: outputs are named `present_{i}_{key,value}`
+    (not `output_N`) and are uint16-quantized with per-tensor scale/offset
+    that differs from the input past_kv tensor's scale/offset. The caller
+    keeps an fp32-internal npu_past, so we dequant the present slice to
+    fp32 here; quantization back to uint16 happens at the next
+    session-feed boundary under the input-side scale/offset.
     """
+    use_w4a16 = quant_specs is not None
     next_past: dict[str, np.ndarray] = {}
     new_slot = old_valid_past_len
     for i in range(n_layers):
-        k = present_outputs[out_names.index(f"output_{2 * i + 1}")]
-        v = present_outputs[out_names.index(f"output_{2 * i + 2}")]
+        if use_w4a16:
+            k_name = f"present_{i}_key"
+            v_name = f"present_{i}_value"
+        else:
+            k_name = f"output_{2 * i + 1}"
+            v_name = f"output_{2 * i + 2}"
+        k = present_outputs[out_names.index(k_name)]
+        v = present_outputs[out_names.index(v_name)]
+        if use_w4a16:
+            k = dequant_from_uint16(k, quant_specs[k_name])
+            v = dequant_from_uint16(v, quant_specs[v_name])
         # Full 512-slot present from the NPU.
         if k.shape[2] != CONTEXT_MAX or v.shape[2] != CONTEXT_MAX:
             raise AssertionError(
@@ -327,6 +399,19 @@ def main() -> int:
         print(f"ERROR: NPU session fell back: {providers}")
         return 2
 
+    quant_specs: dict[str, QuantSpec] | None = None
+    if IS_W4A16_LOCAL:
+        enc_path = _encodings_path(path_key)
+        if not enc_path.exists():
+            print(f"ERROR: {enc_path} missing (w4a16-local requires the quant encodings)")
+            return 2
+        runtime_names = (
+            [x.name for x in npu_sess.get_inputs()]
+            + [x.name for x in npu_sess.get_outputs()]
+        )
+        quant_specs = load_quant_specs(enc_path, runtime_names)
+        print(f"  loaded {len(quant_specs)} quant specs (w4a16-local)")
+
     print(f"\n--- CPU prefill to past_len={prompt_len} ---")
     t0 = time.perf_counter()
     cpu_past, next_id = cpu_prefill(cpu_sess, cfg, prompt_ids)
@@ -346,6 +431,7 @@ def main() -> int:
     npu_logits, npu_outputs, npu_out_names = npu_single_step_short_prompt(
         npu_sess, npu_past, next_id, prompt_len,
         valid_past_len=prompt_len, path_key=path_key,
+        quant_specs=quant_specs,
     )
     elapsed_ms = (time.perf_counter() - t0) * 1000
     npu_argmax = int(np.argmax(npu_logits))
@@ -413,7 +499,8 @@ def main() -> int:
     # NPU multi-step with rearrangement.
     npu_stream: list[int] = [npu_argmax]
     next_past = npu_rearrange_present_to_past(
-        npu_outputs, npu_out_names, n_layers, old_valid_past_len=prompt_len
+        npu_outputs, npu_out_names, n_layers, old_valid_past_len=prompt_len,
+        quant_specs=quant_specs,
     )
     npu_input = npu_argmax
     npu_pos = prompt_len + 1
@@ -422,11 +509,13 @@ def main() -> int:
         step_logits, step_outputs, step_out_names = npu_single_step_short_prompt(
             npu_sess, next_past, npu_input, npu_pos,
             valid_past_len=npu_valid, path_key=path_key,
+            quant_specs=quant_specs,
         )
         nxt = int(np.argmax(step_logits))
         npu_stream.append(nxt)
         next_past = npu_rearrange_present_to_past(
-            step_outputs, step_out_names, n_layers, old_valid_past_len=npu_valid
+            step_outputs, step_out_names, n_layers, old_valid_past_len=npu_valid,
+            quant_specs=quant_specs,
         )
         npu_input = nxt
         npu_pos += 1
