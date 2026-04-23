@@ -237,6 +237,93 @@ b49d3e1299c1565260a27f8dfa6ebe54  qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local.
 aab34c8bb69b16189f42078831a822c6  qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local.encodings.json
 ```
 
+## Update 2026-04-22 — 2.45-built binary failed, rebuilt with QAIRT 2.42
+
+ARM64 team reported load failure (error 5000) on the 2.45-built binary —
+matches Qualcomm's own compat matrix prediction exactly (prepared on
+2.43+ → 2.42 runtime = Not Supported, full matrix in
+`docs/QAIRT-Docs/QNN/general/htp/htp_backend.html` inside the SDK
+install).
+
+### Obtaining QAIRT 2.42
+
+Version string: **2.42.0.251225**. Direct download URL:
+
+```
+https://softwarecenter.qualcomm.com/api/download/software/sdks/Qualcomm_AI_Runtime_Community/All/2.42.0.251225/v2.42.0.251225.zip
+```
+
+Gotcha: the Qualcomm API gateway returns **403 on HEAD requests and
+non-browser user agents**. Plain `curl -I` or `curl --head` fails. A
+GET with a Mozilla UA works:
+
+```bash
+curl -sL -A "Mozilla/5.0" -o qairt.zip <url>
+```
+
+Download size: 1,543,955,191 bytes (1.44 GB). The zip extracts to a
+`qairt/2.42.0.251225/` inner directory; unzip then flatten one level.
+
+### Changes needed to run 2.42 tools in our existing venv
+
+- 2.42's `check-python-dependency` requires the **same** pinned deps as
+  2.45 — nothing new to install.
+- **onnx must be downgraded from 1.21.0 → 1.14.1.** 2.42's
+  `qti.aisw.converters.onnx.util` imports the `onnx.mapping` submodule,
+  which was removed from onnx after 1.14. The Qualcomm script has a
+  bare `except:` around the onnx imports and silently sets
+  `onnx = None` on failure, so the symptom surfaces downstream as a
+  confusing `AttributeError: 'NoneType' object has no attribute
+  'AttributeProto'`. `pip install 'onnx<1.15'` fixes it.
+- The `shared_library_path` in `config_main.json` had to be repointed
+  from 2.45's `QnnHtpNetRunExtensions.dll` to 2.42's equivalent. Same
+  filename, different install root.
+
+All other deviations from the plan-doc (remove_unused_inputs,
+position_ids skip, int64→int32 calibration cast, uniform uint16 IO,
+wrapped config, no weight_sharing) applied identically.
+
+### 2.42 pipeline timings
+
+| step | 2.45 timing | 2.42 timing |
+|---|---:|---:|
+| qairt-converter | ~22 s | ~22 s |
+| qairt-quantizer PTQ | ~33 s | ~39 s |
+| qnn-context-binary-generator | ~7 s | ~10 s |
+| qairt-dlc-to-json | ~1 s | <1 s |
+| **total** | **~63 s** | **~72 s** |
+
+Output sizes are identical (876 MB bin, 867 MB quantized DLC). Encodings
+JSON grew 3.1 → 3.4 MB — 2.42 writes slightly more per-tensor metadata.
+
+### New NAS drop
+
+```
+Z:\exposed\junk\phase5_step15_local_qairt_out_qairt242\
+├── qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local.bin           876 MB
+│   MD5: b8d8f3b7a4df9a6825af9b969f631228
+├── qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local.encodings.json  3.4 MB
+│   MD5: 9b9457c39e4e2139c76bcb9fe0b124b9
+├── HANDOFF_qairt242.md
+├── dlc_info_w4a16.txt
+├── qairt_compile_log.txt / qairt_quantizer.log / qnn_ctx_bin_gen.log
+└── config_main.json / htp_backend_ext_inner.json
+```
+
+The earlier 2.45-built drop at `phase5_step15_local_qairt_out\` is
+retained as a reference (known to fail ORT-QNN 1.24.4 with error 5000).
+
+### What this closes
+
+- Answers the open question from the original findings: **2.45-built
+  binaries are not backward-compatible with 2.42 runtime**, as
+  Qualcomm's compat matrix explicitly states. Our load-failure
+  observation matches.
+- Confirms the SDK-version guess-and-check approach is viable when AI
+  Hub's orchestrator-level flags (`--qairt_version 2.42`) aren't
+  available — just install the matching SDK and rebuild. On our box
+  this cost ~72 s of compile time once the SDK was in place.
+
 ## Next steps (ARM64 side)
 
 1. `Get-FileHash -Algorithm MD5` both files against the values above.
