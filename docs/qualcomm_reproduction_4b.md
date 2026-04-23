@@ -3,12 +3,16 @@
 **Status:** in-progress 2026-04-23. Phases 0-2 complete; Phase 3 hit the
 single-bin HTP ceiling (structural, not a bug); Phase 5 converter +
 quantizer + ctx-bin-gen + wrapper + HTP-load all green end to end.
-Phase 5h implemented position-spread + chat-template calibration
-(per Phase 5g fix path) and discovered the seam clipping was only
-the *surface* bug — output now varies per step instead of looping,
-but cos is still random (-0.027). Internal per-layer quantization
-appears under-calibrated despite min-max asymmetric flags. Next
-candidates enumerated at end of Phase 5h.
+Phase 5h implemented position-spread + chat-template calibration;
+output varies per step now (not stuck) but cos=-0.027 random.
+Phase 5i (diagnosis) localized the bug: per-part HTP vs CPU-ORT probe
+shows Part 1 cos=1.0, Part 2 cos=0.998 but magnitude compressed 10×,
+Part 3 cos=1.0, **Part 4 cos=0.63**. Root cause is cascading calibration
+clipping: qairt-quantizer's internal calibration forward observes
+narrow activations at early layers, clips them, which makes the next
+layer's observed input narrow too, snowballing. 798 activation
+tensors per part — selective override doesn't scale. Fundamental
+fix needs iterative recalibration or AIMET/QAT-grade pipeline.
 
 ## Goal
 
@@ -543,6 +547,121 @@ for the hundreds of internal tensors involved. Likely next paths
    through each part in isolation and reports per-output cosine
    & max-abs-diff. Whichever part first diverges is where to
    focus the override / recalibration effort.
+
+### 5i. Per-part HTP-vs-CPU divergence probe — leak localized
+
+`scripts/probe_4b_per_part_htp_vs_cpu.py` feeds each part its ideal
+fp32 upstream input (derived from CPU-ORT forward) and compares the
+HTP output against the CPU-ORT-same-part output. Test point: step 0
+(position 0, BOS token 151644, empty past_kv, full-dim cos/sin).
+
+Results on the post-Phase-5h bundle (with L11-seam override only):
+
+| part | output | cos | maxdiff | cpu range | htp range | sat@0/65535 |
+|---|---|---:|---:|---|---|---|
+| 1 (embed) | `embed` | +1.000000 | 0.00 | ±0.08 | ±0.08 | 0.00% / 0.00% |
+| 2 (layers 0-11) | `L11` | +0.997633 | 14718 | ±16000 | ±1400 | 0.00% / 0.00% |
+| 3 (layers 12-23) | `L23` | +0.999993 | 48 | ±16000 | ±16000 | 0.00% / 0.00% |
+| 4 (layers 24-35 + norm + lm_head) | `logits` | +0.630841 | 4.5 | ±4.3 | ±3.7 | 0.00% / 0.00% |
+
+Key read: **cos is near-perfect for parts 1 / 2 / 3** — Part 2's
+output has correct *direction* but *magnitude compressed 10×*, and
+crucially `sat@65535 = 0%`, meaning the output isn't clipping at the
+encoding boundary. The HTP internal math itself is producing a
+compressed output. **Part 4 has cos=0.63** — direction is wrong
+even when fed an ideal fp32 upstream. Two independent pathologies.
+
+#### Why Part 2 compresses 10× (the cascade mechanism)
+
+`dlc_info_w4a16` dump of Part 2's `/model/layers.N/Add_1_output_0`
+encodings (the residual stream after each layer's MLP):
+
+| layer | encoding range | vs CPU-ORT observed range |
+|---:|---|---|
+| 0 | ±5 | ±9 |
+| 1 | ±5.5 | ±40 |
+| 2 | ±11 | ±52 |
+| 3 | ±18 | ±54 |
+| 4 | ±21 | ±59 |
+| 5 | ±18 | ±26 |
+| 6 | ±1443 | **±17168** |
+| 7 | ±1443 | ±17170 |
+| ... | ±1443 | ±17170 |
+| 11 | ±16000 (overridden) | ±17170 |
+
+Two patterns worth noting: (a) at every layer 0-5 the encoding
+under-counts CPU-ORT by 2-4×, (b) at layer 6 the encoding is 10×
+narrower than CPU-ORT (±1443 vs ±17168) — this is where the
+cascade really bites. Attention/MLP output encodings show the
+same pattern: layer 6 `mlp/down_proj` is encoded at ±1436 while
+at runtime this tensor should reach ±17000 (since it's the only
+realistic way the residual jumps from ±26 to ±17168 in one layer).
+
+**Experiment**: `scripts/build_part2_residual_overrides.py` runs the
+augmented Part 2 ONNX (with per-layer `Add_1_output_0` as extra graph
+outputs) on the 50 calibration samples and writes an overrides JSON
+covering all 12 residuals. Re-converted Part 2 with those 12
+overrides, re-quantized, re-bin-gen'd, re-probed. **Result: no
+change.** HTP Part 2 L11 still at ±1400. Overriding the *residual*
+encodings doesn't fix the math because the internal intermediate
+tensors (attn Q/K/V projections, softmax, o_proj, MLP gate/up/down,
+post-norm mul) each have their own encodings and these stayed
+narrow — the residual `Add_1` just sums them. Layer 6's
+`mlp/down_proj/MatMul_output_0` stayed at ±1436 encoding despite
+the Add_1 override.
+
+**Counting the problem**: Part 2 has 798 uint16-quantized activation
+tensors. Many are DLC-internal (`_fc`, `Expand_coef`,
+`Mul_9_output_0_converted_unsigned_symmetric`) with no ONNX
+counterpart, so CPU-ORT can't directly observe their ranges for
+override generation. Selective per-tensor overrides don't scale.
+
+#### Why Part 4 cos=0.63 (direction-error with perfect input)
+
+Part 4's internal residual stream is fused in DLC (unlike Part 2,
+only `/model/layers.23/Add_1_output_0` = its input is exposed; no
+per-layer Add_1 survives). Attention/MLP output encodings still
+show the cascade: layers 24-33 all ±5-20, layer 34 `mlp/down_proj`
+jumps to ±2165, layer 35 to ±2727. The lm_head encoding is normal
+(logits ±20). Same mechanism as Part 2 but with a different final
+output — direction is affected, not just magnitude, because the
+cascading narrow encodings cumulatively rotate the 151936-dim
+logit vector.
+
+#### Closing no doors: what's next (ordered by likely cost/value)
+
+1. **Iterative compile-in-the-loop calibration**
+   (`scripts/recalibrate_4b_iterative.py`, existing infrastructure):
+   compile each part with current encodings, run upstream HTP
+   sessions on real prompts, dump the *actual quantized* output,
+   use THAT as downstream calibration input. Each iteration's
+   downstream calibration sees the true activation distribution,
+   not fp32-observed. Stops the cascade at its source. ~1 pass
+   per part per iteration, probably 2-3 iterations to converge.
+2. **Pre-compute per-tensor encodings off-line**. Run fp32 ONNX
+   on calibration data with every intermediate tensor exposed as
+   a graph output. Map DLC tensor names (`_fc`, `_converted_*`)
+   to their ONNX sources via graph analysis. Emit a complete
+   overrides JSON covering all 798 tensors. Requires a mapping
+   layer and careful handling of DLC-synthesized tensors.
+3. **AIMET path**: forget QAIRT's native calibrator, use AIMET
+   PyTorch with the HF Qwen3-4B checkpoint to produce encodings,
+   then import them into QAIRT for compile-only. AIMET's
+   calibration is better-studied and doesn't have the cascade
+   issue.
+4. **Qualcomm AI Hub**: let AI Hub do the PTQ. They ship a w4a16
+   bundle for Qwen3-4B already — reproducing theirs via AI Hub
+   gives us a reference-quality quantization that we can then
+   post-process (split, re-bin-gen) while keeping their encodings.
+
+Artifacts committed in this phase:
+- `scripts/probe_4b_per_part_htp_vs_cpu.py` — the localization probe.
+- `scripts/build_part2_residual_overrides.py` — per-layer residual
+  range extraction + overrides generation (preserved for re-use
+  against recalibration strategies 1/2).
+- `results/phase5_qwen3_4b_bundle/part2_encoding_overrides.json` —
+  the 12-entry overrides (current state: layers 0-11 Add_1
+  residuals, based on CPU-ORT observed ranges).
 
 ### Follow-up: generalize the splitter (deferred)
 
