@@ -31,13 +31,15 @@ N_WARMUP = 5
 N_MEASURE = 25
 
 VARIANTS = [
-    ("w4a16-local",      "baseline w4a16 (tf)"),
-    ("w4a16-local-tfe",  "enhanced activation cal"),
-    ("w4a16-local-pr",   "w4 per-row weight quant"),
-    ("w4a16-local-mse",  "mse activation cal"),
-    ("w8a16-local",      "w8 weights"),
-    ("w8a16-local-pr",   "w8 per-row weight quant"),
-    ("fp16-local",       "no PTQ (reference)"),
+    ("w4a16-local",         "baseline w4a16 (tf)"),
+    ("w4a16-local-tfe",     "enhanced activation cal"),
+    ("w4a16-local-pr",      "w4 per-row weight quant"),
+    ("w4a16-local-mse",     "mse activation cal"),
+    ("w4a16-local-fqio",    "A.2 full-quant IO (uint8 past_kv)"),
+    ("w4a16-local-mixed",   "A.1 V/O at w8 + full-quant IO"),
+    ("w8a16-local",         "w8 weights"),
+    ("w8a16-local-pr",      "w8 per-row weight quant"),
+    ("fp16-local",          "no PTQ (reference)"),
 ]
 
 
@@ -55,7 +57,10 @@ def _fresh_import_for(variant: str):
         load_quant_specs,
         quant_to_uint16,
         dequant_from_uint16,
+        quant_tensor,
+        dequant_tensor,
         IS_LOCAL_W4A16,
+        IS_LOCAL_FULL_QUANT_IO,
         LOGITS_OUTPUT_NAME,
         rope_tables,
         CONTEXT_MAX,
@@ -67,7 +72,9 @@ def _fresh_import_for(variant: str):
         _encodings_path=_encodings_path, build_ep_context_wrapper=build_ep_context_wrapper,
         load_wrapper=load_wrapper, load_quant_specs=load_quant_specs,
         quant_to_uint16=quant_to_uint16, dequant_from_uint16=dequant_from_uint16,
-        IS_LOCAL_W4A16=IS_LOCAL_W4A16, LOGITS_OUTPUT_NAME=LOGITS_OUTPUT_NAME,
+        quant_tensor=quant_tensor, dequant_tensor=dequant_tensor,
+        IS_LOCAL_W4A16=IS_LOCAL_W4A16, IS_LOCAL_FULL_QUANT_IO=IS_LOCAL_FULL_QUANT_IO,
+        LOGITS_OUTPUT_NAME=LOGITS_OUTPUT_NAME,
         rope_tables=rope_tables, CONTEXT_MAX=CONTEXT_MAX,
         cpu_prefill=cpu_prefill, pad_cpu_past_to_npu=pad_cpu_past_to_npu,
         build_masked_bias=build_masked_bias, load_cpu_session=load_cpu_session,
@@ -124,8 +131,10 @@ def main() -> int:
         feed_fp.update(npu_past)
 
         # Quantize once if needed — steady-state comparison is on session.run(), not per-step quant.
+        # Per-tensor dispatch via quant_tensor so full-quant-IO variants
+        # (uint8 past_kv + uint16 rest) feed the right dtype per slot.
         if specs is not None:
-            feed = {n: (api["quant_to_uint16"](a, specs[n]) if n in specs else a) for n, a in feed_fp.items()}
+            feed = {n: (api["quant_tensor"](a, specs[n]) if n in specs else a) for n, a in feed_fp.items()}
         else:
             feed = feed_fp
 

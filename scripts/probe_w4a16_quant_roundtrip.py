@@ -35,9 +35,9 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from npu_load_qwen3_bin import (  # noqa: E402
     CONTEXT_MAX,
     _encodings_path,
-    dequant_from_uint16,
+    dequant_tensor,
     load_quant_specs,
-    quant_to_uint16,
+    quant_tensor,
     rope_tables,
 )
 from npu_short_prompt_probe import build_masked_bias, cpu_prefill, load_prompt  # noqa: E402
@@ -50,19 +50,22 @@ from npu_vs_cpu_correctness import (  # noqa: E402
 
 
 def _roundtrip_stats(name: str, arr: np.ndarray, spec) -> dict:
-    q = quant_to_uint16(arr, spec)
-    back = dequant_from_uint16(q, spec)
+    # Per-tensor dispatch so full-quant-IO variants round-trip uint8
+    # past_kv and uint16 everything-else through the right codec.
+    q = quant_tensor(arr, spec)
+    back = dequant_tensor(q, spec)
     diff = arr - back
     rng = max(abs(float(arr.min())), abs(float(arr.max())), 1e-9)
     at_min = int((q == 0).sum())
-    at_max = int((q == 65535).sum())
+    at_max = int((q == spec.qmax).sum())
     return {
         "name": name,
         "shape": arr.shape,
+        "bitwidth": spec.bitwidth,
         "fp32_min": float(arr.min()),
         "fp32_max": float(arr.max()),
         "cal_min": (0 + spec.offset) * spec.scale,
-        "cal_max": (65535 + spec.offset) * spec.scale,
+        "cal_max": (spec.qmax + spec.offset) * spec.scale,
         "max_abs_err": float(np.max(np.abs(diff))),
         "rel_rms_err": float(np.sqrt(np.mean(diff * diff)) / rng),
         "saturated_lo_pct": 100.0 * at_min / arr.size,

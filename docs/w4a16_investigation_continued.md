@@ -617,3 +617,113 @@ close, not a loss.
   LayerSkip architectural drafter alternatives) and a "related
   research" section covering dflash and its CUDA-based cousins as
   Phase 4+ inspiration rather than directly-actionable leads.
+- 2026-04-23 (session 20) — **Phase 5.5.1 executing.** A.2 + A.1
+  approved; ARM-side runtime plumbing landed, x86 compile ask
+  shipped in `docs/phase5_lever_c_x86_ask.md` Update 3. See
+  "Phase 5.5.1 progress log" section below for details.
+
+## Phase 5.5.1 progress log
+
+### ARM-side plumbing — LANDED (2026-04-23)
+
+All four preparations needed to consume a Qualcomm-IO-convention
+(uint8 past_kv + uint16 rest) binary are in place. Existing variants
+are unaffected — the new code path is explicit-whitelist-gated.
+
+1. **`scripts/npu_load_qwen3_bin.py`**:
+   - new `IS_LOCAL_FULL_QUANT_IO` flag, `True` only for
+     `VARIANT in {"w4a16-local-fqio", "w4a16-local-mixed"}`.
+   - new `quant_to_uint8` / `dequant_from_uint8` helpers (mirror
+     uint16 ones, clip to [0, 255]).
+   - new `quant_tensor` / `dequant_tensor` per-tensor dispatchers
+     keyed on `spec.bitwidth` — callers no longer need to know the
+     target dtype.
+   - `_describe_inputs_pathb_local` / `_describe_outputs_pathb_local`
+     accept optional `past_kv_dtype` / `present_kv_dtype` params
+     (default = unified `dtype`). When `IS_LOCAL_FULL_QUANT_IO`,
+     past_kv/present_kv get UINT8, everything else UINT16.
+   - `quantized_zero` is bitwidth-agnostic (reads `spec.qmax`); no
+     changes needed.
+   - `main()` preflight switched from `VARIANT == "w4a16-local"`
+     literal to `IS_LOCAL_W4A16` so every PTQ local variant loads
+     encodings correctly.
+
+2. **Probe updates** (all four call sites of the uint16-specific
+   helpers migrated to the bitwidth-aware dispatcher):
+   - `scripts/npu_short_prompt_probe.py` — `_quantize_feed` and
+     per-layer present dequant now route through `quant_tensor` /
+     `dequant_tensor`.
+   - `scripts/probe_npu_steady_state_latency.py` — VARIANTS list
+     extended with `w4a16-local-fqio` + `w4a16-local-mixed`; feed
+     build uses dispatcher.
+   - `scripts/probe_w4a16_quant_roundtrip.py` — `_roundtrip_stats`
+     uses dispatcher, `at_max` indexed by `spec.qmax` instead of
+     hard-coded 65535, bitwidth added to reported row.
+   - `scripts/probe_w4a16_vs_fp16_differential.py` — same.
+
+3. **AST parse-check green** across all five modified files. Import
+   test deferred until binary arrives (avoid triggering QNN EP load
+   without a target binary).
+
+### x86 compile asks — SHIPPED (2026-04-23)
+
+`docs/phase5_lever_c_x86_ask.md` Update 3 contains:
+
+- **A.2 recipe**: `--weights_bitwidth 4 --act_bitwidth 16
+  --quantization_overrides quant_overrides_fqio.json`. The 112-entry
+  override file pins every past_kv + present_kv tensor to 8-bit
+  symmetric (offset=-128 to match Qualcomm's reference). Committed
+  at `models/calibration/quant_overrides_fqio.json`.
+- **A.1 recipe**: same flags, override JSON at
+  `models/calibration/quant_overrides_mixed.json` — 168 entries
+  (112 activation + 56 param) pinning past_kv to 8-bit AND
+  V-projection + O-projection weights to 8-bit.
+- NAS drop paths:
+  - A.2 → `Z:\exposed\junk\phase5_step15_local_qairt_out_qairt242_fqio\`
+  - A.1 → `Z:\exposed\junk\phase5_step15_local_qairt_out_qairt242_mixed\`
+- Schema caveat: the JSON format is our best guess at
+  qairt-quantizer 2.42's expected `--quantization_overrides` shape
+  (AIMET-style `activation_encodings` / `param_encodings` with
+  per-tensor `{bitwidth, dtype, is_symmetric, offset}` list). The
+  x86 team confirms/fixes per `qairt-quantizer --help` and commits
+  the working schema to `HANDOFF_{fqio,mixed}.md` so future Qwen3.5
+  runs inherit the canonical reference.
+
+### Pending — binaries from x86 + ARM-side measurement
+
+The moment A.2 + A.1 binaries land in NAS, the protocol is:
+1. MD5 verify + copy to `models/`.
+2. `scripts/probe_w4a16_quant_roundtrip.py` for both variants
+   (quant layer smoke test; expect RMS ≈ 0.001% per the bitwidth
+   math, now shown per-tensor with bitwidth column).
+3. `scripts/npu_short_prompt_probe.py --path pathb` with each
+   variant, `SPECULA_NPU_VARIANT` set (correctness gate vs CPU fp32;
+   A.2 expected cos ≈ 0.33 if PTQ V-collapse still dominates; A.1
+   expected cos ≥ 0.95).
+4. `scripts/probe_npu_steady_state_latency.py` — full 9-variant
+   table (A.2 expected 17-18 ms/step, A.1 expected 18-19 ms).
+5. If any variant clears cos ≥ 0.95, AC sweep via
+   `scripts/sweep_npu_spec.py --mode async-pipelined -n 200`.
+6. Findings commit + this doc's progress log updated.
+
+### Decision tree after measurement
+
+- **A.2 beats Lever B's 18.12 t/s at k=2**: lever C closes
+  **POSITIVE**. Memory bandwidth was the hidden lever. Investigation
+  complete for Qwen3-0.6B; same recipe transfers to Qwen3.5.
+- **A.1 clears cos ≥ 0.95 AND beats Lever B**: lever C closes
+  **POSITIVE** on mixed precision; first fully-numerically-clean w4
+  regime. Document as canonical Qwen3.5 PTQ starting point.
+- **Both compile but neither beats Lever B**: memory-bandwidth
+  thesis empirically disproven at this target/draft ratio. Lever C
+  stays negative as a product; pivot to Axis B (Qwen3-1.7B draft)
+  or stop w4a16 work for Qwen3-0.6B permanently and move to W1.a
+  (GPU prefill target-side attack).
+- **A.1 fails correctness** (cos < 0.95 even with V/O at w8): the
+  V-projection collapse isn't purely a weight-precision issue —
+  advance to Axis A.3 (AIMET SmoothQuant/AWQ) or A.4 (WSL2
+  qairt-accuracy-debugger).
+- **A.2 compiles but binary fails to load on ORT-QNN 1.24.4**: some
+  IO shape/dtype property we haven't anticipated. Revisit wrapper
+  construction + compare with Qualcomm's Qwen3-4B EPContext wrapper
+  from the side-quest.

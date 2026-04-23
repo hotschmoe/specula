@@ -93,6 +93,18 @@ IS_LOCAL_FP_NO_PTQ = IS_LOCAL_COMPILE and VARIANT.startswith("fp")
 # literally — w8a16-local and any future precision combo qualifies.
 IS_LOCAL_W4A16 = IS_LOCAL_COMPILE and not IS_LOCAL_FP_NO_PTQ
 
+# Phase 5.5.1 (A.2 / A.1) full-quant IO variants match Qualcomm's
+# Qwen3-4B Genie reference bundle: uint8 past_kv (offset -128
+# symmetric-shifted) + uint16 everything-else. Side-quest in
+# results/qwen3_4b_genie_w4a16_probe.md projects ~17 ms/step for our
+# 0.6B at this IO convention vs 21-24 ms with the uint16-past_kv
+# variants we shipped before. Explicit whitelist so existing variants
+# keep their uint16-past_kv schema unchanged.
+IS_LOCAL_FULL_QUANT_IO = IS_LOCAL_COMPILE and VARIANT in (
+    "w4a16-local-fqio",   # A.2 result — weights all w4, uint8 past_kv
+    "w4a16-local-mixed",  # A.1 result — V/O at w8, rest at w4, uint8 past_kv
+)
+
 # Logits live on the first compiled output. AI-Hub-compiled binaries go
 # through qairt-converter's output-renaming pass so every output ends up
 # as `output_{0..N}`; the local-compile variants did not rename and kept
@@ -245,11 +257,51 @@ def dequant_from_uint16(arr: np.ndarray, spec: QuantSpec) -> np.ndarray:
     return (arr.astype(np.int32) + spec.offset).astype(np.float32) * spec.scale
 
 
+def quant_to_uint8(arr: np.ndarray, spec: QuantSpec) -> np.ndarray:
+    if spec.bitwidth != 8:
+        raise ValueError(f"quant_to_uint8 requires bitwidth=8, got {spec.bitwidth}")
+    q = np.rint(arr.astype(np.float32) / spec.scale) - spec.offset
+    return np.clip(q, 0, spec.qmax).astype(np.uint8)
+
+
+def dequant_from_uint8(arr: np.ndarray, spec: QuantSpec) -> np.ndarray:
+    if spec.bitwidth != 8:
+        raise ValueError(f"dequant_from_uint8 requires bitwidth=8, got {spec.bitwidth}")
+    return (arr.astype(np.int32) + spec.offset).astype(np.float32) * spec.scale
+
+
+def quant_tensor(arr: np.ndarray, spec: QuantSpec) -> np.ndarray:
+    """Dispatch to the right bitwidth-specific quant helper.
+
+    Phase 5.5.1 full-quant-IO variants have uint8 past_kv + uint16
+    everything else in the same feed dict, so callers need a single
+    entry point that picks the right target dtype per tensor.
+    """
+    if spec.bitwidth == 8:
+        return quant_to_uint8(arr, spec)
+    if spec.bitwidth == 16:
+        return quant_to_uint16(arr, spec)
+    raise ValueError(f"quant_tensor: unsupported bitwidth {spec.bitwidth}")
+
+
+def dequant_tensor(arr: np.ndarray, spec: QuantSpec) -> np.ndarray:
+    if spec.bitwidth == 8:
+        return dequant_from_uint8(arr, spec)
+    if spec.bitwidth == 16:
+        return dequant_from_uint16(arr, spec)
+    raise ValueError(f"dequant_tensor: unsupported bitwidth {spec.bitwidth}")
+
+
 def quantized_zero(spec: QuantSpec) -> int:
-    """The uint16 representation of fp32 == 0 under this spec. Always `-offset`
+    """Representation of fp32 == 0 under this spec. Always `-offset`
     mod qmax+1 in practice; clip for safety against pathologically-offset
     tensors like attention_bias (offset -65535 -> q_zero = 65535, which is
-    the actual max)."""
+    the actual max).
+
+    Bitwidth-agnostic: qmax already reflects the spec's bitwidth, so this
+    works for uint8 (qmax=255) and uint16 (qmax=65535) alike. Callers
+    cast the result to the correct numpy dtype.
+    """
     return int(np.clip(0 - spec.offset, 0, spec.qmax))
 
 
@@ -275,6 +327,14 @@ def describe_inputs(cfg: dict, path_key: str) -> list[tuple[str, list[int], int]
     every tensor except `input_ids` (int32).
     """
     if path_key == "pathb" and IS_LOCAL_COMPILE:
+        if IS_LOCAL_FULL_QUANT_IO:
+            # A.2 / A.1 variants: uint8 past_kv + uint16 everything-else,
+            # matching Qualcomm's Qwen3-4B Genie IO convention.
+            return _describe_inputs_pathb_local(
+                cfg,
+                dtype=TensorProto.UINT16,
+                past_kv_dtype=TensorProto.UINT8,
+            )
         return _describe_inputs_pathb_local(
             cfg,
             dtype=TensorProto.UINT16 if IS_LOCAL_W4A16 else TensorProto.FLOAT,
@@ -302,7 +362,11 @@ def describe_inputs(cfg: dict, path_key: str) -> list[tuple[str, list[int], int]
     return inputs
 
 
-def _describe_inputs_pathb_local(cfg: dict, dtype: int) -> list[tuple[str, list[int], int]]:
+def _describe_inputs_pathb_local(
+    cfg: dict,
+    dtype: int,
+    past_kv_dtype: int | None = None,
+) -> list[tuple[str, list[int], int]]:
     # qnn-context-binary-generator normalises dotted tensor names to
     # underscored when emitting the .bin, even though the intermediate
     # DLC / encodings.json retain the dots. Verified by scanning strings
@@ -311,8 +375,13 @@ def _describe_inputs_pathb_local(cfg: dict, dtype: int) -> list[tuple[str, list[
     # ORT-QNN's EPContext binder matches by literal name, so the wrapper
     # must use the underscored form.
     #
-    # `dtype` is UINT16 for w4a16-local (PTQ quantized IO) or FLOAT for
-    # fp16-local (PTQ skipped, IO stays fp32).
+    # `dtype` is the unified IO dtype (UINT16 for PTQ, FLOAT for no-PTQ).
+    # `past_kv_dtype` overrides it for the 56 past_kv tensors only — the
+    # Phase 5.5.1 full-quant-IO variants (w4a16-local-fqio /
+    # w4a16-local-mixed) ship uint8 past_kv + uint16 rest per Qualcomm's
+    # reference convention. When None, past_kv inherits `dtype`.
+    if past_kv_dtype is None:
+        past_kv_dtype = dtype
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]
     head_dim = cfg.get("head_dim", cfg["hidden_size"] // cfg["num_attention_heads"])
@@ -322,8 +391,8 @@ def _describe_inputs_pathb_local(cfg: dict, dtype: int) -> list[tuple[str, list[
         ("input_ids", [1, 1], TensorProto.INT32),
     ]
     for i in range(n_layers):
-        inputs.append((f"past_key_values_{i}_key", [1, n_kv, past_len, head_dim], dtype))
-        inputs.append((f"past_key_values_{i}_value", [1, n_kv, past_len, head_dim], dtype))
+        inputs.append((f"past_key_values_{i}_key", [1, n_kv, past_len, head_dim], past_kv_dtype))
+        inputs.append((f"past_key_values_{i}_value", [1, n_kv, past_len, head_dim], past_kv_dtype))
     inputs.append(("attention_bias", [1, 1, 1, CONTEXT_MAX], dtype))
     inputs.append(("position_ids_cos", [1, 1, head_dim], dtype))
     inputs.append(("position_ids_sin", [1, 1, head_dim], dtype))
@@ -346,6 +415,12 @@ def describe_outputs(cfg: dict, path_key: str = "") -> list[tuple[str, list[int]
     and every output is uint16 per the PTQ.
     """
     if path_key == "pathb" and IS_LOCAL_COMPILE:
+        if IS_LOCAL_FULL_QUANT_IO:
+            return _describe_outputs_pathb_local(
+                cfg,
+                dtype=TensorProto.UINT16,
+                present_kv_dtype=TensorProto.UINT8,
+            )
         return _describe_outputs_pathb_local(
             cfg,
             dtype=TensorProto.UINT16 if IS_LOCAL_W4A16 else TensorProto.FLOAT,
@@ -367,10 +442,21 @@ def describe_outputs(cfg: dict, path_key: str = "") -> list[tuple[str, list[int]
     return outputs
 
 
-def _describe_outputs_pathb_local(cfg: dict, dtype: int) -> list[tuple[str, list[int], int]]:
+def _describe_outputs_pathb_local(
+    cfg: dict,
+    dtype: int,
+    present_kv_dtype: int | None = None,
+) -> list[tuple[str, list[int], int]]:
     # Same dot→underscore normalisation as inputs, per the binary-strings
     # scan. `logits` has no dots in the source so it passes through.
-    # `dtype` is UINT16 for w4a16-local / FLOAT for fp16-local.
+    #
+    # `dtype` is the unified IO dtype (UINT16 for PTQ, FLOAT for no-PTQ).
+    # `present_kv_dtype` overrides for present_kv tensors only — the
+    # full-quant-IO variants ship uint8 present_kv to match their uint8
+    # past_kv inputs (consistency across the KV boundary). When None,
+    # present_kv inherits `dtype`.
+    if present_kv_dtype is None:
+        present_kv_dtype = dtype
     n_layers = cfg["num_hidden_layers"]
     n_kv = cfg["num_key_value_heads"]
     head_dim = cfg.get("head_dim", cfg["hidden_size"] // cfg["num_attention_heads"])
@@ -381,8 +467,8 @@ def _describe_outputs_pathb_local(cfg: dict, dtype: int) -> list[tuple[str, list
         ("logits", [1, 1, vocab], dtype),
     ]
     for i in range(n_layers):
-        outputs.append((f"present_{i}_key", [1, n_kv, total_len, head_dim], dtype))
-        outputs.append((f"present_{i}_value", [1, n_kv, total_len, head_dim], dtype))
+        outputs.append((f"present_{i}_key", [1, n_kv, total_len, head_dim], present_kv_dtype))
+        outputs.append((f"present_{i}_value", [1, n_kv, total_len, head_dim], present_kv_dtype))
     return outputs
 
 
@@ -557,14 +643,15 @@ def main() -> int:
     print("\n--- IO signature ---")
     summarize_io(sess)
 
-    # For w4a16-local, load the encodings.json so the zero feed quantizes
-    # correctly and we can dequant the uint16 logits into a float view.
+    # For any PTQ local variant (w4a16-local*, w8a16-local*, and Phase 5.5.1
+    # full-quant-IO variants), load the encodings.json so the zero feed
+    # quantizes correctly and we can dequant the uint16 logits into a float view.
     quant_specs = None
     logits_spec: QuantSpec | None = None
-    if VARIANT == "w4a16-local":
+    if IS_LOCAL_W4A16:
         enc_path = _encodings_path(args.path)
         if not enc_path.exists():
-            print(f"ERROR: {enc_path} missing (w4a16-local requires the quant encodings)")
+            print(f"ERROR: {enc_path} missing ({VARIANT} requires the quant encodings)")
             return 2
         runtime_in_names = [x.name for x in sess.get_inputs()]
         runtime_out_names = [x.name for x in sess.get_outputs()]
@@ -582,7 +669,7 @@ def main() -> int:
     logits_idx = names.index(LOGITS_OUTPUT_NAME)
     logits_raw = outputs[logits_idx]
     logits = (
-        dequant_from_uint16(logits_raw, logits_spec)
+        dequant_tensor(logits_raw, logits_spec)
         if logits_spec is not None
         else logits_raw
     )

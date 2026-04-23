@@ -69,9 +69,9 @@ from npu_load_qwen3_bin import (  # noqa: E402
     VARIANT,
     QuantSpec,
     _encodings_path,
-    dequant_from_uint16,
+    dequant_tensor,
     load_quant_specs,
-    quant_to_uint16,
+    quant_tensor,
     rope_tables,
 )
 from npu_vs_cpu_correctness import (  # noqa: E402
@@ -261,7 +261,7 @@ def npu_single_step_short_prompt(
     outputs = sess.run(None, feed)
     logits_raw = outputs[logits_idx][0, -1]
     if quant_specs is not None and LOGITS_OUTPUT_NAME in quant_specs:
-        logits_raw = dequant_from_uint16(logits_raw, quant_specs[LOGITS_OUTPUT_NAME])
+        logits_raw = dequant_tensor(logits_raw, quant_specs[LOGITS_OUTPUT_NAME])
     return logits_raw, outputs, out_names
 
 
@@ -269,10 +269,13 @@ def _quantize_feed(
     feed_fp32: dict[str, np.ndarray],
     quant_specs: dict[str, QuantSpec],
 ) -> dict[str, np.ndarray]:
-    """Return a copy of feed where every name in `quant_specs` is uint16-quantized.
+    """Return a copy of feed where every name in `quant_specs` is quantized
+    to its spec's target bitwidth (uint8 or uint16).
 
     input_ids has no spec (int32 passthrough); any other name without a
-    spec is a bug and we fail fast.
+    spec is a bug and we fail fast. Per-tensor dispatch via quant_tensor
+    so full-quant-IO variants (uint8 past_kv + uint16 rest) pack each
+    slot to the right dtype automatically.
     """
     out: dict[str, np.ndarray] = {}
     for name, arr in feed_fp32.items():
@@ -282,7 +285,7 @@ def _quantize_feed(
                 raise KeyError(f"no quant spec for w4a16-local input '{name}'")
             out[name] = arr
         else:
-            out[name] = quant_to_uint16(arr, spec)
+            out[name] = quant_tensor(arr, spec)
     return out
 
 
@@ -329,8 +332,8 @@ def npu_rearrange_present_to_past(
         k = present_outputs[out_names.index(k_name)]
         v = present_outputs[out_names.index(v_name)]
         if use_w4a16:
-            k = dequant_from_uint16(k, quant_specs[k_name])
-            v = dequant_from_uint16(v, quant_specs[v_name])
+            k = dequant_tensor(k, quant_specs[k_name])
+            v = dequant_tensor(v, quant_specs[v_name])
         # Full 512-slot present from the NPU.
         if k.shape[2] != CONTEXT_MAX or v.shape[2] != CONTEXT_MAX:
             raise AssertionError(

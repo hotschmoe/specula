@@ -48,8 +48,8 @@ def _load(variant: str, path_key: str, cfg: dict):
         build_ep_context_wrapper,
         load_wrapper,
         load_quant_specs,
-        dequant_from_uint16,
-        quant_to_uint16,
+        dequant_tensor,
+        quant_tensor,
     )
     from npu_vs_cpu_correctness import _npu_bin, _npu_wrapper  # noqa: E402
 
@@ -62,7 +62,7 @@ def _load(variant: str, path_key: str, cfg: dict):
     if IS_LOCAL_W4A16:
         specs = load_quant_specs(_encodings_path(path_key),
                                  [x.name for x in sess.get_inputs()] + [x.name for x in sess.get_outputs()])
-    return sess, specs, LOGITS_OUTPUT_NAME, dequant_from_uint16, quant_to_uint16
+    return sess, specs, LOGITS_OUTPUT_NAME, dequant_tensor, quant_tensor
 
 
 def main() -> int:

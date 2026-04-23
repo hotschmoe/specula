@@ -5,6 +5,224 @@ Focused one-pager for the x86 compile box. Companion to
 and `docs/phase5_local_qairt_compile_findings.md` (the pipeline you
 already ran).
 
+## Update 3 (session 20, 2026-04-23) — A.2 + A.1 full-quant IO recipes
+
+Prior conclusion was "Lever C closes NEGATIVE" after the w8a16-local
+and w4a16-local-pr AC sweeps both lost to Lever B's 18.12 t/s. We
+reopened it because two leads in the investigation axis map were
+never actually executed, and the Qualcomm Qwen3-4B side-quest
+(`results/qwen3_4b_genie_w4a16_probe.md`) surfaced a concrete
+perf-ceiling datapoint: **7.22 ms median for 12 Qwen3-4B w4a16 layers
+via ORT-QNN**, projecting **~17 ms/step for our 0.6B** if we match
+Qualcomm's IO convention vs our current **21-24 ms/step** with uint16
+past_kv. The missing ~6 ms is memory bandwidth on the past_kv
+boundary — Qualcomm ships uint8 (1 B/elem), we shipped uint16 (2
+B/elem).
+
+ARM64 side has already landed the runtime plumbing to consume mixed
+uint8/uint16 IO. See commit {pending} for:
+- new `IS_LOCAL_FULL_QUANT_IO` flag in `scripts/npu_load_qwen3_bin.py`
+  gated on `VARIANT in {"w4a16-local-fqio", "w4a16-local-mixed"}`;
+- new `quant_to_uint8` / `dequant_from_uint8` helpers + unified
+  `quant_tensor` / `dequant_tensor` dispatchers;
+- `_describe_inputs_pathb_local` / `_describe_outputs_pathb_local`
+  extended with `past_kv_dtype` / `present_kv_dtype` params so past_kv
+  is UINT8 and the rest is UINT16 for the new variants;
+- all four probes (`npu_short_prompt_probe`,
+  `probe_npu_steady_state_latency`, `probe_w4a16_quant_roundtrip`,
+  `probe_w4a16_vs_fp16_differential`) updated to the dispatcher.
+
+Existing variants keep their uint16-past_kv schema; only the two new
+variants below take the uint8 path.
+
+### Primary ask now — A.2 full-quant IO (drop preserved-fp32 IO)
+
+Recompile pathb with past_kv pinned to 8-bit via `--quantization_overrides`.
+Rest of IO stays at 16-bit (the current default picked by qairt-quantizer
+when no overrides are applied). Same Bundle A calibration; no
+per-row weight flag so we're directly comparable to `w4a16-local`
+baseline on the weight axis, differing only in IO dtype.
+
+```bash
+# Assumes QAIRT 2.42 environment + Bundle A input_list.txt from
+# prior sessions. Step 1 (converter) and Step 4 (context-binary-gen)
+# unchanged from docs/phase5_local_qairt_compile.md.
+
+# Step 3 — PTQ with past_kv overrides to 8-bit
+qairt-quantizer \
+    --input_dlc qwen3_0_6b_draft_v81_ctx256.pathb.fp32.dlc \
+    --output_dlc qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local-fqio.dlc \
+    --input_list input_list.txt \
+    --weights_bitwidth 4 \
+    --act_bitwidth 16 \
+    --quantization_overrides quant_overrides_fqio.json \
+    2>&1 | tee qairt_quantizer.fqio.log
+
+# Step 4 — DLC → context binary
+qnn-context-binary-generator \
+    --model libQnnHtpV81Prepare \
+    --backend libQnnHtp \
+    --binary_file qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local-fqio \
+    --dlc_path qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local-fqio.dlc \
+    --config_file config_main.json \
+    2>&1 | tee qnn_ctx_bin_gen.fqio.log
+```
+
+**quant_overrides_fqio.json** — pin all 56 past_kv + 56 present_kv
+tensors to 8-bit. Exact schema is qairt-quantizer's; the tensor list
+is deterministic:
+
+```
+past_key_values.0.key   .. past_key_values.27.key    (28 tensors)
+past_key_values.0.value .. past_key_values.27.value  (28 tensors)
+present.0.key           .. present.27.key            (28 tensors, output side)
+present.0.value         .. present.27.value          (28 tensors, output side)
+```
+
+112 total overrides. If qairt-quantizer's override schema is:
+
+```json
+{
+  "activation_encodings": {
+    "past_key_values.0.key": [
+      {"bitwidth": 8, "dtype": "int", "is_symmetric": true, "offset": -128}
+    ],
+    ...
+  }
+}
+```
+
+…that matches Qualcomm's reference exactly (metadata.yaml of the
+Qwen3-4B Genie bundle uses `bitwidth: 8, offset: -128` for all past_kv).
+Please adjust the schema to whatever qairt-quantizer 2.42 actually
+expects; if it's a different structure, reply with the exact format
+and I'll regenerate the JSON ARM-side and ship it back.
+
+NAS drop:
+
+```
+Z:\exposed\junk\phase5_step15_local_qairt_out_qairt242_fqio\
+├── qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local-fqio.bin
+├── qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local-fqio.encodings.json
+├── dlc_info_w4a16_fqio.txt
+├── qairt_quantizer.fqio.log / qnn_ctx_bin_gen.fqio.log / qairt_converter.fqio.log
+└── HANDOFF_fqio.md   (MD5s + compile timings + observed per-layer past_kv scales)
+```
+
+ARM64 will consume under `SPECULA_NPU_VARIANT=w4a16-local-fqio`.
+Schema already wired (60 inputs: int32 input_ids + 56×UINT8 past_kv +
+3×UINT16 attention_bias/cos/sin; 57 outputs: 1×UINT16 logits +
+56×UINT8 present_kv). Plumbing verified via AST parse; full-pipeline
+load will be validated the moment the binary arrives.
+
+**Expected outcome per the Qualcomm probe extrapolation:** steady-
+state ~17 ms/step (vs w4a16-local's 24 ms). Correctness cos should
+match w4a16-local baseline (0.33 — still PTQ-V-collapse-limited on w4)
+because A.2 changes IO dtype, not weight precision. The throughput
+confirmation (or denial) is the decisive answer here: if per-step
+doesn't drop meaningfully, the memory-bandwidth hypothesis is wrong.
+
+### Primary ask — A.1 V/O overrides on top of A.2 (mixed precision)
+
+Pin V-projection and O-projection weights to **8-bit** while the
+rest of the weight tensors stay at 4-bit. Inherits A.2's
+full-quant IO (uint8 past_kv). Target: close the V-projection PTQ
+collapse that session-17 differential probe localised to
+`w_v × x` linear projections.
+
+Per-layer tensor names (confirmed from
+`models/qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local.encodings.json`,
+28 layers × 2 = 56 tensors):
+
+```
+/model/layers.0/self_attn/v_proj/MatMul   .. /model/layers.27/self_attn/v_proj/MatMul
+/model/layers.0/self_attn/o_proj/MatMul   .. /model/layers.27/self_attn/o_proj/MatMul
+```
+
+```bash
+# Step 3 — PTQ with V/O at w8 + past_kv at uint8
+qairt-quantizer \
+    --input_dlc qwen3_0_6b_draft_v81_ctx256.pathb.fp32.dlc \
+    --output_dlc qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local-mixed.dlc \
+    --input_list input_list.txt \
+    --weights_bitwidth 4 \
+    --act_bitwidth 16 \
+    --quantization_overrides quant_overrides_mixed.json \
+    2>&1 | tee qairt_quantizer.mixed.log
+
+# Step 4 — unchanged, new binary suffix
+```
+
+**quant_overrides_mixed.json** merges A.2's 112 past_kv/present_kv
+entries at 8-bit with 56 new V/O weight entries at 8-bit. Full
+tensor manifest (168 entries total):
+
+```
+activation overrides (112):
+  past_key_values.{0..27}.key           bitwidth=8, symmetric, offset=-128
+  past_key_values.{0..27}.value         bitwidth=8, symmetric, offset=-128
+  present.{0..27}.key                   bitwidth=8, symmetric, offset=-128
+  present.{0..27}.value                 bitwidth=8, symmetric, offset=-128
+
+param (weight) overrides (56):
+  /model/layers.{0..27}/self_attn/v_proj/MatMul   bitwidth=8
+  /model/layers.{0..27}/self_attn/o_proj/MatMul   bitwidth=8
+```
+
+Adjust the JSON schema to match qairt-quantizer 2.42's expected
+format; if you can paste a sample `--quantization_overrides` JSON
+into HANDOFF_mixed.md, we'll have a canonical reference for every
+future w4a16-variant we compile.
+
+NAS drop:
+
+```
+Z:\exposed\junk\phase5_step15_local_qairt_out_qairt242_mixed\
+├── qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local-mixed.bin
+├── qwen3_0_6b_draft_v81_ctx256.pathb.w4a16-local-mixed.encodings.json
+├── dlc_info_w4a16_mixed.txt
+├── qairt_quantizer.mixed.log / qnn_ctx_bin_gen.mixed.log
+└── HANDOFF_mixed.md
+```
+
+ARM64 will consume under `SPECULA_NPU_VARIANT=w4a16-local-mixed`.
+Same schema as `w4a16-local-fqio` (same IO convention); the binary
+differs only in weight bitwidth for the 56 V/O tensors.
+
+**Expected outcome:** cos ≥ 0.95 (session-17 differential nailed
+V-projection as the only structural correctness lever); per-step
+maybe 18-19 ms (slightly heavier than A.2 due to w8 V/O but still
+~3 ms under w4a16-local). If it clears 0.95, we're in the first
+fully-numerically-clean w4 regime we've had, binary size ~70%
+smaller than w8a16-local, and the ARM64 AC sweep will decide
+whether it crosses Lever B's 18.12 t/s.
+
+### Execution order
+
+**Please run both A.2 and A.1 if you have a compile slot.** They're
+independent (no data dep), ~80 s each, and a combined HANDOFF is more
+useful than sequential rounds. If only time for one, A.1 is higher
+info (full correctness + perf answer) and A.2 is incrementally
+cheaper (just a smaller override JSON); x86 team's call.
+
+### Status after this ask
+
+- ARM64 plumbing: **ready** (commits {pending}).
+- x86 compiles: queued.
+- Post-compile (ARM64 side, automatic once binaries land):
+  1. MD5 verify, copy to `models/`.
+  2. `probe_w4a16_quant_roundtrip.py` for both variants (quant layer
+     smoke test).
+  3. `npu_short_prompt_probe.py --path pathb` with each variant
+     (correctness gate — cos vs CPU fp32).
+  4. `probe_npu_steady_state_latency.py` (full 9-variant table now
+     that w4a16-local-fqio and w4a16-local-mixed are listed).
+  5. If A.1 or A.2 clears cos ≥ 0.95, AC sweep via
+     `sweep_npu_spec.py --mode async-pipelined -n 200`.
+  6. Findings commit + continuation doc update.
+
+
+
 ## Update 2 (session 17) — A.2 `enhanced` localises the issue to V-projection weights
 
 Your `w4a16-local-tfe` rebuild ran. cos(CPU, NPU) = 0.36 on fib-p0
