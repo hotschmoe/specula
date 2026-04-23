@@ -74,6 +74,15 @@ def dequant_u16(q: np.ndarray, scale: float, offset: int) -> np.ndarray:
     return (q.astype(np.float32) + float(offset)) * float(scale)
 
 
+def quant_u8(x_fp32: np.ndarray, scale: float, offset: int) -> np.ndarray:
+    q = np.round(x_fp32.astype(np.float64) / scale) - offset
+    return np.clip(q, 0, 255).astype(np.uint8)
+
+
+def dequant_u8(q: np.ndarray, scale: float, offset: int) -> np.ndarray:
+    return (q.astype(np.float32) + float(offset)) * float(scale)
+
+
 def load_quant_maps(results_dir: Path) -> dict[int, dict[str, tuple[float, int]]]:
     out: dict[int, dict[str, tuple[float, int]]] = {}
     for part in (1, 2, 3, 4):
@@ -212,8 +221,8 @@ def main() -> int:
     for li in range(0, LAYERS_PER_PART):
         ks, ko = qmaps[2][f"past_key_values.{li}.key"]
         vs, vo = qmaps[2][f"past_key_values.{li}.value"]
-        htp_feed_p2[name_to_wrapper(f"past_key_values.{li}.key")] = quant_u16(past_k_fp32, ks, ko)
-        htp_feed_p2[name_to_wrapper(f"past_key_values.{li}.value")] = quant_u16(past_v_fp32, vs, vo)
+        htp_feed_p2[name_to_wrapper(f"past_key_values.{li}.key")] = quant_u8(past_k_fp32, ks, ko)
+        htp_feed_p2[name_to_wrapper(f"past_key_values.{li}.value")] = quant_u8(past_v_fp32, vs, vo)
 
     l11_wrap = name_to_wrapper(L11_HIDDEN)
     outs_p2 = htp[1].run(None, htp_feed_p2)
@@ -252,8 +261,8 @@ def main() -> int:
     for li in range(LAYERS_PER_PART, 2 * LAYERS_PER_PART):
         ks, ko = qmaps[3][f"past_key_values.{li}.key"]
         vs, vo = qmaps[3][f"past_key_values.{li}.value"]
-        htp_feed_p3[name_to_wrapper(f"past_key_values.{li}.key")] = quant_u16(past_k_fp32, ks, ko)
-        htp_feed_p3[name_to_wrapper(f"past_key_values.{li}.value")] = quant_u16(past_v_fp32, vs, vo)
+        htp_feed_p3[name_to_wrapper(f"past_key_values.{li}.key")] = quant_u8(past_k_fp32, ks, ko)
+        htp_feed_p3[name_to_wrapper(f"past_key_values.{li}.value")] = quant_u8(past_v_fp32, vs, vo)
 
     l23_wrap = name_to_wrapper(L23_HIDDEN)
     outs_p3 = htp[2].run(None, htp_feed_p3)
@@ -291,8 +300,8 @@ def main() -> int:
     for li in range(2 * LAYERS_PER_PART, NUM_LAYERS):
         ks, ko = qmaps[4][f"past_key_values.{li}.key"]
         vs, vo = qmaps[4][f"past_key_values.{li}.value"]
-        htp_feed_p4[name_to_wrapper(f"past_key_values.{li}.key")] = quant_u16(past_k_fp32, ks, ko)
-        htp_feed_p4[name_to_wrapper(f"past_key_values.{li}.value")] = quant_u16(past_v_fp32, vs, vo)
+        htp_feed_p4[name_to_wrapper(f"past_key_values.{li}.key")] = quant_u8(past_k_fp32, ks, ko)
+        htp_feed_p4[name_to_wrapper(f"past_key_values.{li}.value")] = quant_u8(past_v_fp32, vs, vo)
 
     outs_p4 = htp[3].run(None, htp_feed_p4)
     out_names_p4 = [o.name for o in htp[3].get_outputs()]

@@ -1,0 +1,486 @@
+{
+  "version": "0.6.1",
+  "activation_encodings": {
+    "past_key_values.12.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -31.273317337036133,
+        "max": 31.028994545340538,
+        "offset": -128.0,
+        "scale": 0.2443227916955948
+      }
+    ],
+    "present.12.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -31.273317337036133,
+        "max": 31.028994545340538,
+        "offset": -128.0,
+        "scale": 0.2443227916955948
+      }
+    ],
+    "past_key_values.12.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -3.7043680506428394,
+        "max": 3.6754276752471924,
+        "offset": -128.0,
+        "scale": 0.028940375395647183
+      }
+    ],
+    "present.12.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -3.7043680506428394,
+        "max": 3.6754276752471924,
+        "offset": -128.0,
+        "scale": 0.028940375395647183
+      }
+    ],
+    "past_key_values.13.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -27.968048335999015,
+        "max": 27.749547958374023,
+        "offset": -128.0,
+        "scale": 0.2185003776249923
+      }
+    ],
+    "present.13.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -27.968048335999015,
+        "max": 27.749547958374023,
+        "offset": -128.0,
+        "scale": 0.2185003776249923
+      }
+    ],
+    "past_key_values.13.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -22.458160400390625,
+        "max": 22.282706022262573,
+        "offset": -128.0,
+        "scale": 0.17545437812805176
+      }
+    ],
+    "present.13.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -22.458160400390625,
+        "max": 22.282706022262573,
+        "offset": -128.0,
+        "scale": 0.17545437812805176
+      }
+    ],
+    "past_key_values.14.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -33.11638259887695,
+        "max": 32.85766085982323,
+        "offset": -128.0,
+        "scale": 0.2587217390537262
+      }
+    ],
+    "present.14.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -33.11638259887695,
+        "max": 32.85766085982323,
+        "offset": -128.0,
+        "scale": 0.2587217390537262
+      }
+    ],
+    "past_key_values.14.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -12.052848815917969,
+        "max": 11.95868593454361,
+        "offset": -128.0,
+        "scale": 0.09416288137435913
+      }
+    ],
+    "present.14.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -12.052848815917969,
+        "max": 11.95868593454361,
+        "offset": -128.0,
+        "scale": 0.09416288137435913
+      }
+    ],
+    "past_key_values.15.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -23.935933270792322,
+        "max": 23.748933792114258,
+        "offset": -128.0,
+        "scale": 0.18699947867806502
+      }
+    ],
+    "present.15.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -23.935933270792322,
+        "max": 23.748933792114258,
+        "offset": -128.0,
+        "scale": 0.18699947867806502
+      }
+    ],
+    "past_key_values.15.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -30.03568682332677,
+        "max": 29.80103302001953,
+        "offset": -128.0,
+        "scale": 0.2346538033072404
+      }
+    ],
+    "present.15.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -30.03568682332677,
+        "max": 29.80103302001953,
+        "offset": -128.0,
+        "scale": 0.2346538033072404
+      }
+    ],
+    "past_key_values.16.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -26.390501022338867,
+        "max": 26.184325233101845,
+        "offset": -128.0,
+        "scale": 0.2061757892370224
+      }
+    ],
+    "present.16.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -26.390501022338867,
+        "max": 26.184325233101845,
+        "offset": -128.0,
+        "scale": 0.2061757892370224
+      }
+    ],
+    "past_key_values.16.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -25.29063691867618,
+        "max": 25.093053817749023,
+        "offset": -128.0,
+        "scale": 0.19758310092715767
+      }
+    ],
+    "present.16.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -25.29063691867618,
+        "max": 25.093053817749023,
+        "offset": -128.0,
+        "scale": 0.19758310092715767
+      }
+    ],
+    "past_key_values.17.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -22.451166107898622,
+        "max": 22.275766372680664,
+        "offset": -128.0,
+        "scale": 0.17539973521795799
+      }
+    ],
+    "present.17.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -22.451166107898622,
+        "max": 22.275766372680664,
+        "offset": -128.0,
+        "scale": 0.17539973521795799
+      }
+    ],
+    "past_key_values.17.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -41.8827018737793,
+        "max": 41.555493265390396,
+        "offset": -128.0,
+        "scale": 0.32720860838890076
+      }
+    ],
+    "present.17.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -41.8827018737793,
+        "max": 41.555493265390396,
+        "offset": -128.0,
+        "scale": 0.32720860838890076
+      }
+    ],
+    "past_key_values.18.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -24.65716312438484,
+        "max": 24.464529037475586,
+        "offset": -128.0,
+        "scale": 0.19263408690925657
+      }
+    ],
+    "present.18.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -24.65716312438484,
+        "max": 24.464529037475586,
+        "offset": -128.0,
+        "scale": 0.19263408690925657
+      }
+    ],
+    "past_key_values.18.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -21.025909664124015,
+        "max": 20.861644744873047,
+        "offset": -128.0,
+        "scale": 0.16426491925096887
+      }
+    ],
+    "present.18.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -21.025909664124015,
+        "max": 20.861644744873047,
+        "offset": -128.0,
+        "scale": 0.16426491925096887
+      }
+    ],
+    "past_key_values.19.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -27.994083404541016,
+        "max": 27.77537962794304,
+        "offset": -128.0,
+        "scale": 0.21870377659797668
+      }
+    ],
+    "present.19.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -27.994083404541016,
+        "max": 27.77537962794304,
+        "offset": -128.0,
+        "scale": 0.21870377659797668
+      }
+    ],
+    "past_key_values.19.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -7.787321796567421,
+        "max": 7.726483345031738,
+        "offset": -128.0,
+        "scale": 0.06083845153568298
+      }
+    ],
+    "present.19.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -7.787321796567421,
+        "max": 7.726483345031738,
+        "offset": -128.0,
+        "scale": 0.06083845153568298
+      }
+    ],
+    "past_key_values.20.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -24.209386825561523,
+        "max": 24.020250990986824,
+        "offset": -128.0,
+        "scale": 0.1891358345746994
+      }
+    ],
+    "present.20.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -24.209386825561523,
+        "max": 24.020250990986824,
+        "offset": -128.0,
+        "scale": 0.1891358345746994
+      }
+    ],
+    "past_key_values.20.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -6.740736484527588,
+        "max": 6.688074480742216,
+        "offset": -128.0,
+        "scale": 0.05266200378537178
+      }
+    ],
+    "present.20.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -6.740736484527588,
+        "max": 6.688074480742216,
+        "offset": -128.0,
+        "scale": 0.05266200378537178
+      }
+    ],
+    "past_key_values.21.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -24.320796936515748,
+        "max": 24.13079071044922,
+        "offset": -128.0,
+        "scale": 0.19000622606652928
+      }
+    ],
+    "present.21.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -24.320796936515748,
+        "max": 24.13079071044922,
+        "offset": -128.0,
+        "scale": 0.19000622606652928
+      }
+    ],
+    "past_key_values.21.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -8.133463221272146,
+        "max": 8.069920539855957,
+        "offset": -128.0,
+        "scale": 0.06354268141618864
+      }
+    ],
+    "present.21.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -8.133463221272146,
+        "max": 8.069920539855957,
+        "offset": -128.0,
+        "scale": 0.06354268141618864
+      }
+    ],
+    "past_key_values.22.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -29.25270652770996,
+        "max": 29.024169757962227,
+        "offset": -128.0,
+        "scale": 0.22853676974773407
+      }
+    ],
+    "present.22.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -29.25270652770996,
+        "max": 29.024169757962227,
+        "offset": -128.0,
+        "scale": 0.22853676974773407
+      }
+    ],
+    "past_key_values.22.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -24.37511444091797,
+        "max": 24.184683859348297,
+        "offset": -128.0,
+        "scale": 0.19043058156967163
+      }
+    ],
+    "present.22.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -24.37511444091797,
+        "max": 24.184683859348297,
+        "offset": -128.0,
+        "scale": 0.19043058156967163
+      }
+    ],
+    "past_key_values.23.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -30.073695866141733,
+        "max": 29.8387451171875,
+        "offset": -128.0,
+        "scale": 0.2349507489542323
+      }
+    ],
+    "present.23.key": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -30.073695866141733,
+        "max": 29.8387451171875,
+        "offset": -128.0,
+        "scale": 0.2349507489542323
+      }
+    ],
+    "past_key_values.23.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -8.665114996001476,
+        "max": 8.597418785095215,
+        "offset": -128.0,
+        "scale": 0.06769621090626153
+      }
+    ],
+    "present.23.value": [
+      {
+        "bitwidth": 8,
+        "is_symmetric": "true",
+        "min": -8.665114996001476,
+        "max": 8.597418785095215,
+        "offset": -128.0,
+        "scale": 0.06769621090626153
+      }
+    ]
+  },
+  "param_encodings": {}
+}

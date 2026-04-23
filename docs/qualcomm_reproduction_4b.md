@@ -906,6 +906,73 @@ gap requires better w4 calibration (AIMET-equivalent) to keep
 parts 2/3 at w4 while preserving the cos quality we currently
 only get at w8.
 
+### 5n. uint8 KV cache — matching Qualcomm's KV encoding exactly
+
+Qualcomm's shipping bundle uses uint8 KV with symmetric offset=-128
+and per-layer scale from their metadata.yaml. We were using uint16
+KV (65536 levels, 256× more precise than needed). For structural
+match with Qualcomm's KV format we pinned our KV encodings exactly
+to their metadata values.
+
+`scripts/build_uint8_kv_overrides.py` parses Qualcomm's metadata.yaml
+and emits three `--quantization_overrides` JSON files (one per part
+2/3/4), covering both `past_key_values.N.{key,value}` inputs and
+`present.N.{key,value}` outputs (same scale on both sides so KV can
+be concatenated across decode steps without dequant/requant — the
+invariant Qualcomm relies on from Phase 0).
+
+Re-converted parts 2/3/4 with these overrides, re-quantized,
+re-bin-gen'd. DLC `quant_params` confirms bitwidth=8 for all 72 KV
+tensors per part, with scales matching Qualcomm's exactly (e.g.
+part2 L0 past_key: scale=2.3458e+00, offset=-128 — identical).
+
+Wrapper ONNXs regenerated with KV ports declared uint8 (was uint16).
+`specula_qwen3_4b_oracle.py` updated with `quant_u8`/`dequant_u8`
+helpers for the KV path.
+
+Per-part probe at pos=0 BOS:
+
+| part | before (u16 KV) | after (u8 KV) |
+|---:|---:|---:|
+| 1 | 1.000000 | 1.000000 |
+| 2 | 0.999972 | 0.999971 |
+| 3 | 0.999999 | 0.999999 |
+| 4 | 0.988321 | **0.988884** |
+
+Per-part cos unchanged or marginally better. The precision loss
+from 65536→256 levels is absorbed — our calibration was using
+only a fraction of the uint16 range (≤~±300 effective vs the
+±~32k available), so dropping to uint8 with the same effective
+range stays lossless for the observed KV distribution.
+
+**End-to-end oracle** (cumulative-KV test, 30 prefill steps):
+
+| run | first-decode cos | decode |
+|---|---:|---|
+| 5m (u16 KV) | +0.282 | `\nOkay, theuser is asking, " what is gravity? keep the answer` |
+| **5n (u8 KV)** | **+0.374** | `\nOkay, theuser is asking, " What is gravity? Keep the answer` |
+
+Cos improved from 0.282 to 0.374 — matching Qualcomm's exact KV
+scales is better than our (narrower) uint16 calibration that
+covered the same effective range. Capitalization now matches
+Qualcomm's output ("What", "Keep") — semantic convergence.
+
+Argmax agreement: 28/46 tokens (60.9%), comparable to 5m's 29/46
+(63%). Nearly identical first 6 decoded tokens.
+
+Structural match state (ours vs Qualcomm):
+- Part 1: 778 MB = 778 MB ✓
+- KV dtype: uint8 symmetric offset=-128 = uint8 symmetric offset=-128 ✓ (Phase 5n)
+- KV per-layer scales: exact match (from metadata.yaml) ✓ (Phase 5n)
+- Total bundle size: 4833 MB vs 3136 MB (~50% over, traced to w8 weights vs Qualcomm's better-calibrated w4)
+- cos/sin format: [1,1,128] full-dim vs Qualcomm's [1,1,1,64] half-dim ✗ (Phase 5o in progress)
+- Calibration quality: qairt-quantizer native vs AIMET-equivalent ✗ (Phase 5p future)
+
+Artifacts:
+- `scripts/build_uint8_kv_overrides.py` — extracts Qualcomm's KV
+  scales and emits part2/3/4 override JSONs.
+- `results/phase5_qwen3_4b_bundle/part{2,3,4}_kv_uint8_overrides.json`.
+
 ### Follow-up: generalize the splitter (deferred)
 
 `scripts/split_qwen3_4b_pathb.py` hard-codes Qwen3-4B's layer count

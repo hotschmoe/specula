@@ -55,6 +55,16 @@ L11_HIDDEN = "_model_layers_11_Add_1_output_0"
 L23_HIDDEN = "_model_layers_23_Add_1_output_0"
 
 
+def quant_u8(x_fp32: np.ndarray, scale: float, offset: int) -> np.ndarray:
+    """uint8 variant of quant_u16 for the Phase 5n uint8 KV cache."""
+    q = np.round(x_fp32.astype(np.float64) / scale) - offset
+    return np.clip(q, 0, 255).astype(np.uint8)
+
+
+def dequant_u8(q: np.ndarray, scale: float, offset: int) -> np.ndarray:
+    return (q.astype(np.float32) + float(offset)) * float(scale)
+
+
 def quant_u16(x_fp32: np.ndarray, scale: float, offset: int) -> np.ndarray:
     """dequant convention: f = (q + offset) * scale ->
     q = round(f/scale) - offset. Clamp to uint16."""
@@ -225,8 +235,8 @@ def main() -> int:
                 v_name = f"past_key_values_{li}_value"
                 k_scale, k_off = qm[f"past_key_values.{li}.key"]
                 v_scale, v_off = qm[f"past_key_values.{li}.value"]
-                feed[k_name] = quant_u16(past_k[li], k_scale, k_off)
-                feed[v_name] = quant_u16(past_v[li], v_scale, v_off)
+                feed[k_name] = quant_u8(past_k[li], k_scale, k_off)
+                feed[v_name] = quant_u8(past_v[li], v_scale, v_off)
 
             out_names = [hidden_out_name]
             for li in range(layer_start, layer_end + 1):
@@ -242,8 +252,8 @@ def main() -> int:
                 v_out_u16 = outs[1 + 2 * i + 1]
                 k_scale, k_off = qm[f"present.{li}.key"]
                 v_scale, v_off = qm[f"present.{li}.value"]
-                new_keys_fp32.append(dequant_u16(k_out_u16, k_scale, k_off))
-                new_vals_fp32.append(dequant_u16(v_out_u16, v_scale, v_off))
+                new_keys_fp32.append(dequant_u8(k_out_u16, k_scale, k_off))
+                new_vals_fp32.append(dequant_u8(v_out_u16, v_scale, v_off))
             return hidden_out, new_keys_fp32, new_vals_fp32
 
         # --- part 2: layers 0..11 ---

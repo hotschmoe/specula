@@ -59,16 +59,18 @@ def part_io_spec(part: int) -> tuple[list[tuple], list[tuple], str]:
             ("position_ids_cos", "uint16", [1, 1, HEAD_DIM]),
             ("position_ids_sin", "uint16", [1, 1, HEAD_DIM]),
         ]
+        # Phase 5n: KV now uint8 (matching Qualcomm's genie bundle). Per-layer
+        # scales applied via --quantization_overrides at convert time.
         for li in range(s, e + 1):
-            items.append((past_name("key", li), "uint16",
+            items.append((past_name("key", li), "uint8",
                           [1, NUM_KV_HEADS, PAST, HEAD_DIM]))
-            items.append((past_name("value", li), "uint16",
+            items.append((past_name("value", li), "uint8",
                           [1, NUM_KV_HEADS, PAST, HEAD_DIM]))
         return items
 
     def decode_outputs(s: int, e: int) -> list[tuple]:
         return [
-            (present_name(kind, li), "uint16",
+            (present_name(kind, li), "uint8",
              [1, NUM_KV_HEADS, CTX, HEAD_DIM])
             for li in range(s, e + 1) for kind in ("key", "value")
         ]
