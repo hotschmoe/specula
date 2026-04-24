@@ -1,0 +1,111 @@
+=== stdout ===
+[
+  {
+    "build_commit": "fd6ae4ca1",
+    "build_number": 8860,
+    "cpu_info": "Snapdragon(R) X2 Elite Extreme - X2E94100 - Qualcomm Oryon(TM) CPU",
+    "gpu_info": "Qualcomm(R) Adreno(TM) X2-90 GPU",
+    "backends": "OpenCL",
+    "model_filename": "C:\\Users\\hotschmoe\\Documents\\GitHub\\specula\\models\\Qwen3-4B-Q4_K_M.gguf",
+    "model_type": "qwen3 4B Q4_K - Medium",
+    "model_size": 2491323904,
+    "model_n_params": 4022468096,
+    "n_batch": 2048,
+    "n_ubatch": 512,
+    "n_threads": 18,
+    "cpu_mask": "0x0",
+    "cpu_strict": false,
+    "poll": 50,
+    "type_k": "f16",
+    "type_v": "f16",
+    "n_gpu_layers": 99,
+    "n_cpu_moe": 0,
+    "split_mode": "layer",
+    "main_gpu": 0,
+    "no_kv_offload": false,
+    "flash_attn": false,
+    "devices": "auto",
+    "tensor_split": "0.00",
+    "tensor_buft_overrides": "none",
+    "use_mmap": true,
+    "use_direct_io": false,
+    "embeddings": false,
+    "no_op_offload": 0,
+    "no_host": false,
+    "fit_target": 0,
+    "fit_min_ctx": 0,
+    "n_prompt": 512,
+    "n_gen": 0,
+    "n_depth": 0,
+    "test_time": "2026-04-24T05:38:23Z",
+    "avg_ns": 1439214566,
+    "stddev_ns": 19438572,
+    "avg_ts": 355.792701,
+    "stddev_ts": 4.787383,
+    "samples_ns": [ 1460285600, 1421981000, 1435377100 ],
+    "samples_ts": [ 350.616, 360.061, 356.701 ]
+  },
+  {
+    "build_commit": "fd6ae4ca1",
+    "build_number": 8860,
+    "cpu_info": "Snapdragon(R) X2 Elite Extreme - X2E94100 - Qualcomm Oryon(TM) CPU",
+    "gpu_info": "Qualcomm(R) Adreno(TM) X2-90 GPU",
+    "backends": "OpenCL",
+    "model_filename": "C:\\Users\\hotschmoe\\Documents\\GitHub\\specula\\models\\Qwen3-4B-Q4_K_M.gguf",
+    "model_type": "qwen3 4B Q4_K - Medium",
+    "model_size": 2491323904,
+    "model_n_params": 4022468096,
+    "n_batch": 2048,
+    "n_ubatch": 512,
+    "n_threads": 18,
+    "cpu_mask": "0x0",
+    "cpu_strict": false,
+    "poll": 50,
+    "type_k": "f16",
+    "type_v": "f16",
+    "n_gpu_layers": 99,
+    "n_cpu_moe": 0,
+    "split_mode": "layer",
+    "main_gpu": 0,
+    "no_kv_offload": false,
+    "flash_attn": false,
+    "devices": "auto",
+    "tensor_split": "0.00",
+    "tensor_buft_overrides": "none",
+    "use_mmap": true,
+    "use_direct_io": false,
+    "embeddings": false,
+    "no_op_offload": 0,
+    "no_host": false,
+    "fit_target": 0,
+    "fit_min_ctx": 0,
+    "n_prompt": 0,
+    "n_gen": 128,
+    "n_depth": 0,
+    "test_time": "2026-04-24T05:38:28Z",
+    "avg_ns": 6901171000,
+    "stddev_ns": 323653226,
+    "avg_ts": 18.575527,
+    "stddev_ts": 0.894009,
+    "samples_ns": [ 7049053000, 7124466600, 6529993400 ],
+    "samples_ts": [ 18.1585, 17.9663, 19.6019 ]
+  }
+=== stderr ===
+ggml_opencl: selected platform: 'QUALCOMM Snapdragon(TM)'
+
+ggml_opencl: device: 'Qualcomm(R) Adreno(TM) X2-90 GPU (OpenCL 3.0 Qualcomm(R) Adreno(TM) X2-90 GPU)'
+ggml_opencl: OpenCL driver: OpenCL 3.0 QUALCOMM build: 863.0 Compiler DX.50.39.00
+ggml_opencl: vector subgroup broadcast support: true
+ggml_opencl: device FP16 support: true
+ggml_opencl: mem base addr align: 128
+ggml_opencl: max mem alloc size: 2048 MB
+ggml_opencl: device max image buffer size (pixels): 134217728
+ggml_opencl: device max workgroup size: 1024
+ggml_opencl: SVM coarse grain buffer support: true
+ggml_opencl: SVM fine grain buffer support: true
+ggml_opencl: SVM fine grain system support: false
+ggml_opencl: SVM atomics support: true
+ggml_opencl: flattening quantized weights representation as struct of arrays (GGML_OPENCL_SOA_Q)
+ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
+ggml_opencl: loading OpenCL kernels............................................................................................................
+ggml_opencl: default device: 'Qualcomm(R) Adreno(TM) X2-90 GPU (OpenCL 3.0 Qualcomm(R) Adreno(TM) X2-90 GPU)'

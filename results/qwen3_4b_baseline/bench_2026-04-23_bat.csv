@@ -1,0 +1,6 @@
+backend,pp_tps,tg_tps,pp_tokens,tg_tokens,pp_time_s,tg_time_s,wall_s,mwh_before,mwh_after,mwh_drop,mean_w,n_power_samples,j_per_tok,power_state,ok,notes
+npu-genie,1598.5014049328793,23.32699471202688,512,3582,0.32029999999999925,153.556,168.57177290000254,63129,62203,926,13.052922077922078,77,0.5374582843675891,bat,True,
+cpu,191.298223,38.518373,512,128,2.676948366,3.323160333,22.54019440000411,62203,61362,841,25.53618181818182,11,0.8993601600244823,bat,True,
+cpu-kleidiai,180.429529,37.330871,512,128,2.837689333,3.4290039,23.59327489999123,61362,61362,0,32.054,11,1.1816544275692482,bat,True,
+gpu-opencl,355.792701,18.575527,512,128,1.439214566,6.901171,38.593280599976424,61362,60737,625,44.61355555555556,18,2.690286668934676,bat,True,
+gpu-vulkan,,,0,0,,,970.0209803999751,60737,58369,2368,23.338201465201465,273,,bat,False,"exception: TimeoutExpired: Command '['C:\\Users\\hotschmoe\\Documents\\GitHub\\specula\\llama.cpp\\build-vulkan\\bin\\llama-bench.exe', '-m', 'C:\\Users\\hotschmoe\\Documents\\GitHub\\specula\\models\\Qwen3-4B-Q4_K_M.gguf', '-p', '512', '-n', '128', '-r', '3', '-o', 'json', '-ngl', '99']' timed out after 600 seconds"

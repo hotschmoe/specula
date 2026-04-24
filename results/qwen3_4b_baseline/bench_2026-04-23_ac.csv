@@ -1,0 +1,6 @@
+backend,pp_tps,tg_tps,pp_tokens,tg_tokens,pp_time_s,tg_time_s,wall_s,mwh_before,mwh_after,mwh_drop,j_per_tok,power_state,ok,notes
+npu-genie,1566.228204343838,23.296909419769072,512,3582,0.32689999999999964,153.7543,165.05978349997895,,,,,ac,True,
+cpu,188.296529,39.495435,512,128,2.719268033,3.240922533,22.06274950003717,,,,,ac,True,
+cpu-kleidiai,185.777307,38.507234,512,128,2.7564041,3.3240557,22.694641099951696,,,,,ac,True,
+gpu-opencl,,,0,0,,,32.21356810000725,,,,,ac,False,"json parse: Expecting ',' delimiter: line 91 column 4 (char 2631)"
+gpu-vulkan,3.907647,31.428711,512,128,131.025136466,4.072755266,539.4909801000031,,,,,ac,True,

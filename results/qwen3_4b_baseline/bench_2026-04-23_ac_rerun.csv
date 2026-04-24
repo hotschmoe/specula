@@ -1,0 +1,2 @@
+backend,pp_tps,tg_tps,pp_tokens,tg_tokens,pp_time_s,tg_time_s,wall_s,mwh_before,mwh_after,mwh_drop,j_per_tok,power_state,ok,notes
+gpu-opencl,367.381979,22.921017,512,128,1.393673233,5.5846735,31.495256800029892,,,,,ac,True,
