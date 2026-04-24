@@ -6,6 +6,14 @@ Extreme, 48 GB LPDDR5X unified memory @ 228 GB/s, Adreno X2 GPU, Hexagon NPU.
 *Specula (Latin):* a watchtower, a vantage from which you look ahead.
 Exactly what a draft model is.
 
+## For contributors / agents
+
+- **`CLAUDE.md`** — session orientation: what to read, current priorities.
+- **`docs/roadmap.md`** — strategic plan, workstreams, dependency graph.
+- **`docs/repo_hygiene.md`** — what to keep / archive / stage for deletion.
+  Follow these rules when adding files or closing a phase so the repo
+  stays navigable.
+
 ## Goal
 
 Characterize and push the ceiling of speculative decoding on Windows-on-ARM,
