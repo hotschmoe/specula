@@ -1,0 +1,330 @@
+# Phase 5 step 1 - NPU environment snapshot
+# Session 6 start, 2026-04-20
+# Against npu_scoping.md section 5 checklist.
+
+## 5.1 QAIRT install + arch binaries - PASS
+
+Install root: C:\Qualcomm\AIStack\QAIRT\2.45.40.260406\
+  (matches pinned version, voice_project/build_qnn_models.py:18)
+
+lib/ subdirs present:
+  aarch64-windows-msvc     <-- ARM64 Windows runtime stubs
+  arm64x-windows-msvc      <-- cross-architecture variant
+  x86_64-windows-msvc      <-- x64 (for emulated converter tools)
+  hexagon-v66, v68, v69, v73, v75, v79, v81  <-- all arch targets shipped
+  aarch64-android, aarch64-oe-linux-*, android, etc.
+  python/
+
+ARM64 Windows QnnHtp runtime DLLs (lib/aarch64-windows-msvc/):
+  QnnHtp.dll, QnnHtp.lib
+  QnnHtpPrepare.dll
+  QnnHtpV81Stub.dll, QnnHtpV81CalculatorStub.dll   <-- v81 stubs present
+  QnnHtpV73Stub.dll, QnnHtpV68Stub.dll (earlier arch stubs)
+  QnnHtpNetRunExtensions.dll, QnnHtpOptraceProfilingReader.dll
+  QnnHtpProfilingReader.dll
+
+Hexagon v81 Skel (lib/hexagon-v81/unsigned/):
+  libQnnHtpV81.so
+  libQnnHtpV81Skel.so                  <-- v81 Skel present, UNSIGNED
+  libQnnNetRunDirectV81Skel.so
+  libSnpeHtpV81Skel.so
+
+Note: "unsigned/" path confirms voice_project's driver-signing wall
+applies to raw QAIRT usage. This is exactly why the primary path is
+ORT-QNN (pip onnxruntime-qnn 1.24.4 bundles its own signed stack)
+rather than loading this v81 Skel directly via QnnContext_*.
+See npu_scoping.md section 3.1.
+
+## 5.2 OS-level NPU visibility - PASS
+
+Get-PnpDevice match (Class=ComputeAccelerator):
+  FriendlyName: Snapdragon(R) X2 Elite Extreme - X2E94100 - Qualcomm(R) Hexagon(TM) NPU
+  InstanceId:   ACPI\VEN_QCOM&DEV_0FF0&SUBSYS_CRD08480&REV_0056\2&DABA3FF&0
+  Status:       OK
+
+Adjacent DSP/compute devices (all Status=OK):
+  Qualcomm(R) Audio DSP Subsystem Device     (ACPI\QCOM0F1B)
+  Qualcomm(R) Aqstic(TM) Audio DSP and Calibration Manager
+  Qualcomm(R) Compute DSP Subsystem Device   (ACPI\QCOM0FA6)
+  Qualcomm(R) NSP0 CDSP SW Thermal Device    (ACPI\QCOM0FB8)
+
+Win32_PnPSignedDriver (IsSigned=True):
+  DeviceName:           Snapdragon(R) X2 Elite Extreme - X2E94100 - Qualcomm(R) Hexagon(TM) NPU
+  DriverVersion:        30.0.220.11010
+  DriverProviderName:   Qualcomm Technologies, Inc.
+  IsSigned:             True
+
+Win32_PnPSignedDriver DSP entries (IsSigned=True):
+  Qualcomm Compute DSP Subsystem Device      685.13804.70.0
+  Qualcomm Audio DSP Subsystem Device        685.13804.70.0
+  Qualcomm(R) Aqstic(TM) Audio DSP...        685.13804.40.0
+
+SoC identifiers (for AI Hub target mapping):
+  Device ID:    X2E94100
+  Subsystem:    CRD08480 (matches AI Hub device string "Snapdragon X2 Elite CRD")
+  Revision:     0056
+  Hexagon arch: v81 (per npu_scoping.md section 4; to reconfirm at compile time)
+
+## 5.3 ORT-QNN can enumerate NPU - PENDING (needs venv + install)
+
+Requires: pip install onnxruntime-qnn==1.24.4 in a Python venv.
+Target Python: 3.12 ARM64 (C:\Users\hotschmoe\AppData\Local\Programs\Python\Python312-arm64).
+No .venv yet in specula/.
+
+## 5.4 AI Hub token + device targetable - PENDING (needs venv + install)
+
+Requires: pip install qai-hub.
+AI Hub API token expected from prior voice_project setup (trident/npu_path_back.md:7).
+Target device string to confirm: "Snapdragon X2 Elite CRD"
+
+## Summary
+
+Hardware + SDK: READY.
+- X2E94100 NPU enumerated and signed (driver 30.0.220.11010).
+- QAIRT 2.45.40.260406 installed with all v81 artefacts.
+- Hexagon v81 confirmed as the arch target on this silicon.
+
+Runtime toolchain: NOT YET INSTALLED.
+- Needs Python venv for onnxruntime-qnn + qai-hub.
+- This is the step-1 exit gate; once installed and both SDKs enumerate
+  successfully, step 1 closes and step 2 (ORT-QNN sidecar skeleton) opens.
+
+
+## 5.3 + 5.4 probe results (appended by scripts/npu_probe.py)
+
+### 5.3 ORT-QNN
+
+- onnxruntime version : 1.24.4
+- available providers : ['QNNExecutionProvider', 'AzureExecutionProvider', 'CPUExecutionProvider']
+- QNN EP visible      : True
+- package dir         : C:\Users\hotschmoe\Documents\GitHub\specula\.venv\Lib\site-packages\onnxruntime
+- bundled QNN DLLs    : 6 files
+    capi\QnnHtp.dll
+    capi\QnnHtpPrepare.dll
+    capi\QnnHtpV68Stub.dll
+    capi\QnnHtpV73Stub.dll
+    capi\QnnHtpV81Stub.dll
+    capi\onnxruntime_providers_qnn.dll
+
+### 5.4 qai-hub
+
+- qai-hub version     : 0.48.0
+- auth state          : ok
+- device catalogue    : 80 devices
+- X2-family matches   : 1
+    Snapdragon X2 Elite CRD  os=11  attrs=['os:windows', 'format:compute', 'framework:onnx', 'vendor:qualcomm', 'abi:aarch64-windows', 'chipset:qualcomm-snapdragon-x2-elite', 'chipset:sc8480xp', 'hexagon:v81', 'soc-model:88', 'htp-supports-fp16:true', 'htp-supports-weight-sharing:true', 'framework:qnn']
+- 'Snapdragon X2 Elite CRD' present: True
+
+
+## Step 2 - ORT-QNN sidecar smoke test (2026-04-20)
+
+Script: scripts/npu_draft_sidecar.py
+Graph: 2-op MatMul([1,64] @ [64,32]) -> Relu (8337-byte ONNX)
+
+- Provider chain (ordered) : ['QNNExecutionProvider', 'CPUExecutionProvider']
+  (QNN first = actual executor; CPU retained as ORT's automatic
+   unsupported-op fallback, never activates because QNN partitions 100%)
+- Backend DLL loaded       : .venv/.../onnxruntime/capi/QnnHtp.dll
+- Provider options used    : htp_performance_mode=burst, soc_model=88,
+                             htp_arch=81, enable_htp_fp16_precision=1
+- QNN partition coverage   : 1 partition, 2/2 nodes on QNN (MatMul + Relu)
+- HTP graph-prep stages observed:
+    Graph Preparation Initializing (167 us)
+    Graph Optimizations (1226 us)
+    Post Graph Optimization (234 us)
+    Graph Sequencing for Target (263 us)
+    VTCM Allocation (23 us)
+    Parallelization Optimization (15 us)
+    Finalizing Graph Sequence (51 us)
+    Completion (7 us)
+  (VTCM Allocation is Hexagon-specific; confirms HTP backend, not QNN-CPU.)
+- HTP DDR bandwidth profiler:
+    write_total_bytes = 2048
+    read_total_bytes  = 8192
+    spill_bytes       = 0
+    fill_bytes        = 0
+  (Zero spill/fill = graph fits entirely in on-chip VTCM SRAM. Useful
+   baseline for the DMA-exhaustion risk at step 5 when weights are
+   ~600 MB.)
+- Mean per-call latency    : 48.8 us (5 warmups + 200 measured calls)
+- Step 2 exit target       : < 5000 us ............................ PASS
+- Silent-CPU-fallback guard: providers=[("QNNExecutionProvider", opts)]
+                             only; no CPU in the requested list; session
+                             would error rather than fall back.
+
+Known profiling gotcha: setting provider option `profiling_level` to
+anything other than "off" requires `profiling_file_path` (or ETW).
+Encoded in NPUSession's __init__ as a ValueError guard.
+
+
+## Step 3 - Qwen3-0.6B ONNX export + CPU validation (2026-04-20)
+
+Plan adaptation: scoping doc section 7 step 3 called for a local
+`optimum.onnxruntime` export from the HF BF16 checkpoint. This hit a
+hard wall because `torch` has NO cp312 win_arm64 wheel (only cp38-cp311
+on torch 2.1.2, nothing newer). uv error:
+    Distribution `torch==2.11.0` ... doesn't have a wheel for win_arm64
+
+Workaround: use `onnx-community/Qwen3-0.6B-ONNX`, the canonical HF
+ONNX mirror maintained by the onnx-community org. Same model, same
+graph structure, identical architecture -- just pre-exported on a
+non-WoA machine. Sidesteps torch entirely for Phase 5 step 3.
+
+### Artefacts (models/qwen3-0.6b-onnx/)
+
+- onnx/model.onnx         : 300.5 MB (graph)
+- onnx/model.onnx_data    : 1993.5 MB (external-data weights, FP32)
+- tokenizer.json          : 8.7 MB (BPE)
+- config.json, generation_config.json, special_tokens_map.json,
+  tokenizer_config.json, vocab.json, merges.txt, chat_template.jinja,
+  added_tokens.json, README.md
+
+Download: scripts/download_qwen3_onnx.py via huggingface_hub.
+Total 55 s on this network (12 files, ~2.3 GB).
+
+### Architecture confirmed from config.json
+
+- model_type          : qwen3
+- num_hidden_layers   : 28
+- num_attention_heads : 16
+- num_key_value_heads : 8  (GQA, 2 Q heads share a KV head)
+- hidden_size         : 1024
+- head_dim            : 128
+- vocab_size          : 151936
+- eos_token_id        : 151645
+
+### ONNX IO surface
+
+- 59 inputs : input_ids, attention_mask, position_ids, and 28 layers
+              x 2 (key + value) = 56 past_key_values.{i}.{key,value}
+- 57 outputs: logits + 28 layers x 2 = 56 present.{i}.{key,value}
+- KV shape  : [batch, 8, past_seq_len, 128] as expected
+
+This is a LOT of per-call bindings. At step 5 when we compile via AI
+Hub and run on NPU, each token step binds/rebinds ~114 tensors. Will
+need to check if ORT-QNN can share KV buffers across session.run()
+calls without copy (scoping doc section 8 non-blocking question).
+
+### CPU-ORT validation (substituted coherence check for 1e-3 logit
+### compare; torch unavailable)
+
+Script: scripts/validate_qwen3_onnx_cpu.py
+Prompt: "The Snapdragon X2 Elite Extreme is"
+
+- Session load time    : 1.41 s
+- Prefill (7 tokens)   : 51.4 ms (7.3 ms/tok)
+- Decode (32 tokens)   : 46.5 ms/tok = 21.5 t/s on CPU-ORT FP32
+                         (llama.cpp Q8_0 CPU does 111 t/s -- 5x faster
+                         because of quantization + multi-threaded
+                         runtime; ONNX-CPU is single-threaded FP32)
+- Generated output     : "a high-end smartphone with a 6.5-inch 5G
+                          camera, and it has a 5G network. It is a
+                          high-end smartphone with"
+- Unique-token ratio   : 0.59 (threshold: > 0.3)
+- Contains alpha text  : yes
+
+Factually wrong (the X2 Elite isn't a smartphone) but a 0.6B model
+can't be expected to have factual grounding on niche hardware. What
+we're testing is GRAPH CORRECTNESS: fluent English, proper grammar,
+no repetition loops, no NaN/inf. All green.
+
+Step 3 exit: PASS (coherence-substituted).
+
+### Outstanding (non-blocking for step 4)
+
+- Local re-export of Qwen3 variants is blocked by torch WoA wheel
+  gap. For 1.7B / 8B variants we'd need a non-WoA machine or wait
+  for torch to publish cp312 win_arm64. For now, onnx-community
+  mirrors the 0.6B variant; other sizes would need case-by-case
+  sourcing.
+- KV-cache buffer sharing across session.run() calls is the latency
+  lever we'll probe at step 5+ if per-token dispatch is slow.
+
+
+## Step 4 - AI Hub compile attempts (2026-04-20)
+
+Three attempts before hitting a real compile-engine failure that needs
+a new plan. Each failure was cheap (seconds to minutes), not hours.
+
+### Attempt 1: single-file upload
+- Command : hub.upload_model(str(model.onnx))  [300 MB file only]
+- Failure : 'The uploaded ONNX model is missing its external weights.'
+- Lesson  : AI Hub needs BOTH graph and external-data together.
+- Upload  : 138 s wasted before compile rejection.
+
+### Attempt 2: directory upload, .onnx_data extension
+- Command : hub.upload_model(str(staging_dir)) with model.onnx_data
+- Failure : qai_hub.client.UserError 'Model directory ... can only
+            contain .onnx, .data, .encodings, and .bin files.'
+- Lesson  : qai-hub whitelists file extensions. .onnx_data (the
+            onnx-community convention) is rejected.
+- Upload  : 0 s (client-side check, never reached the server).
+- Fix     : scripts/prep_onnx_for_ai_hub.py -- patch every
+            external_data 'location' entry from 'model.onnx_data' to
+            'model.data' + hardlink the weights. Graph-only load,
+            0.5 s, zero disk duplication.
+
+### Attempt 3: upload succeeded, compile rejected on custom op
+- Command : hub.upload_model(str(staging_dir)) with model.onnx + model.data
+- Upload  : 759.7 s (12.7 min) for 2.24 GB. ~3 MB/s effective.
+- Job     : id=j5wdkqxzg at workbench.aihub.qualcomm.com/jobs/j5wdkqxzg/
+- Status  : CREATED (30 s) -> OPTIMIZING_MODEL (70 s) -> FAILED (100 s)
+- Reason  : 'No Op registered for SimplifiedLayerNormalization with
+            domain_version of 14'
+- Lesson  : onnx-community's Qwen3-0.6B-ONNX export uses ORT's fused
+            ops (com.microsoft domain) that QAIRT's QNN converter
+            does not support.
+
+### Op inventory after attempt 3 (scripts/inspect_onnx_ops.py)
+
+Total nodes: 610 across two opset domains.
+Opset imports:
+    <default>       v14
+    com.microsoft   v1
+
+Non-standard ops (not in QAIRT's stock op library):
+    com.microsoft::RotaryEmbedding                   56 instances
+    com.microsoft::SkipSimplifiedLayerNormalization  56 instances
+    com.microsoft::GroupQueryAttention               28 instances
+
+Plus one default-domain op that QAIRT also doesn't recognize:
+    SimplifiedLayerNormalization                     57 instances
+
+All four ops are ORT-side fusions of standard ONNX primitives. They
+are baked in by optimum.exporters.onnx's default ORT optimization
+pass. This is what the onnx-community mirror publishes.
+
+### Path-forward decision
+
+Three options evaluated. Picked #1.
+
+1. [CHOSEN] Re-export on a non-WoA machine via Microsoft's
+   onnxruntime_genai.models.builder with execution_provider='qnn'.
+   Official QNN target; should produce QAIRT-compatible ONNX
+   directly. Requires torch (WoA wall), so run on Linux VM /
+   Codespaces / another machine and copy the ONNX back.
+   Estimated 1-2 hours end-to-end.
+
+2. Manual ONNX graph surgery: decompose all four fused ops to
+   standard primitives in specula. Deterministic but expensive;
+   GroupQueryAttention with KV-cache semantics is 4-8 hours alone.
+   Total 6-11 hours, high bug risk.
+
+3. Manual optimum export on non-WoA machine with ORT fusion disabled
+   (no_post_process=True). Still needs torch. Less QNN-optimized
+   than option 1 but simpler than 2.
+
+Picked option 1 because Microsoft's onnxruntime-genai builder is
+the official QNN path and handles all four fused ops as a tested
+feature, not as a workaround.
+
+### State on this machine
+
+- models/qwen3-0.6b-ai-hub/ kept (2.3 GB) in case we want to retry
+  once we have a QNN-compatible ONNX from option 1.
+- AI Hub model_id=mnzpzwxdq is now orphaned (unused by any job).
+  Can be deleted via qai_hub.delete_model() or left to expire.
+- scripts/{download_qwen3_onnx,prep_onnx_for_ai_hub,compile_qwen3_ai_hub,
+  inspect_onnx_ops}.py all working and kept for re-run.
+- Next: produce a QAIRT-compatible Qwen3-0.6B ONNX via option 1,
+  copy to models/, re-run compile_qwen3_ai_hub.py --submit.

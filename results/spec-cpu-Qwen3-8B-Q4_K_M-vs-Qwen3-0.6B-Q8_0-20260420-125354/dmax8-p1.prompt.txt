@@ -1,3 +1,0 @@
-﻿def binary_search(arr, target):
-    # Return the index of target in arr, or -1 if not found
-    

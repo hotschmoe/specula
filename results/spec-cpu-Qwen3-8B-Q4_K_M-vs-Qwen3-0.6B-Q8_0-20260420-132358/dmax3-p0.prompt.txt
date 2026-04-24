@@ -1,4 +1,0 @@
-﻿Output a JSON object describing a person with fields: name, age, email, address (with street, city, zip). Respond with ONLY the JSON.
-
-{
-  "name": 

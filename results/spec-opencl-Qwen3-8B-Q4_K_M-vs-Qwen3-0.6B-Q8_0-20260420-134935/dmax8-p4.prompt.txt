@@ -1,3 +1,0 @@
-﻿def quicksort(arr):
-    # Return a new list containing the elements of arr sorted in ascending order
-    

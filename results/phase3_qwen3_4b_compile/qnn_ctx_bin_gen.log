@@ -1,57 +1,0 @@
-qnn-context-binary-generator pid:17208
- <W> Initializing HtpProvider
-    56.3ms [ ERROR ]  <E> DspTransport.openSession qnn_open failed, 0x80000406, prio 100
-
-    56.3ms [ ERROR ]  <E> IDspTransport: Unable to load lib 0x80000406
-
-    56.3ms [ ERROR ]  <E> DspTransport.getHandle failed, error 0x00000008
-
-    56.3ms [ ERROR ]  <E> createDspTransportInstance failed to config transport object
-
-    56.3ms [ ERROR ]  <E> error in creation of transport instance
-
-Starting stage: Graph Preparation Initializing
-Completed stage: Graph Preparation Initializing (190 us)
-Starting stage: Graph Optimizations
-Completed stage: Graph Optimizations (16961838 us)
-Starting stage: Post Graph Optimization
-Completed stage: Post Graph Optimization (432514 us)
-Starting stage: Graph Sequencing for Target
- [                                                  ]   0% [#                                                 ]   2% [##                                                ]   4% [###                                               ]   6% [####                                              ]   8% [#####                                             ]  10% [######                                            ]  12% [#######                                           ]  14% [########                                          ]  16% [#########                                         ]  18% [##########                                        ]  20% [###########                                       ]  22% [############                                      ]  24% [#############                                     ]  26% [##############                                    ]  28% [###############                                   ]  30% [################                                  ]  32% [#################                                 ]  34% [##################                                ]  36% [###################                               ]  38% [####################                              ]  40% [#####################                             ]  42% [######################                            ]  44% [#######################                           ]  46% [########################                          ]  48% [#########################                         ]  50% [##########################                        ]  52% [###########################                       ]  54% [############################                      ]  56% [#############################                     ]  58% [##############################                    ]  60% [###############################                   ]  62% [################################                  ]  64% [#################################                 ]  66% [##################################                ]  68% [###################################               ]  70% [####################################              ]  72% [#####################################             ]  74% [######################################            ]  76% [#######################################           ]  78% [########################################          ]  80% [#########################################         ]  82% [##########################################        ]  84% [###########################################       ]  86% [############################################      ]  88% [#############################################     ]  90% [##############################################    ]  92% [###############################################   ]  94% [################################################  ]  96% [################################################# ]  98% [##################################################] 100%
-Completed stage: Graph Sequencing for Target (212548315 us)
-Starting stage: VTCM Allocation
-Completed stage: VTCM Allocation (1686008 us)
-Starting stage: Parallelization Optimization
-Completed stage: Parallelization Optimization (190445 us)
-Starting stage: Finalizing Graph Sequence
-
-====== DDR bandwidth summary ======
-spill_bytes=5400576
-fill_bytes=5400576
-write_total_bytes=81203200
-read_total_bytes=4213491712
-
-Completed stage: Finalizing Graph Sequence (1758759 us)
-Starting stage: Completion
-Completed stage: Completion (10702 us)
-241394.7ms [ ERROR ] C:\repo_release\68_f10f7\QAISW\FirstParty\QNN\HTP\HTP\src\hexagon\prepare\graph_prepare.cc:7171::ERROR:couldn't insert overall len
-
-241396.8ms [ ERROR ]  <E> Error getting size and offsets of weights for Core: 0 err:2
-
-241611.5ms [ ERROR ]  <E> Failed to prepare graph  256. Error 6020 through transport layer
-
-242251.9ms [ ERROR ] C:\repo_release\68_f10f7\QAISW\FirstParty\QNN\HTP\HTP\src\hexagon\prepare\fa_alloc.cc:2463::ERROR:graph requires estimated allocation of 4861664 KB, limit is 3670016 KB
-
-242251.9ms [ ERROR ] C:\repo_release\68_f10f7\QAISW\FirstParty\QNN\HTP\HTP\src\hexagon\prepare\graph_prepare.cc:849::ERROR:error during serialize: memory usage too large
-
-242251.9ms [ ERROR ] C:\repo_release\68_f10f7\QAISW\FirstParty\QNN\HTP\HTP\src\hexagon\prepare\grdep_multi_serialize.cc:471::ERROR:Serialization error memory usage too large
-
-242326.2ms [ ERROR ] C:\repo_release\68_f10f7\QAISW\FirstParty\QNN\HTP\HTP\src\hexagon\src\c_interface.cc:433::ERROR:error in serialize_bin_container
-
-242326.2ms [ ERROR ]  <E> RouterWindows graph serialize to memory failed in User Driver
-
-242326.3ms [ ERROR ]  <E> Failed to finalize graph (id: 1) with err 1002
-
-242326.3ms [ ERROR ] Finalize Graph for Idx = 0 failed with error = 1002
-242326.3ms [ ERROR ] Encountered error 1 while finalizing graphs.
-Graph Finalize failure

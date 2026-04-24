@@ -1,0 +1,11 @@
+timestamp,target,draft,backend,threads,draft_max,n_predict_req,prompt_idx,n_drafted,n_accept,accept_pct,decoded_tokens,decoded_seconds,decoded_tok_per_sec,encoded_tok_per_sec,wallclock_s
+2026-04-21T19:24:37.548717-07:00,Qwen3-8B-Q4_K_M.gguf,qwen3_0_6b_draft_v81_ctx512.pathbmask.bin,npu-draft+cpu-target,18,2,256,0,204,154,75.49,256,23.368,10.955,0.0,23.48
+2026-04-21T19:25:00.490944-07:00,Qwen3-8B-Q4_K_M.gguf,qwen3_0_6b_draft_v81_ctx512.pathbmask.bin,npu-draft+cpu-target,18,2,256,1,182,165,90.659,256,22.867,11.195,0.0,22.94
+2026-04-21T19:25:24.142483-07:00,Qwen3-8B-Q4_K_M.gguf,qwen3_0_6b_draft_v81_ctx512.pathbmask.bin,npu-draft+cpu-target,18,2,256,2,190,162,85.263,257,23.569,10.904,0.0,23.65
+2026-04-21T19:25:49.229866-07:00,Qwen3-8B-Q4_K_M.gguf,qwen3_0_6b_draft_v81_ctx512.pathbmask.bin,npu-draft+cpu-target,18,2,256,3,202,157,77.723,258,25.001,10.319,0.0,25.09
+2026-04-21T19:26:14.025225-07:00,Qwen3-8B-Q4_K_M.gguf,qwen3_0_6b_draft_v81_ctx512.pathbmask.bin,npu-draft+cpu-target,18,2,256,4,204,156,76.471,258,24.721,10.436,0.0,24.8
+2026-04-21T19:26:39.000294-07:00,Qwen3-8B-Q4_K_M.gguf,qwen3_0_6b_draft_v81_ctx512.pathbmask.bin,npu-draft+cpu-target,18,2,256,5,206,153,74.272,256,24.885,10.287,0.0,24.98
+2026-04-21T19:27:03.833549-07:00,Qwen3-8B-Q4_K_M.gguf,qwen3_0_6b_draft_v81_ctx512.pathbmask.bin,npu-draft+cpu-target,18,2,256,6,202,157,77.723,258,24.746,10.426,0.0,24.83
+2026-04-21T19:27:27.869598-07:00,Qwen3-8B-Q4_K_M.gguf,qwen3_0_6b_draft_v81_ctx512.pathbmask.bin,npu-draft+cpu-target,18,2,256,7,190,162,85.263,257,23.953,10.729,0.0,24.03
+2026-04-21T19:27:52.675188-07:00,Qwen3-8B-Q4_K_M.gguf,qwen3_0_6b_draft_v81_ctx512.pathbmask.bin,npu-draft+cpu-target,18,2,256,8,180,166,92.222,256,24.737,10.349,0.0,24.81
+2026-04-21T19:28:19.495483-07:00,Qwen3-8B-Q4_K_M.gguf,qwen3_0_6b_draft_v81_ctx512.pathbmask.bin,npu-draft+cpu-target,18,2,256,9,206,155,75.243,258,26.725,9.654,0.0,26.82

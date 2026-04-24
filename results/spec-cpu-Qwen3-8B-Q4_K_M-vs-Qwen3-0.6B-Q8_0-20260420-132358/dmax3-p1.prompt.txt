@@ -1,5 +1,0 @@
-﻿Output a JSON array of 5 book objects, each with fields: title, author, year, genre, pages. Respond with ONLY the JSON.
-
-[
-  {
-    "title": 

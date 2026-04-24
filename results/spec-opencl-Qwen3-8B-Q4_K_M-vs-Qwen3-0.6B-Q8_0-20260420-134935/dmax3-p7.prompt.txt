@@ -1,3 +1,0 @@
-﻿def matrix_multiply(A, B):
-    # Multiply two matrices A and B represented as lists of lists
-    

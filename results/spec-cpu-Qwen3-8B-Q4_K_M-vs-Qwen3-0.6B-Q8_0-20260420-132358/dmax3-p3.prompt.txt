@@ -1,4 +1,0 @@
-﻿Output a JSON configuration for a web server with fields: host, port, tls (with cert_path, key_path, min_version), routes (array of path+handler objects), middleware (array of strings). Respond with ONLY the JSON.
-
-{
-  "host": 

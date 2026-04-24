@@ -1,5 +1,0 @@
-﻿Output a JSON object representing the HTTP response for GET /api/users/42, with fields: status, headers, body. body should be a user object with id, username, email, created_at. Respond with ONLY the JSON.
-
-{
-  "status": 200,
-  "headers": 

@@ -1,6 +1,0 @@
-﻿Output a JSON object describing a Kubernetes Pod manifest with apiVersion, kind, metadata (name+labels), spec (containers with name/image/ports/env/resources). Respond with ONLY the JSON.
-
-{
-  "apiVersion": "v1",
-  "kind": "Pod",
-  "metadata": 

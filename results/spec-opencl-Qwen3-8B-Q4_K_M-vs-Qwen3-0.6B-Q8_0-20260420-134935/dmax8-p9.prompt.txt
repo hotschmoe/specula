@@ -1,3 +1,0 @@
-﻿def parse_ini(text):
-    # Parse an INI-format string into a dict of section -> dict of key -> value
-    

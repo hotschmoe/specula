@@ -1,5 +1,0 @@
-﻿Output a JSON package.json for a Node.js CLI tool named 'greet' with a bin entry, dependencies on commander and chalk, and test/lint scripts. Respond with ONLY the JSON.
-
-{
-  "name": "greet",
-  "version": 

@@ -1,0 +1,1 @@
+timestamp,target,draft,backend,threads,draft_max,n_predict_req,prompt_idx,n_drafted,n_accept,accept_pct,decoded_tokens,decoded_seconds,decoded_tok_per_sec,encoded_tok_per_sec,wallclock_s

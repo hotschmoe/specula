@@ -1,6 +1,0 @@
-﻿Output a JSON schema for validating a blog post object with title (string, required), body (string, required), tags (array of strings), author_id (integer, required), published_at (string, ISO8601 date-time). Respond with ONLY the JSON.
-
-{
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "type": "object",
-  "properties": 

@@ -1,3 +1,0 @@
-﻿def merge_sorted(a, b):
-    # Merge two sorted lists into a single sorted list
-    

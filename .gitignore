@@ -46,3 +46,6 @@ scripts/sme_probe/*.pdb
 # OS
 Thumbs.db
 .DS_Store
+
+# Cleanup staging — large artifacts pending hard delete
+marked_for_deletion/

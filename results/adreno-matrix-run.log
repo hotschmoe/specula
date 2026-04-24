@@ -1,9 +1,0 @@
-=== B0-baseline ===
-### B0-baseline () ngl=99  started 2026-04-19T22:38:42.7818743-07:00
-llama-bench.exe : ggml_vulkan: Found 1 Vulkan devices:
-At C:\Users\hotschmoe\Documents\GitHub\specula\scripts\adreno_bench_matrix.ps1:30 char:5
-+     & $bench -m $model -ngl $row.ngl -p 128,512 -n 64 -r 2 2>&1 | Tee ...
-+     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : NotSpecified: (ggml_vulkan: Found 1 Vulkan devices::String) [], RemoteException
-    + FullyQualifiedErrorId : NativeCommandError
- 

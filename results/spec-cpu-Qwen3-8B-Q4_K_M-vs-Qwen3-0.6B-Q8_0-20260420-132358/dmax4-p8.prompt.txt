@@ -1,5 +1,0 @@
-﻿Output a JSON array of 5 Git commit objects, each with fields: sha (40-char hex), author (name+email), date (ISO8601), message, files_changed (array). Respond with ONLY the JSON.
-
-[
-  {
-    "sha": 

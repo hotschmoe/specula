@@ -1,0 +1,26 @@
+qnn-context-binary-generator pid:23188
+ <W> Initializing HtpProvider
+    18.9ms [ ERROR ] WindowsFileIO couldn't open libcdsprpc.dll
+Starting stage: Graph Preparation Initializing
+Completed stage: Graph Preparation Initializing (114 us)
+Starting stage: Graph Optimizations
+Completed stage: Graph Optimizations (6324458 us)
+Starting stage: Post Graph Optimization
+Completed stage: Post Graph Optimization (59631 us)
+Starting stage: Graph Sequencing for Target
+Completed stage: Graph Sequencing for Target (622157 us)
+Starting stage: VTCM Allocation
+Completed stage: VTCM Allocation (127508 us)
+Starting stage: Parallelization Optimization
+Completed stage: Parallelization Optimization (27285 us)
+Starting stage: Finalizing Graph Sequence
+
+====== DDR bandwidth summary ======
+spill_bytes=0
+fill_bytes=0
+write_total_bytes=29665280
+read_total_bytes=635041792
+
+Completed stage: Finalizing Graph Sequence (43904 us)
+Starting stage: Completion
+Completed stage: Completion (2692 us)
