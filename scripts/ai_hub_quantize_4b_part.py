@@ -225,6 +225,111 @@ def check_mode(part: int, n_samples: int, calib_npz: Path) -> int:
     return 0
 
 
+def stage_upload_dir(onnx_path: Path, staging_dir: Path) -> None:
+    """Prepare a clean dir with just `model.onnx` (renamed from our halfdim
+    variant) + its `model.data` external-data file (hardlinked to avoid
+    duplicating 4 GB on disk). AI Hub's upload_model resolves the external
+    reference relative to the ONNX file's directory."""
+    import os
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    dst_onnx = staging_dir / "model.onnx"
+    dst_data = staging_dir / "model.data"
+    src_data = onnx_path.parent / "model.data"
+    if not src_data.exists():
+        raise FileNotFoundError(f"source data file {src_data} missing")
+    if dst_onnx.exists():
+        dst_onnx.unlink()
+    # ONNX file is small (< 1 MB). Regular copy is fine.
+    dst_onnx.write_bytes(onnx_path.read_bytes())
+    if dst_data.exists():
+        # Already staged; assume up to date.
+        return
+    try:
+        os.link(str(src_data), str(dst_data))
+    except OSError:
+        # Fall back to copy (slow — ~4 GB).
+        import shutil
+        shutil.copy2(src_data, dst_data)
+
+
+def submit_quantize_mode(part: int, n_samples: int, calib_npz: Path) -> int:
+    """Submit a `submit_quantize_job` instead of `submit_compile_job`. Takes the
+    fp32 ONNX + calibration, returns a quantized ONNX in QDQ format with AIMET
+    encodings baked in. We then convert that QDQ ONNX to DLC locally with
+    qairt-converter for compile + bin-gen via our existing pipeline.
+
+    Phase 5q showed submit_compile_job's internal PTQ gives worse results than
+    our qairt-quantizer w4+per-channel+CLE. submit_quantize_job is a different
+    API — worth testing whether its quantization pipeline is AIMET-grade.
+    """
+    import qai_hub as hub
+
+    hidden_in, specs, onnx_path = part_specs(part)
+    raw_dir = CALIB_ROOT / f"qwen3_4b_ctx512_part{part}_raw"
+    sample_indices = pick_sample_indices(calib_npz, n_samples)
+
+    print(f"loading {len(sample_indices)} calibration samples from {raw_dir} ...")
+    t0 = time.perf_counter()
+    calibration_data = load_calibration_entries(raw_dir, specs, sample_indices)
+    print(f"  loaded in {time.perf_counter() - t0:.1f}s")
+
+    staging_dir = MODELS / f"staging-qwen3-4b-halfdim-part{part}-aihub"
+    print(f"\nstaging at {staging_dir}")
+    stage_upload_dir(onnx_path, staging_dir)
+    upload_bytes = sum(p.stat().st_size for p in staging_dir.iterdir() if p.is_file())
+    print(f"  {upload_bytes / (1024**3):.2f} GB")
+
+    print(f"\nuploading directory to AI Hub ...")
+    t0 = time.perf_counter()
+    model_handle = hub.upload_model(str(staging_dir))
+    print(f"  uploaded in {time.perf_counter() - t0:.1f}s  model_id={model_handle.model_id}")
+
+    job_name = f"qwen3-4b-part{part}-halfdim-quantize-w4a16-aimet"
+    print(f"\nsubmitting quantize job '{job_name}' (w=INT4, a=INT16) ...")
+    job = hub.submit_quantize_job(
+        model=model_handle,
+        calibration_data=calibration_data,
+        weights_dtype=hub.QuantizeDtype.INT4,
+        activations_dtype=hub.QuantizeDtype.INT16,
+        name=job_name,
+    )
+    print(f"job submitted: id={job.job_id}  url={job.url}")
+
+    print("\npolling ...")
+    poll_secs = 20
+    elapsed = 0
+    while True:
+        status = job.get_status()
+        state = getattr(status, "code", str(status))
+        print(f"  [{elapsed:5d}s] {state}")
+        if state in ("SUCCESS", "FAILED", "RESULTS_READY"):
+            break
+        time.sleep(poll_secs)
+        elapsed += poll_secs
+
+    if state == "FAILED":
+        print(f"\nFAILED. inspect at {job.url}")
+        try:
+            print(f"message: {status.message}")
+        except Exception:
+            pass
+        return 1
+
+    out_onnx_dir = RESULTS / f"aihub_quantize_part{part}_qdq"
+    out_onnx_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\ndownloading QDQ ONNX to {out_onnx_dir} ...")
+    target_model = job.get_target_model()
+    target_model.download(str(out_onnx_dir))
+    total_bytes = sum(p.stat().st_size for p in out_onnx_dir.rglob("*") if p.is_file())
+    print(f"  downloaded {total_bytes / (1024**2):.1f} MB")
+    for f in sorted(out_onnx_dir.rglob("*")):
+        if f.is_file():
+            print(f"    {f.relative_to(out_onnx_dir)}: {f.stat().st_size / (1024**2):.1f} MB")
+    print(f"\ntotal wall: {elapsed}s")
+    print(f"=== ok ===")
+    return 0
+
+
 def submit_mode(part: int, n_samples: int, calib_npz: Path) -> int:
     import qai_hub as hub
 
@@ -238,11 +343,24 @@ def submit_mode(part: int, n_samples: int, calib_npz: Path) -> int:
     calibration_data = load_calibration_entries(raw_dir, specs, sample_indices)
     print(f"  loaded in {time.perf_counter() - t0:.1f}s")
 
-    upload_path = onnx_path.parent
-    upload_bytes = sum(p.stat().st_size for p in upload_path.iterdir() if p.is_file())
-    print(f"\nuploading {upload_path} ({upload_bytes / (1024**3):.2f} GB) ...")
+    # Stage to a clean dir so AI Hub's upload_model sees exactly one ONNX
+    # + its external-data file.
+    staging_dir = MODELS / f"staging-qwen3-4b-halfdim-part{part}-aihub"
+    print(f"\nstaging upload dir at {staging_dir}")
+    stage_upload_dir(onnx_path, staging_dir)
+    staged_onnx = staging_dir / "model.onnx"
+    upload_bytes = sum(p.stat().st_size for p in staging_dir.iterdir() if p.is_file())
+    print(f"staged contents ({upload_bytes / (1024**3):.2f} GB):")
+    for f in sorted(staging_dir.iterdir()):
+        print(f"  {f.name}: {f.stat().st_size / (1024**2):.1f} MB")
+
+    # AI Hub requires the DIRECTORY (contains model.onnx + model.data) not
+    # the .onnx file alone — uploading just the protobuf fails the compile
+    # job with "ONNX model is missing its external weights" after a ~2 min
+    # OPTIMIZING_MODEL attempt. See job j563kqdn5 for the reference failure.
+    print(f"\nuploading directory {staging_dir} ...")
     t0 = time.perf_counter()
-    model_handle = hub.upload_model(str(upload_path / "model_halfdim.onnx"))
+    model_handle = hub.upload_model(str(staging_dir))
     print(f"  uploaded in {time.perf_counter() - t0:.1f}s  model_id={model_handle.model_id}")
 
     job_name = f"qwen3-4b-part{part}-halfdim-w4a16-aihub-aimet"
@@ -299,11 +417,16 @@ def main() -> int:
                         default=CALIB_ROOT / "qwen3_4b_ctx512_a.npz")
     grp = parser.add_mutually_exclusive_group(required=True)
     grp.add_argument("--check", action="store_true", help="Dry run.")
-    grp.add_argument("--submit", action="store_true", help="Upload + submit + wait + download.")
+    grp.add_argument("--submit", action="store_true",
+                     help="submit_compile_job (cloud PTQ + compile -> .bin). Phase 5q.")
+    grp.add_argument("--submit-quantize", action="store_true",
+                     help="submit_quantize_job (cloud PTQ -> QDQ ONNX). Phase 5r.")
     args = parser.parse_args()
 
     if args.check:
         return check_mode(args.part, args.n_samples, args.calib_npz)
+    if args.submit_quantize:
+        return submit_quantize_mode(args.part, args.n_samples, args.calib_npz)
     return submit_mode(args.part, args.n_samples, args.calib_npz)
 
 

@@ -1185,6 +1185,44 @@ Artifacts:
   — the returned 1.16 GB AI Hub bin (not used in our bundle; kept as
   a reference point).
 
+### 5r. AI Hub `submit_quantize_job` — different but not better
+
+Ran the alternative cloud API: `submit_quantize_job(model, calibration_data,
+weights_dtype=INT4, activations_dtype=INT16)`. Takes ~23 min on the cloud
+(QUANTIZING_MODEL state) and returns a 3.21 GB zipped QDQ ONNX. The
+extracted result is a 1.75 MB protobuf + 4.85 GB external-data file,
+containing **1352 QuantizeLinear + 1352 DequantizeLinear nodes** with
+AIMET encodings embedded (5758 total nodes vs our ~3000 in the pathb
+part2 ONNX).
+
+CPU-ORT evaluation of the QDQ ONNX (pos=0 BOS + empty past_kv):
+
+| source | L11 range | cos vs CPU-ORT fp32 |
+|---|---|---:|
+| CPU-ORT fp32 (truth) | [-4596, +16136] | — |
+| Our 5k qairt-quant w4+per-channel+CLE (HTP) | [-4551, +16148] | +0.999628 |
+| Our 5m qairt-quant w8+CLE (HTP) | [-4566, +16065] | +0.999972 |
+| AI Hub `submit_compile_job` w4a16 (HTP) | [-401, +1443] | +0.997644 |
+| **AI Hub `submit_quantize_job` QDQ (CPU-ORT)** | **[-1566, +9867]** | **+0.992593** |
+
+`submit_quantize_job` is a different pipeline than `submit_compile_job`
+(2× wider L11 range, similar cos), but NEITHER matches our local
+qairt-quantizer with `--use_per_channel_quantization --use_per_row_quantization
+--apply_algorithms cle`. Both cloud APIs run a BASIC PTQ, not the full
+AIMET pipeline with Sequential MSE + CLE + bias correction that
+Qualcomm uses internally for the shipping bundle.
+
+**Conclusion**: cloud AIMET paths through AI Hub do NOT close the gap
+to Qualcomm's shipping w4a16 quality. Our local qairt-quantizer with
+the right flags already exceeds both cloud options. The only way to
+get Qualcomm's calibration quality is Path B: local AIMET on
+Linux x86_64 + CUDA GPU per their `qai_hub_models/qwen3_4b/quantize.py`
+(manylinux_2_34_x86_64 wheel, 40 GB VRAM, 1-5 hrs per run).
+
+Artifacts:
+- `scripts/probe_aihub_qdq_part2.py` — QDQ ONNX CPU-ORT probe.
+- `results/.../aihub_quantize_part2_qdq/` — downloaded QDQ ONNX.
+
 ### Follow-up: generalize the splitter (deferred)
 
 `scripts/split_qwen3_4b_pathb.py` hard-codes Qwen3-4B's layer count
