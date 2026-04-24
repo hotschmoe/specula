@@ -1130,6 +1130,61 @@ beyond what AI Hub exposes.
 or a cloud Linux+CUDA box. Tracking as Task #14 (AI Hub path) and
 Task #15 (local AIMET fallback).
 
+### 5q. AI Hub `submit_compile_job` — executed, does NOT reach AIMET quality
+
+Submitted Part 2 (halfdim, 4.51 GB model + 479 MB calibration) to
+`submit_compile_job(options="--quantize_full_type w4a16 ...",
+calibration_data=...)` via `scripts/ai_hub_quantize_4b_part.py`.
+Upload fail #1: `hub.upload_model(onnx_file_path)` only uploaded the
+563 KB protobuf, not the 4.6 GB external-data — job failed with
+"missing external weights" after 2 min OPTIMIZING_MODEL. Fixed:
+`upload_model(directory)` zips+uploads the whole dir (AI Hub Workbench's
+"ONNX model directory format"). Retry succeeded:
+
+- Upload: ~30 min for zipped 1 GB × 3 parts (AI Hub chunks large uploads)
+- Compile: 10 min (615 s wall)
+- Download: 1.16 GB `.bin`
+
+Probe of AI Hub's Part 2 bin (pos=0 BOS + empty past_kv) via
+`scripts/probe_aihub_part2.py`:
+
+| source | L11 range | cos vs CPU-ORT |
+|---|---|---:|
+| CPU-ORT pathb fp32 (truth) | [-4596, +16136] | — |
+| Our 5k w4 per-channel+CLE | [-4551, +16148] | +0.999628 |
+| Our 5m/n/o w8 + u8 KV + halfdim | [-4566, +16065] | +0.999972 |
+| **AI Hub `submit_compile_job`, w4a16** | **[-401, +1443]** | **+0.997644** |
+
+**AI Hub's compile-job w4a16 is WORSE than our qairt-quantizer
+w4+per-channel+CLE.** Same 10× magnitude compression signature we
+diagnosed in Phase 5j for bare-default qairt-quantizer w4. And 1163
+MB vs our 615 MB for equivalent function.
+
+Interpretation: `submit_compile_job --quantize_full_type w4a16` runs
+a BASIC PTQ on the cloud — *not* the AIMET + Sequential MSE pipeline
+that `qai_hub_models/models/qwen3_4b/quantize.py` (their LLM template)
+uses. Per the template, AIMET PTQ with SEQ_MSE runs LOCALLY on a
+Linux x86_64 + CUDA GPU (40 GB VRAM for 3-4B models) with the
+`aimet_onnx-2.26.0+cu121-cp310-cp310-manylinux_2_34_x86_64.whl`
+wheel from Qualcomm's AIMET releases.
+
+**Conclusion**: AI Hub's cloud compute does NOT expose the full AIMET
+pipeline. The `submit_compile_job --quantize_full_type` switch is a
+different (inferior) PTQ path. Closing the 50% size gap between our
+bundle and Qualcomm's shipping bundle requires Path B: rent a Linux
+x86_64 + CUDA VM (AWS g5/g6, GCP L4), install aimet_onnx, clone
+`qualcomm/ai-hub-models`, run the `qwen3_4b/quantize.py` script,
+export encodings, import via `qairt-converter --quantization_overrides`.
+
+Artifacts:
+- `scripts/ai_hub_quantize_4b_part.py` — the submit script (kept for
+  reference; could be useful for w8a16 cloud calibration comparison).
+- `scripts/probe_aihub_part2.py` — probe that measured the 0.9976 cos
+  and the compressed-magnitude signature.
+- `results/phase5_qwen3_4b_bundle/qwen3_4b_4part_w4a16_aihub_part2.bin`
+  — the returned 1.16 GB AI Hub bin (not used in our bundle; kept as
+  a reference point).
+
 ### Follow-up: generalize the splitter (deferred)
 
 `scripts/split_qwen3_4b_pathb.py` hard-codes Qwen3-4B's layer count
