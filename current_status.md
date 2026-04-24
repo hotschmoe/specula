@@ -1,5 +1,104 @@
 # specula -- current status
 
+Last updated: 2026-04-23 (session 21 — **Pivot to all-backends
+Qwen3-4B baseline matrix; repo cleanup + hygiene rules landed.**
+Phase 5.5 Lever C is paused (see session 20 below — session ended
+with ARM-side prep for A.2/A.1 shipped and x86 compile ask pending;
+that pending work is not cancelled, just deprioritized until the
+baseline tells us where the compute bottleneck actually is).
+
+**Rationale for the pivot.** The 5.5 investigation has been drilling
+into one island (Hexagon) at one model size (0.6B draft × 8B target)
+on one partial axis (w4a16 PTQ). The roadmap workstreams that come
+next (W1 GPU prefill, W2 NPU utilization, W4 heterogeneous async)
+all depend on a category × backend matrix we have never actually
+measured at a common model size. Qwen3-4B is the right common size:
+Qualcomm ships a blessed w4a16 Genie bundle for NPU, unsloth ships
+a Q4_K_M GGUF for CPU / GPU, weights are ~2.5 GB both sides, and the
+bundle has already loaded cleanly under ORT-QNN per the side-quest
+in `results/reference/qwen3_4b_genie_w4a16_probe.md`. One session of
+baseline measurement produces the data that reprioritizes W1/W2/W4.
+
+**This session landed** (no measurements yet — infrastructure only):
+
+- **Repo cleanup, ~200 GB staged for deletion.** Moved intermediate
+  ONNX export dirs (`qwen3-0.6b-*`, `qwen3-4b-arm-*`), negative-result
+  and dominated binaries (`w4a16-local{,-mse,-tfe}`, `w8a16-local-pr`,
+  `fp16-local`, old ctx512 artifacts), the calibration bundle dir
+  (17 GB, regenerable from scripts + manifest), and the Phase 3 / 5
+  compile output bundles (`phase3_qwen3_4b_compile` 21 GB,
+  `phase5_qwen3_4b_bundle` 28 GB) to `marked_for_deletion/`. `models/`
+  is down from ~280 GB to ~24 GB: four baseline Qwen3 GGUFs,
+  `qualcomm-qwen3-4b-ref/` (Genie bundle), plus two NPU exports kept
+  as Lever B (`pathbmask.bin` — 18.12 t/s baseline) and Lever C
+  (`pathb.w8a16-local.bin` — full-gate PTQ pass). `marked_for_deletion/`
+  is gitignored; `rm -rf` it after a soak if nothing comes up missing.
+- **`results/` reorganized.** All 26 CSVs → `results/csv/`. Oracle
+  `.md + .npz` pairs, probe summaries, `npu_env_snapshot.txt`, and
+  the self-contained `shotgun_drop/` bundle → `results/reference/`.
+  All `.log`, `.stdout`, `.stderr`, per-run subdirs, and intermediate
+  `.json` dumps → `marked_for_deletion/results/` after confirming
+  findings are captured in investigation docs or CSV rows.
+- **`docs/` reorganized.** 12 closed-phase docs moved to
+  `docs/archive/` (all `phase5_*` subphase docs, `SME_investigation`,
+  `adreno_{debugging,opencl}`, `exporting_on_arm`, `npu_scoping`,
+  `upstream_issue_body`). Active top-level is down to 12 docs focused
+  on the priority path. Markdown is never hard-deleted per the new
+  hygiene rules.
+- **`docs/repo_hygiene.md` written.** Three-bucket rule
+  (keep / archive / marked_for_deletion), per-directory policies,
+  regeneratability test, when-to-tidy triggers, soak rules for
+  staged deletions.
+- **`CLAUDE.md` written** (repo root, new) — session orientation
+  pointing at `current_status.md` (detailed), `docs/roadmap.md`
+  (big-picture), and `docs/repo_hygiene.md`. Plus current priority
+  path and working rules.
+- **`README.md` updated** with a "For contributors / agents" section
+  pointing at the three orientation docs.
+
+**Next session — run the baseline.** Plan lives in
+`docs/qwen3_4b_baseline_methods.md`; results table in
+`docs/qwen3_4b_baseline_all_backends.md`. Measure Qwen3-4B PP512 +
+TG128 at ctx=2048 on AC across:
+
+1. **NPU (Genie)** — `genie-t2t-run` against the Qualcomm bundle,
+   w4a16. Primary tool.
+2. **CPU (ARM64 NEON)** — `llama-bench` against Q4_K_M, `-t 8` then
+   scan `{6, 8, 10, 12}` if saturated.
+3. **CPU+KleidiAI** — same, `build-cpu-kleidiai` binary (tests
+   whether i8mm / DOT kernels help at 4B scale; on 0.6B they were a
+   small win).
+4. **GPU (Adreno OpenCL)** — `llama-bench -ngl 99` against the
+   Adreno-tuned OpenCL kernels. Expect a big PP number, likely
+   middling TG.
+5. **GPU (Vulkan)** — `llama-bench -ngl 99`. Cross-vendor future-
+   proof path; our Adreno Vulkan driver has known correctness issues
+   (`docs/archive/adreno_debugging.md`), so this row may stay empty
+   or produce a "fast-but-wrong" warning row.
+
+Optional secondary cell if NPU Genie refuses to load the 2.42-compiled
+bundle under QAIRT 2.45: the ORT-QNN chained 4-partition probe
+fallback per `docs/qwen3_4b_baseline_methods.md` §Fallback.
+
+**Decision gate after the matrix.** The matrix tells us:
+
+- If **NPU PP ≫ CPU PP and GPU PP**, W1.b (8B target NPU prefill)
+  moves up the priority list and W1.a (GPU prefill) becomes the
+  cheap comparison point.
+- If **GPU PP ≫ NPU PP**, W1.a goes first and the 8B NPU prefill
+  compile investment (W1.b) is gated on W4 (heterogeneous async)
+  first justifying per-layer NPU/GPU hand-off.
+- If **all three PPs are within 2× of each other**, prefill is
+  not the bottleneck — W2 (NPU utilization + tree drafts) takes
+  priority over W1.
+- If **NPU TG ≫ CPU TG**, the Hexagon draft path is worth
+  investing in for Qwen3.5 / 4B-class drafts even at w4a16 PTQ
+  cost — Lever C's sub-gate result on 0.6B may not transfer up.
+
+Only after the matrix + decision gate do we reopen w4a16 Lever C
+(session 20's A.2 / A.1 compile ask) or commit to W9.b cloud
+pipeline work. Baseline first; targeted investment second.)
+
 Last updated: 2026-04-23 (session 20 — **Phase 5.5 Lever C REOPENED
 via w4a16_investigation_continued.md; Phase 5.5.1 A.2 + A.1 in
 flight.** Rationale: the Qualcomm Qwen3-4B side-quest
@@ -1034,6 +1133,15 @@ numbers we report don't carry an obvious waste. Levers (2-4) are
 explicitly out-of-scope for Phase 5 close; noted for Phase 6.
 
 ## Immediate next steps (next session)
+
+**Current live plan: see the session 21 block at the top of this
+file.** This section below is the Phase 5 close-out planning from
+session 11 and is preserved as historical record — some items
+(W4A16 lever, async overlap) have since been attempted and
+resolved, and the priority has shifted to the Qwen3-4B all-backends
+baseline matrix.
+
+---
 
 **Phase 5 is CLOSED.** 40-cell sweep banked, writeup in
 `docs/npu_results.md`. Headline: k=2, 7.98 t/s mean (8.44 best),

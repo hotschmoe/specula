@@ -5,13 +5,19 @@ doc, don't duplicate it here.
 
 ## Read first, in order
 
-1. **`docs/roadmap.md`** — the strategic plan. Workstreams, dependency
-   graph, success criteria, and what's next. Every non-trivial piece
-   of work should trace back to a line in here.
-2. **`docs/repo_hygiene.md`** — the rules for what to keep, archive,
+1. **`current_status.md`** (repo root) — **the detailed, session-level
+   source of truth** for what has been done, what's in flight, and
+   what's next. Living document, appended each session. Start here to
+   understand where we actually are right now.
+2. **`docs/roadmap.md`** — the **big-picture, deliberately vague**
+   long-horizon plan: workstreams, dependency graph, success criteria.
+   Points the direction but does not track session-level progress.
+   When the two disagree, `current_status.md` wins; update the
+   roadmap when a workstream actually lands.
+3. **`docs/repo_hygiene.md`** — the rules for what to keep, archive,
    or stage for deletion. Follow this every time a file is added or a
    phase closes so the repo stays navigable.
-3. **`README.md`** — human-facing project overview (hardware context,
+4. **`README.md`** — human-facing project overview (hardware context,
    phase history, directory layout).
 
 ## Current priority path (2026-04)
