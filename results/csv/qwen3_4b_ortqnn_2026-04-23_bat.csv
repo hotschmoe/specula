@@ -1,0 +1,2 @@
+backend,pp_tokens,tg_tokens,pp_wall_s,tg_wall_s,pp_tps,tg_tps,pp_median_ms,tg_median_ms,load_s,mwh_before,mwh_after,mwh_drop,mean_w,j_per_tok,power_state,tag,ctx_tier,note
+npu-ortqnn-ar1,256,128,10.417406199965626,5.262861399969552,24.574255345907957,24.321370120205057,40.02420001779683,40.67955000209622,11.86845299997367,61085,61001,84,23.4855,0.9590076164538478,bat,2026-04-23_bat,512,"AR1 prefill + AR1 decode; same binary as Genie, driven through ORT-QNN 1.24.4"

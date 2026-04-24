@@ -26,9 +26,10 @@ tie-breaker within ~20% of the leader.
 Commit: `e365e658f` (cpu, vulkan) / `fd6ae4ca1` (opencl) / `cf8b0dbda` (cpu-kleidiai),
 QAIRT 2.45.40, Genie 1.17.0, bundle compiled QAIRT 2.42. Context=2048.
 
-| backend | runtime / build | PP512 (t/s) | TG (t/s) | TG tokens | notes |
+| backend | runtime / build | PP (t/s) | TG (t/s) | TG tokens | notes |
 |---|---|---:|---:|---:|---|
-| **NPU (Genie)**    | genie-t2t-run (QAIRT 2.45)              | **1566.23** | 23.30 | 3582 | temp=0.8 sampler; ran until ctx-fill |
+| **NPU (Genie)**       | genie-t2t-run (QAIRT 2.45, AR128 prefill)   | **1566.23** (AR128) | 23.30 | 3582 | temp=0.8 sampler; ran until ctx-fill |
+| NPU (ORT-QNN chained) | our stack, chained 4-part, AR1-only         | 25.76 (AR1)        | **25.78** | 128 | same .bin as Genie; "rolling our own" ceiling |
 | CPU                | llama.cpp build-cpu (-t 8 ARM64 NEON)   | 188.30 | **39.50** | 128 | |
 | CPU + KleidiAI     | llama.cpp build-cpu-kleidiai (-t 8, i8mm)| 185.78 | 38.51 | 128 | -1.3% PP, -2.5% TG vs plain CPU |
 | GPU (OpenCL)       | llama.cpp build-opencl -ngl 99 (Adreno) | 367.38 | 22.92 | 128 | |
@@ -42,9 +43,10 @@ intervals throughout each backend's wall-clock window — stable within
 ±5% for all backends except Vulkan (which spent most of its wall time
 shader-compiling, not steady-state).
 
-| backend | PP512 (t/s) | TG (t/s) | mean W | J/tok | J / gen tok | wall (s) |
+| backend | PP (t/s) | TG (t/s) | mean W | J/tok | J / gen tok | wall (s) |
 |---|---:|---:|---:|---:|---:|---:|
-| **NPU (Genie)**    | 1598.50 | 23.33 | **13.1** | **0.537** | ~0.614 | 168.6 |
+| **NPU (Genie)**       | 1598.50 (AR128) | 23.33 | **13.1** | **0.537** | ~0.614 | 168.6 |
+| NPU (ORT-QNN chained) | 24.57 (AR1)     | 24.32 | 23.5     | 0.959    | —     | 15.7 |
 | CPU                | 191.30 | 38.52 | 25.5 | 0.899 | ~3.96 | 22.5 |
 | CPU + KleidiAI     | 180.43 | 37.33 | 32.1 | 1.182 | ~5.92 | 23.6 |
 | GPU (OpenCL)       | 355.79 | 18.58 | 44.6 | 2.690 | ~13.0 | 38.6 |
@@ -98,13 +100,47 @@ notes: Bundle uses temp=0.8 sampling. Gen runs until ctx-fill (4096 − 512 prom
        tolerates exit=1.
 ```
 
-### NPU (ORT-QNN) — not measured this round
+### NPU (ORT-QNN chained 4-partition, AR1 only)
 
-The bundle also loads via our ORT-QNN 1.24.4 sidecar (proven in the
-side-quest; `results/reference/qwen3_4b_genie_w4a16_probe.md`). Genie
-was the faster path to a full 4-part end-to-end number. ORT-QNN
-chained is the fallback for if/when our own spec-decode sidecar needs
-to drive the model — build it when W4/B20 lights up.
+```
+cmd:    PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/bench_qwen3_4b_ortqnn.py --power-state {ac,bat}
+runner: scripts/bench_qwen3_4b_ortqnn.py (reuses qualcomm_qwen3_4b_oracle.py machinery)
+binary: same models/qualcomm-qwen3-4b-ref/*.bin as Genie
+AC   : PP-AR1 25.76 t/s  TG-AR1 25.78 t/s  (256 prefill + 128 decode, 14.9 s wall)
+BAT  : PP-AR1 24.57 t/s  TG-AR1 24.32 t/s  (15.7 s wall, mean 23.5 W, 0.959 J/tok)
+notes: Chained 4 ORT-QNN sessions (one per partition) with host-side
+       KV stitch and argmax in Python. ctx=CL512, so prompt+gen capped
+       at 511 KV slots; we run 256+128=384 to stay under the cap.
+       AR1-only — prefill uses the same single-token graphs as decode,
+       which is why PP t/s ≈ TG t/s here. To match Genie's AR128
+       batched prefill (1598 t/s) we'd need wrapper ONNXs for the
+       prompt_ar128_* graphs and plumbing to feed [1, 128, ...]-shaped
+       hidden states through the chain. Deferred workstream; out of
+       scope for this baseline.
+```
+
+**The interesting comparison is TG + J/tok** (AR1, apples-to-apples vs Genie):
+
+| | TG AC t/s | TG BAT t/s | mean W | J/tok |
+|---|---:|---:|---:|---:|
+| Genie                | 23.30 | 23.33 | 13.1 | 0.537 |
+| ORT-QNN chained AR1  | 25.78 | 24.32 | **23.5** | **0.959** |
+| delta                | +11% / +4% | — | +79% | +79% |
+
+**Per-step NPU work is not the bottleneck.** Our chain is actually
+~4-11% *faster* per step than Genie's dispatch. But we burn 79% more
+power doing it — Python + per-step ONNX session dispatch + KV copy-and-
+stitch in numpy keeps the CPU busy between NPU graph calls, where
+Genie's C++ runtime sits idle and drops power rails.
+
+**Implication for rolling our own inference engine.** Matching Genie's
+throughput is tractable (we already match or beat it). Matching
+Genie's *efficiency* is the real engineering challenge — it means
+moving the scaffolding out of Python (C++ sidecar), keeping KV cache
+in-place across partitions (no host-side copy), and aggressive
+low-power idle between NPU calls. ~10 W headroom between our
+baseline and Genie's — that's the envelope our W4 async
+orchestration work needs to fit under.
 
 ### CPU (ARM64 NEON)
 
@@ -290,4 +326,10 @@ Layout follows `docs/repo_hygiene.md`:
 ## Update log
 
 - 2026-04-23: first full run. AC + battery matrices landed. Vulkan
-  PP broken; KleidiAI regression; NPU dominates J/tok.
+  PP broken; KleidiAI regression; NPU-via-Genie dominates J/tok.
+- 2026-04-23 (follow-up, same day): NPU-via-ORT-QNN (chained 4-part,
+  AR1) added. TG throughput matches/beats Genie (25.8 vs 23.3 t/s on
+  AC), but J/tok is 78% worse (0.96 vs 0.54) because Python + numpy
+  KV stitching between NPU calls burns ~10 W the C++ Genie runtime
+  doesn't. The 10 W gap is the engineering target for our
+  heterogeneous sidecar (W4).
