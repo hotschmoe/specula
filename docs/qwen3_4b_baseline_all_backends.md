@@ -258,19 +258,34 @@ finding of this run.
 
 ## Artifacts
 
-All under `results/qwen3_4b_baseline/`:
+Layout follows `docs/repo_hygiene.md`:
 
-- `bench_2026-04-23_ac.csv` / `.md` — AC results (initial run; OpenCL
-  JSON parse failed on this run and was redone below).
-- `bench_2026-04-23_ac_rerun.csv` / `.md` — OpenCL rerun after parser
-  fix (367.38 / 22.92 t/s; this is the canonical AC OpenCL number).
-- `bench_2026-04-23_bat.csv` / `.md` — battery results with J/tok.
-- `{npu-genie,cpu,cpu-kleidiai,gpu-opencl,gpu-vulkan}_2026-04-23_{ac,bat}.log`
-  — raw stdout/stderr per backend.
-- `pp512_prompt.txt` + `pp512_prompt_tokens.txt` — 512-token chat-
-  wrapped prompt, reproducible via `scripts/gen_pp512_prompt.py`.
-- Runner: `scripts/bench_qwen3_4b_all_backends.py` — rerun with
-  `--power-state {ac,bat} --tag <YYYY-MM-DD>_<state>`.
+- **Permanent** (committed, never delete):
+  - `results/csv/qwen3_4b_baseline_2026-04-23_ac.csv`
+  - `results/csv/qwen3_4b_baseline_2026-04-23_ac_rerun.csv` — OpenCL
+    rerun after the JSON parser fix landed (367.38 / 22.92 t/s is the
+    canonical AC OpenCL cell; supersedes the parse-failed row in the
+    main `_ac.csv`).
+  - `results/csv/qwen3_4b_baseline_2026-04-23_bat.csv`
+  - `results/qwen3_4b_baseline/pp512_prompt.txt` +
+    `pp512_prompt_tokens.txt` — pinned input; reproducible via
+    `scripts/gen_pp512_prompt.py`.
+  - This doc.
+- **Staged for deletion** (gitignored,
+  `marked_for_deletion/qwen3_4b_baseline_2026-04-23/`):
+  - Per-backend `.log` files (raw llama-bench JSON + Genie per-graph
+    timestamp traces) — findings already captured in CSV + this doc.
+  - Auto-generated `bench_2026-04-23_*.md` from the runner — redundant
+    with this consolidated doc.
+- **Runner**: `scripts/bench_qwen3_4b_all_backends.py`. Rerun with:
+  ```bash
+  .venv/Scripts/python.exe scripts/bench_qwen3_4b_all_backends.py \
+      --power-state {ac,bat} --tag YYYY-MM-DD_<state>
+  ```
+  CSV lands in `results/csv/` automatically; logs go to
+  `marked_for_deletion/qwen3_4b_baseline_<tag>/`. Markdown summary
+  table prints to stdout — paste it into this doc's Update log when
+  promoting a new run.
 
 ## Update log
 

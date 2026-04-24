@@ -321,25 +321,46 @@ One session ordering that keeps the numbers reproducible:
 
 ## Command → cell map
 
-| results cell                | command                                                     | parse from                  |
-|-----------------------------|-------------------------------------------------------------|-----------------------------|
-| NPU PP512                    | `genie-t2t-run --config genie_config.json --prompt_file pp512_prompt.txt --profile out.json` | prefill_tokens / prefill_time_sec |
-| NPU TG128                    | same                                                        | 128 / decode_time_sec       |
-| CPU PP512                    | `llama-bench -m Qwen3-4B-Q4_K_M.gguf -p 512 -n 128 -t 8`    | llama-bench `pp512` row     |
-| CPU TG128                    | same                                                        | llama-bench `tg128` row     |
-| CPU+KleidiAI PP512 / TG128   | same command, build-cpu-kleidiai binary                     | same                        |
-| GPU OpenCL PP512 / TG128     | `llama-bench ... -ngl 99` with build-opencl binary          | same                        |
-| GPU Vulkan PP512 / TG128     | `llama-bench ... -ngl 99` with build-vulkan binary          | same                        |
+In practice the driver does all of this — `scripts/bench_qwen3_4b_all_backends.py`
+orchestrates the five backends and emits one CSV row per backend plus a
+markdown summary table to stdout.
 
-## Close-out
+```bash
+# AC (plugged in, ~5 min)
+.venv/Scripts/python.exe scripts/bench_qwen3_4b_all_backends.py \
+    --power-state ac --tag YYYY-MM-DD_ac
 
-After the matrix is filled:
-1. Commit the results doc + raw logs under `results/qwen3_4b_baseline/`.
-2. Write the post-mortem block in the results doc (what was
-   surprising, what it implies for W1 / W2 / W4 / W9).
+# Battery (unplug first, ~15 min including broken Vulkan)
+.venv/Scripts/python.exe scripts/bench_qwen3_4b_all_backends.py \
+    --power-state bat --tag YYYY-MM-DD_bat
+```
+
+## Output layout (post-hygiene)
+
+Per `docs/repo_hygiene.md` the runner writes:
+
+- `results/csv/qwen3_4b_baseline_<tag>.csv` — permanent measurement
+  record. Commit.
+- `marked_for_deletion/qwen3_4b_baseline_<tag>/*.log` — raw
+  stdout/stderr per backend. Gitignored, stays local for the soak,
+  `rm -rf` once the numbers are in the doc and nothing is missing.
+- The markdown summary table prints to stdout; paste it into
+  `docs/qwen3_4b_baseline_all_backends.md` update log when promoting
+  the run.
+
+The prompt scaffolding at `results/qwen3_4b_baseline/pp512_prompt.txt`
++ `pp512_prompt_tokens.txt` is the pinned input (reproducible via
+`scripts/gen_pp512_prompt.py`) that every rerun uses.
+
+## Close-out for each rerun
+
+1. Commit the CSV under `results/csv/` + update log row in
+   `docs/qwen3_4b_baseline_all_backends.md`.
+2. Update the post-mortem block in the results doc only if numbers
+   shift materially (>10% on any headline metric) or a new backend
+   result changes a workstream priority.
 3. Link this doc + the results doc from `docs/roadmap.md` as the
-   concrete data behind the "category × backend matrix" deliverable
-   that workstream is trying to fill.
+   concrete data behind the "category × backend matrix" deliverable.
 
 ## Companion docs
 

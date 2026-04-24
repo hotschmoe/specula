@@ -260,6 +260,56 @@ spin a **narrow, lucebox-shaped** harness rather than a full runtime.
   decision point; lite harness is the lower-risk answer but not the
   only one.
 
+## Periodic backend-matrix baseline — rerun every 2-4 weeks
+
+Backend maturity on X2E is moving fast: llama.cpp commits land weekly,
+Adreno OpenCL drivers get point releases, QAIRT rolls new builds, and
+Genie SDK adds features. To keep the project anchored in current
+reality — not an outdated snapshot — we rerun a **fixed 5-backend
+Qwen3-4B matrix** (PP512 + TG + J/tok on AC and battery) on a regular
+cadence and commit the CSVs as a time-series.
+
+This is the canonical "how does the hardware actually perform *right
+now*" reference. Rerun it, commit the CSV, update the headline doc's
+update log. Even if no conclusions change, the time-series matters.
+
+### Rerun recipe
+
+```bash
+# AC first (~5 min)
+.venv/Scripts/python.exe scripts/bench_qwen3_4b_all_backends.py \
+    --power-state ac --tag YYYY-MM-DD_ac
+
+# Unplug, then battery (~15 min incl. Vulkan timeout)
+.venv/Scripts/python.exe scripts/bench_qwen3_4b_all_backends.py \
+    --power-state bat --tag YYYY-MM-DD_bat
+```
+
+### Files other devs should NOT archive or delete
+
+These are load-bearing for the recurring baseline — treat as
+permanent infrastructure, not as one-time Phase-5-era artifacts:
+
+- `scripts/bench_qwen3_4b_all_backends.py` — the runner.
+- `scripts/gen_pp512_prompt.py` — pinned-prompt regenerator.
+- `docs/qwen3_4b_baseline_methods.md` — the measurement recipe,
+  environment setup (QAIRT PATH, Genie DLL deps, llama.cpp preset
+  mapping), and invariants (warmup, context, power-state check).
+- `docs/qwen3_4b_baseline_all_backends.md` — the headline results
+  doc, cumulative update log across reruns.
+- `results/qwen3_4b_baseline/pp512_prompt.txt` +
+  `pp512_prompt_tokens.txt` — the exact 512-token prompt every
+  rerun uses. Regenerateable in principle, but pinned here for
+  reproducibility across tokenizer version shifts.
+- `results/csv/qwen3_4b_baseline_<tag>.csv` (all past runs) — the
+  time-series. Never delete; the point is longitudinal comparison.
+
+Phase-close hygiene sweeps (per `docs/repo_hygiene.md`) should
+stage the per-run `.log` files in
+`marked_for_deletion/qwen3_4b_baseline_<tag>/` — those are raw tool
+output, regenerated on each rerun — but leave everything above
+alone.
+
 ## Models and quants
 
 All from Qwen's official GGUF repos. Dense models only for Phase 1–2
