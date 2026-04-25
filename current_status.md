@@ -1,5 +1,186 @@
 # specula -- current status
 
+Last updated: 2026-04-25 (session 22 — **Qwen2.5-7B side-quest
+closes; concurrency-4 (agentic) matrix + NPU-concurrency cliff
+finding land. Per-parameter scaling story for 4B → 7B is in
+`docs/qwen2_5_7b_baseline_all_backends.md`.**
+
+**What this session set out to do.** Test how each compute island
+scales 4B → 7B on the same X2E silicon (the W1.b roadmap question
+"what does NPU prefill look like at the 8B target?"), and
+characterize agentic-workload (concurrency=4) throughput.
+
+**Side-quest model picked: Qwen2.5-7B-Instruct.** Closest arch
+neighbour to Qwen3-4B that AI Hub Workbench will compile end-to-end
+for X2 Elite. Llama-3.1-8B was the alternative but its license blocks
+Qualcomm from publishing a pre-quantized intermediate, forcing the
+heavy local FP16 export path — punted to Scenario A in the rewritten
+`docs/rent_cloud_compute.md`.
+
+**Pipeline learnings while building the bundle.** Qwen3-4B was a
+freebie (precompiled X2 Elite Genie bundle on Qualcomm's public CDN
+via `huggingface.co/qualcomm/Qwen3-4B/raw/main/release_assets.json`).
+Qwen2.5-7B is NOT precompiled — but `qai-hub-models` auto-downloads a
+pre-quantized AIMET ONNX intermediate (~30 GB) from the CDN, so the
+local FP16 materialization step (the OOM-prone 150 GB-RAM warning)
+got skipped. Workbench compile + link runs in ~20 min total. Three
+distinct conversion paths now documented in
+`docs/rent_cloud_compute.md` (precompiled bundle / pre-quantized
+intermediate / full FP16 → cloud Linux), with rental scenarios for
+the cases that need them.
+
+**This session landed:**
+
+- **`docs/qwen2_5_7b_baseline_all_backends.md`** — full matrix doc
+  mirroring the 4B doc, covering AC, BAT, AC↔BAT consistency, per-
+  backend detail, concurrency=4, NPU-concurrency experiment, and a
+  per-parameter scaling 4B → 7B post-mortem.
+- **`docs/rent_cloud_compute.md` rewritten** with a decision tree
+  + two scenarios (Scenario A high-RAM CPU box for FP16 export when
+  no pre-quant intermediate exists; Scenario B existing CUDA SEQ_MSE
+  / AdaScale work, scope unchanged but reframed as one of two).
+- **`scripts/bench_qwen2_5_7b_all_backends.py`** forked from the 4B
+  runner, parser fix to detect last-partition decode graph by regex
+  on `_N_of_N$` (4B hardcoded `_4_of_4`, missed 7B's `_6_of_6`).
+- **`scripts/bench_concurrency4_all_backends.py`** — drives
+  `llama-batched-bench -np 4 -npp 512 -ntg 128 -npl 4` on
+  CPU/KleidiAI/OpenCL for both 4B and 7B. NPU absent (Genie has no
+  concurrency knob).
+- **`scripts/bench_concurrency4_npu_ortqnn.py`** — NPU concurrency
+  via spawn-N-procs of `bench_qwen3_4b_ortqnn.py`. 4B only (the 7B
+  Workbench bundle ships only raw context binaries; no wrapper ONNXs
+  for chained ORT-QNN).
+- **`scripts/gen_pp512_prompt_qwen2_5_7b.py`** — prompt scaffolding
+  fork using the bundle's tokenizer (or upstream cache while the
+  bundle is in flight).
+- **Surgical fix to `scripts/bench_qwen3_4b_ortqnn.py`** — skip
+  `build_wrapper` when the file already exists. Avoids a write-race
+  when N processes spawn simultaneously against the same bundle.
+  Single-stream behavior unchanged.
+- **9 CSVs in `results/csv/`** covering Qwen2.5-7B AC, BAT, AC NPU
+  rerun (parser fix), conc=4 CPU/GPU on both models, and per-stream
+  conc=N NPU streams.
+- **Genie bundle scaffolding** (`models/qualcomm-qwen2_5-7b-ref/...`,
+  gitignored): hand-built `genie_config.json` for 6-partition
+  Qwen2.5 (n-vocab 152064, ctx-bins listing all 6 .bin files), the
+  4B's `htp_backend_ext_config.json` copied as-is (same SoC v81/88),
+  `tokenizer.json` from upstream HF.
+
+**Headline measurements.**
+
+Per-parameter scaling 4B → 7B (AC):
+
+| metric | 4B | 7B | Δ | takeaway |
+|---|---:|---:|---:|---|
+| NPU partition count | 4 | 6 | +50% | spec-decode handoff cost grows |
+| NPU bundle size | 3.1 GB | 4.7 GB | +52% | mostly w4a16 → w8a16 |
+| NPU PP | 1566 | 1219 | -22% | sublinear; **better than W1.b's 700-900 projection** |
+| NPU TG | 23.30 | 22.91 | -1.7% | dispatch-bound, not weight-BW-bound |
+| NPU J/gen-tok (BAT) | 0.615 | 0.967 | +57% | partition count is the cost driver |
+| CPU PP | 188 | 123 | -35% | proportional to params |
+| CPU TG | 39.5 | 24.2 | -39% | same |
+| OpenCL TG | 22.9 | 10.7 | -53% | catastrophic |
+
+Concurrency=4 (agentic), AC:
+
+| model | CPU agg TG | OpenCL agg TG | scaling vs N=1 |
+|---|---:|---:|---:|
+| 4B | **82.0 t/s** | 15.7 (worse than N=1) | CPU 2.08×, OCL 0.68× |
+| 7B | **62.8 t/s** | 13.2 | CPU **2.60×**, OCL 1.23× |
+
+NPU concurrency (Qwen3-4B via ORT-QNN spawn-N-procs):
+
+| N | per-stream TG | aggregate TG | scaling | status |
+|---:|---:|---:|---:|---|
+| 1 | 25.78 | 25.78 | 1.00× | baseline |
+| 2 | ~14.76 | ~29.5 | 1.14× | works |
+| 3 | ~10.45 | ~31.4 | **1.22×** | works (plateau) |
+| 4 | — | — | — | **unstable — QNN error 1003** |
+
+**The major non-obvious findings.**
+
+1. **NPU TG is dispatch-bound, not bandwidth-bound.** 4B and 7B
+   measure within 1.7% of each other on AR=1 decode (23.3 vs 22.9
+   t/s). Per-token cost grows with *partition count*, not with weight
+   bytes. Implication: rolling-our-own runtime's KV-stitch overhead
+   is the budget, not the matmul throughput.
+2. **NPU PP scaling is gentler than the roadmap predicted.**
+   1219 t/s @ 7B + sublinear scaling means 8B should land near 1000+
+   t/s, vs the W1.b projection of 700-900. The W1.b investment
+   remains the obvious play.
+3. **NPU is single-tenant or low-tenant on this stack.** Aggregate
+   decode plateaus at ~31 t/s regardless of concurrent stream count,
+   and 4 simultaneous ORT-QNN context groups (4 streams × 4
+   partitions = 16 contexts) hit a QNN HTP backend resource ceiling.
+   At concurrency=4, **CPU's 82 t/s aggregate beats NPU's plateau by
+   2.6× AND is stable.** For agentic workloads at N≥4, CPU owns the
+   compute.
+4. **KleidiAI flipped from regression at 4B to small win at 7B**
+   under single-stream AC (+5% TG). On battery and under concurrency
+   it goes back to a wash or slight loss vs plain CPU. Pick the build
+   per power state and concurrency mode, not by silicon.
+5. **OpenCL is dead at 7B+.** TG halved 4B→7B; concurrency=4 is
+   barely positive (1.23×) on a tiny absolute number (13 t/s). Mean
+   power ↑31% to 58 W. Don't include OpenCL in any 7B+ deployment.
+
+**Decision gate updates.**
+
+- **W1.b (NPU prefill of 8B target) stays high priority.**
+  Confirmed by sublinear PP scaling — actual 8B PP should beat the
+  roadmap's lower-bound projection.
+- **W4 (heterogeneous sidecar / async orchestration) just got a
+  clearer reason-to-exist.** The NPU-concurrency cliff at N=4 means
+  any "serve multiple agents from NPU" use case requires an
+  in-process multi-context runtime; spawn-N-procs hits the QNN
+  resource ceiling. The C++ sidecar with shared QnnContext + KV
+  scheduling is the only path to N>3 NPU concurrency.
+- **CPU promoted to the agentic-workload backend.** 2.6× TG scaling
+  at 7B / N=4 is the headline. Until W4 lands an NPU
+  multi-context runtime, agentic deployments target CPU.
+- **OpenCL retired from the W1.a candidate list at 7B+.** The 4B's
+  W1.a gate (>10× CPU prefill) was already not met; at 7B it's
+  worse. Don't compile-target OpenCL for prefill on 7B+ models.
+- **Llama-3.1-8B AI Hub run deferred.** Requires Scenario A cloud
+  Linux rental (~$2-4 one-time) per the rewritten
+  `docs/rent_cloud_compute.md`. Not blocking — the 4B/7B scaling
+  curve already lets us extrapolate the W1.b 8B answer with
+  confidence. Pick this up when next addressing W4/W1.b directly.
+
+**Genie 4× async (item #1 of the user's two NPU-concurrency
+questions) — feasibility-only, not run.** Spawning 4
+`genie-t2t-run.exe` processes works mechanically but is strictly
+worse than the ORT-QNN multi-process path:
+
+- No inter-process weight sharing (`weight_sharing_enabled` only
+  deduplicates within a process). Memory cost ~4× the bundle size.
+- No per-step timing visibility — Genie's CLI gives only aggregate
+  PP/TG.
+- HTP context-switch cost between independent Genie processes
+  vs the in-process multi-context model the W4 sidecar would use.
+
+Skipped because the ORT-QNN spawn-4-procs run already shows the
+NPU's hard ceiling.
+
+**Next session — pick one:**
+
+1. **Llama-3.1-8B baseline via Scenario A** (cloud Linux rental,
+   ~$2-4, ~3-5 hr): real 8B point on the same matrix, confirms (or
+   adjusts) the W1.b extrapolation. Roadmap-aligned.
+2. **W4 sidecar scoping** (no measurements; design + scope a C++
+   in-process multi-context QNN runtime that can serve N>3 streams
+   from one Hexagon engine). The NPU concurrency cliff just turned
+   this from "future" to "actually-blocking-NPU-deployment-ever".
+3. **Resume Phase 5.5 Lever C** (paused per session 21). The 4B/7B
+   matrix has already produced enough data to reprioritize, but
+   Lever C's w4a16 PTQ work is still a real cost-of-quality
+   investigation if we ever want to ship our own draft compiles.
+
+`current_status.md` size note: this entry brings the file to ~1800
+lines. Per `docs/repo_hygiene.md`, when this exceeds ~2000 lines or
+becomes hard to navigate, archive sessions ≤19 to
+`docs/archive/current_status_archive_TBD.md` and trim the head of
+this file. Not yet warranted.)
+
 Last updated: 2026-04-23 (session 21 — **Pivot to all-backends
 Qwen3-4B baseline matrix; repo cleanup + hygiene rules landed.**
 Phase 5.5 Lever C is paused (see session 20 below — session ended
