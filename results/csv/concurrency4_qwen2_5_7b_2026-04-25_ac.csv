@@ -1,0 +1,4 @@
+backend,n_parallel,n_prompt,n_gen,n_kv,t_pp_s,s_pp_tps,t_tg_s,s_tg_tps,t_total_s,s_total_tps,wall_s,model,power_state,ok,notes
+cpu,4,512,128,2560,19.573,104.64,8.155,62.78,27.728,92.32,30.37080000003334,qwen2_5_7b,ac,True,
+cpu-kleidiai,4,512,128,2560,20.552,99.65,8.224,62.25,28.777,88.96,31.447157499962486,qwen2_5_7b,ac,True,
+gpu-opencl,4,512,128,2560,10.431,196.35,38.854,13.18,49.285,51.94,60.69989359995816,qwen2_5_7b,ac,True,
