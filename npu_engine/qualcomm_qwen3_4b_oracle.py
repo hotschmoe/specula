@@ -13,7 +13,7 @@ KV-cache stitching.
 
 Run:
     PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe \
-        scripts/qualcomm_qwen3_4b_oracle.py --gen-steps 8
+        npu_engine/qualcomm_qwen3_4b_oracle.py --gen-steps 8
 
 Output:
     results/qualcomm_qwen3_4b_oracle.npz   - per-step logits + tokens
@@ -50,10 +50,15 @@ NUM_KV_HEADS = 8
 HEAD_DIM = 128
 HALF_HEAD_DIM = HEAD_DIM // 2
 CTX_LEN = 512
-PAST_LEN = CTX_LEN - 1  # 511
+PAST_LEN = CTX_LEN - 1  # 511 — buffer size for AR1 cl512
 HIDDEN_DIM = 2560
 VOCAB_SIZE = 151936
 ROPE_THETA = 1_000_000.0
+
+# AR128 prefill graphs share the same .bin files as AR1 but expect a
+# 128-wide query batch. The cl512 cap splits as past=384 + current=128.
+AR128_BATCH = 128
+PAST_LEN_AR128_CL512 = CTX_LEN - AR128_BATCH  # 384
 
 
 def quant_uint16(x_fp32: np.ndarray, scale: float, offset: int) -> np.ndarray:
@@ -75,6 +80,19 @@ def half_dim_rope_quantized(
     freqs = pos * inv_freq  # [64]
     cos_h = np.cos(freqs).reshape(1, 1, 1, HALF_HEAD_DIM)
     sin_h = np.sin(freqs).reshape(1, 1, 1, HALF_HEAD_DIM)
+    return quant_uint16(cos_h, scale, offset), quant_uint16(sin_h, scale, offset)
+
+
+def half_dim_rope_quantized_ar128(
+    p_base: int, scale: float, offset: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Half-dim cos/sin tables for an AR128 batch starting at p_base.
+    Shape [1, 1, 128, 64], uint16-quantized."""
+    inv_freq = 1.0 / (ROPE_THETA ** (np.arange(0, HEAD_DIM, 2, dtype=np.float32) / HEAD_DIM))
+    positions = np.arange(p_base, p_base + AR128_BATCH, dtype=np.float32).reshape(-1, 1)
+    freqs = positions * inv_freq.reshape(1, -1)  # [128, 64]
+    cos_h = np.cos(freqs).reshape(1, 1, AR128_BATCH, HALF_HEAD_DIM)
+    sin_h = np.sin(freqs).reshape(1, 1, AR128_BATCH, HALF_HEAD_DIM)
     return quant_uint16(cos_h, scale, offset), quant_uint16(sin_h, scale, offset)
 
 
@@ -103,11 +121,44 @@ def attention_mask_quantized(pos: int, scale: float, offset: int) -> np.ndarray:
     return mask
 
 
-def build_part_cfg(metadata: dict) -> dict:
-    """Pull AR1/CL512 IO specs from the bundle's metadata.yaml."""
+def attention_mask_quantized_ar128(p_base: int, scale: float, offset: int) -> np.ndarray:
+    """CL=512 mask for an AR128 batch at base absolute position p_base.
+
+    Layout: mask[..., 0..383] indexes past KV slots (chronological:
+    slot k holds K/V for absolute position k); mask[..., 384..511]
+    indexes the new 128 query positions (slot 384+j holds K/V for
+    absolute position p_base+j).
+
+    For query q (0..127, absolute position p_base+q):
+      - past slot k (0..383): attend iff k < p_base (valid past data
+        the previous calls wrote; later slots are zero-coded padding).
+      - current slot 384+j: attend iff j <= q (causal within batch).
+
+    q=65535 -> dequant=0 (attend); q=0 -> dequant ~ -100 (mask).
+    """
+    mask = np.zeros((1, 1, AR128_BATCH, CTX_LEN), dtype=np.uint16)
+    if p_base > 0:
+        # All queries attend to all valid past slots — past < p_base is
+        # always < p_base + q so causality is automatic.
+        mask[..., :p_base] = 65535
+    # Causal triangle for new tokens within the batch: row q attends
+    # to current slots 0..q.
+    causal = np.tri(AR128_BATCH, AR128_BATCH, k=0, dtype=np.uint16) * 65535
+    mask[0, 0, :, PAST_LEN_AR128_CL512:] = causal
+    _ = scale, offset
+    return mask
+
+
+def build_part_cfg(metadata: dict, ar: int = 1) -> dict:
+    """Pull cl512 IO specs from the bundle's metadata.yaml.
+
+    `ar=1` selects the single-token decode graphs (`ar1_cl512_*_of_4`);
+    `ar=128` selects the batched prefill graphs (`ar128_cl512_*_of_4`).
+    Both target the same .bin files — only the graph_name differs.
+    """
     cfg = {}
     for part in (1, 2, 3, 4):
-        comp_name = f"ar1_cl512_{part}_of_4"
+        comp_name = f"ar{ar}_cl512_{part}_of_4"
         comp = metadata["components"][comp_name]
         # The wrapper.onnx must use UNDERSCORED tensor names — that's how
         # the QAIRT compiler stored them in the binary. metadata.yaml has
@@ -119,7 +170,8 @@ def build_part_cfg(metadata: dict) -> dict:
             return name
         cfg[part] = {
             "bin": f"qwen3_4b_part_{part}_of_4.bin",
-            "graph_name": f"token_ar1_cl512_{part}_of_4",
+            "graph_name": f"token_ar{ar}_cl512_{part}_of_4",
+            "ar": ar,
             "inputs": [
                 {
                     "name": to_underscore(name),
@@ -229,15 +281,13 @@ class KVStore:
     scale/offset for every layer, so we can concat raw uint8 across
     steps without requantizing."""
 
-    def __init__(self, num_layers: int):
+    def __init__(self, num_layers: int, with_ar128_input: bool = False):
         self.num_layers = num_layers
-        # Stored as fixed-size [8, 1, 128, PAST_LEN] / [8, 1, PAST_LEN, 128]
-        # filled with the "zero" code for each layer's offset (q=128 since
-        # offset=-128 always for KV per Qualcomm). The model only attends
-        # to indices 0..pos-1 (mask blocks the rest), so the unused slots'
-        # values don't matter — but they must be at q=128 so dequant=0,
-        # which keeps any accidental contribution to attention scores at
-        # zero.
+        # Master cache: shape [8, 1, 128, PAST_LEN=511] / [8, 1, 511, 128]
+        # filled with the "zero" code (q=128 since offset=-128 for KV).
+        # Attended slots are mask-controlled; unused slots stay zero so
+        # any accidental contribution to attention is zero. This buffer
+        # is what the AR1 graphs read directly (zero-copy via IOBinding).
         self.keys: list[np.ndarray] = [
             np.full((NUM_KV_HEADS, 1, HEAD_DIM, PAST_LEN), 128, dtype=np.uint8)
             for _ in range(num_layers)
@@ -246,6 +296,25 @@ class KVStore:
             np.full((NUM_KV_HEADS, 1, PAST_LEN, HEAD_DIM), 128, dtype=np.uint8)
             for _ in range(num_layers)
         ]
+        # Optional AR128 input buffer at exactly the shape the AR128
+        # graphs expect ([8,1,128,384] / [8,1,384,128]). Eliminates the
+        # ~28 MB per-call ascontiguousarray copy that taking a 384-slot
+        # slice of the 511-slot master would cost. Kept in sync with
+        # the master via stitch_batch's dual-write.
+        self.has_ar128_in = with_ar128_input
+        if with_ar128_input:
+            self.keys_ar128_in: list[np.ndarray] = [
+                np.full(
+                    (NUM_KV_HEADS, 1, HEAD_DIM, PAST_LEN_AR128_CL512), 128, dtype=np.uint8
+                )
+                for _ in range(num_layers)
+            ]
+            self.values_ar128_in: list[np.ndarray] = [
+                np.full(
+                    (NUM_KV_HEADS, 1, PAST_LEN_AR128_CL512, HEAD_DIM), 128, dtype=np.uint8
+                )
+                for _ in range(num_layers)
+            ]
         self.t = 0  # next free slot index in [0, PAST_LEN)
 
     def stitch_step(self, k_outs: list[np.ndarray], v_outs: list[np.ndarray]) -> None:
@@ -256,7 +325,38 @@ class KVStore:
             self.keys[i][..., self.t : self.t + 1] = k_outs[i]
             # v_out shape: [8, 1, 1, 128]
             self.values[i][:, :, self.t : self.t + 1, :] = v_outs[i]
+        # Don't bother mirroring AR1 decode steps into the AR128 input
+        # buffer — once we're decoding AR1, AR128 prefill is done.
         self.t += 1
+
+    def stitch_batch(
+        self,
+        p_base: int,
+        k_outs: list[np.ndarray],
+        v_outs: list[np.ndarray],
+    ) -> None:
+        """Write a batch of AR128_BATCH new K/V slots starting at p_base.
+
+        Each k_out has shape [8, 1, 128, 128] (heads, batch, head_dim,
+        time_slots) and each v_out has shape [8, 1, 128, 128] (heads,
+        batch, time_slots, head_dim).
+
+        Mirrors into the AR128 input buffer when present so the next
+        AR128 call can read it zero-copy.
+        """
+        end = p_base + AR128_BATCH
+        if end > PAST_LEN:
+            raise RuntimeError(
+                f"AR128 batch ending at {end} exceeds buffer {PAST_LEN}"
+            )
+        mirror = self.has_ar128_in and end <= PAST_LEN_AR128_CL512
+        for i in range(self.num_layers):
+            self.keys[i][..., p_base:end] = k_outs[i]
+            self.values[i][:, :, p_base:end, :] = v_outs[i]
+            if mirror:
+                self.keys_ar128_in[i][..., p_base:end] = k_outs[i]
+                self.values_ar128_in[i][:, :, p_base:end, :] = v_outs[i]
+        self.t = end
 
 
 def main() -> int:

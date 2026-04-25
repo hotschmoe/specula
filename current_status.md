@@ -46,14 +46,14 @@ the cases that need them.
   `llama-batched-bench -np 4 -npp 512 -ntg 128 -npl 4` on
   CPU/KleidiAI/OpenCL for both 4B and 7B. NPU absent (Genie has no
   concurrency knob).
-- **`scripts/bench_concurrency4_npu_ortqnn.py`** — NPU concurrency
+- **`npu_engine/bench_concurrency4_npu_ortqnn.py`** — NPU concurrency
   via spawn-N-procs of `bench_qwen3_4b_ortqnn.py`. 4B only (the 7B
   Workbench bundle ships only raw context binaries; no wrapper ONNXs
   for chained ORT-QNN).
 - **`scripts/gen_pp512_prompt_qwen2_5_7b.py`** — prompt scaffolding
   fork using the bundle's tokenizer (or upstream cache while the
   bundle is in flight).
-- **Surgical fix to `scripts/bench_qwen3_4b_ortqnn.py`** — skip
+- **Surgical fix to `npu_engine/bench_qwen3_4b_ortqnn.py`** — skip
   `build_wrapper` when the file already exists. Avoids a write-race
   when N processes spawn simultaneously against the same bundle.
   Single-stream behavior unchanged.

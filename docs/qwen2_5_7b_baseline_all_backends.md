@@ -286,13 +286,13 @@ concurrency, plain CPU is the safer default.
 ### NPU concurrency experiment (ORT-QNN-chained, spawn-N-procs)
 
 We have an existing chained-4-partition ORT-QNN runtime for the 4B
-(`scripts/bench_qwen3_4b_ortqnn.py`) that drives the same .bin files
+(`npu_engine/bench_qwen3_4b_ortqnn.py`) that drives the same .bin files
 as Genie through ORT-QNN sessions in Python. Spawning N simultaneous
 instances of that script lets us probe what NPU concurrency would
 look like under our own runtime — independently of Genie, which has
 no concurrency knob.
 
-Driver: `scripts/bench_concurrency4_npu_ortqnn.py`. Each of N spawned
+Driver: `npu_engine/bench_concurrency4_npu_ortqnn.py`. Each of N spawned
 Python processes loads its own 4 ORT-QNN sessions; QNN HTP's
 `weight_sharing_enabled=true` lets the NPU share weight pages across
 contexts so memory cost stays bounded. Results assembled across two
@@ -505,7 +505,7 @@ Layout follows `docs/repo_hygiene.md`:
   - `scripts/bench_qwen2_5_7b_all_backends.py` — single-stream matrix.
   - `scripts/bench_concurrency4_all_backends.py` — concurrency=4 (CPU,
     KleidiAI, OpenCL).
-  - `scripts/bench_concurrency4_npu_ortqnn.py` — NPU concurrency=4 via
+  - `npu_engine/bench_concurrency4_npu_ortqnn.py` — NPU concurrency=4 via
     spawning 4 ORT-QNN-chained processes (4B only).
   - `scripts/gen_pp512_prompt_qwen2_5_7b.py` — prompt scaffolding.
 

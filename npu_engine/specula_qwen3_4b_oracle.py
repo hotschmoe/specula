@@ -12,7 +12,7 @@ Gate: cosine(first-decode-step logits, Qualcomm oracle first-decode
 logits) >= 0.95.
 
 Run:
-    .venv-ort21/Scripts/python.exe scripts/specula_qwen3_4b_oracle.py \\
+    .venv-ort21/Scripts/python.exe npu_engine/specula_qwen3_4b_oracle.py \\
         --gen-steps 8
 """
 

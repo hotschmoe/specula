@@ -20,7 +20,7 @@ qairt-dlc-to-json wrote.
 
 Run:
     PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe \\
-        scripts/compare_local_vs_qualcomm_oracle.py
+        npu_engine/compare_local_vs_qualcomm_oracle.py
 """
 
 from __future__ import annotations

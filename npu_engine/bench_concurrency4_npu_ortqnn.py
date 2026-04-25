@@ -1,6 +1,6 @@
 """Concurrency-4 NPU bench via ORT-QNN (Qwen3-4B chained 4-partition).
 
-Spawns 4 simultaneous subprocesses of scripts/bench_qwen3_4b_ortqnn.py,
+Spawns 4 simultaneous subprocesses of npu_engine/bench_qwen3_4b_ortqnn.py,
 each driving its own 4 ORT-QNN sessions on the X2 Elite Hexagon NPU.
 The QNN HTP backend's weight_sharing_enabled=true (per the bundle's
 htp_backend_ext_config.json) lets multiple contexts share the
@@ -17,7 +17,7 @@ generated as part of the existing oracle pipeline). The 7B Workbench
 bundle ships only raw context binaries.
 
 Usage:
-    .venv/Scripts/python.exe scripts/bench_concurrency4_npu_ortqnn.py \\
+    .venv/Scripts/python.exe npu_engine/bench_concurrency4_npu_ortqnn.py \\
         --power-state ac --tag 2026-04-25_ac
 
 Outputs:
@@ -54,7 +54,7 @@ def main() -> int:
     log_dir.mkdir(parents=True, exist_ok=True)
     CSV_DIR.mkdir(parents=True, exist_ok=True)
 
-    bench_script = REPO_ROOT / "scripts" / "bench_qwen3_4b_ortqnn.py"
+    bench_script = REPO_ROOT / "npu_engine" / "bench_qwen3_4b_ortqnn.py"
     venv_python = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
 
     print(f"=== concurrency-{N_PARALLEL} NPU ORT-QNN bench ===")

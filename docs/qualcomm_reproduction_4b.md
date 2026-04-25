@@ -91,7 +91,7 @@ steps via ORT-QNN on the X2E. Greedy argmax decoded:
 > gravity in"
 
 Coherent Qwen3 thinking-mode preamble. Latency ~39 ms/step (4 parts).
-Two non-obvious facts surfaced and embedded into `scripts/qualcomm_qwen3_4b_oracle.py`:
+Two non-obvious facts surfaced and embedded into `npu_engine/qualcomm_qwen3_4b_oracle.py`:
 
 1. **KV cache layout.** Left-aligned chronological with the current
    step's K/V at slot 511 of a 512-wide attention window. The mask
@@ -413,7 +413,7 @@ range ~ ±0.22 matches the DLC's calibrated range).
 
 ### 5g. End-to-end oracle — RED, calibration scale mismatch across seams
 
-`scripts/specula_qwen3_4b_oracle.py` drives all 4 HTP sessions with
+`npu_engine/specula_qwen3_4b_oracle.py` drives all 4 HTP sessions with
 prompt prefill + N generation steps. It dequant→requants uint16
 values across every seam (parts 2/3/4 input scale ≠ part N-1's
 output scale for the cross-part hidden). The full pipeline runs

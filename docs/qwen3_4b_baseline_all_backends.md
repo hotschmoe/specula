@@ -103,8 +103,8 @@ notes: Bundle uses temp=0.8 sampling. Gen runs until ctx-fill (4096 − 512 prom
 ### NPU (ORT-QNN chained 4-partition, AR1 only)
 
 ```
-cmd:    PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/bench_qwen3_4b_ortqnn.py --power-state {ac,bat}
-runner: scripts/bench_qwen3_4b_ortqnn.py (reuses qualcomm_qwen3_4b_oracle.py machinery)
+cmd:    PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe npu_engine/bench_qwen3_4b_ortqnn.py --power-state {ac,bat}
+runner: npu_engine/bench_qwen3_4b_ortqnn.py (reuses qualcomm_qwen3_4b_oracle.py machinery)
 binary: same models/qualcomm-qwen3-4b-ref/*.bin as Genie
 AC   : PP-AR1 25.76 t/s  TG-AR1 25.78 t/s  (256 prefill + 128 decode, 14.9 s wall)
 BAT  : PP-AR1 24.57 t/s  TG-AR1 24.32 t/s  (15.7 s wall, mean 23.5 W, 0.959 J/tok)

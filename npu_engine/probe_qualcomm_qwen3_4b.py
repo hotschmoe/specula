@@ -25,8 +25,8 @@ uint8 past_kv + uint16 attn_mask + uint16 cos/sin inputs) to validate
 the full quantized-IO surface.
 
 Run:
-    .venv\\Scripts\\python.exe scripts\\probe_qualcomm_qwen3_4b.py --part 1
-    .venv\\Scripts\\python.exe scripts\\probe_qualcomm_qwen3_4b.py --part 2
+    .venv\\Scripts\\python.exe npu_engine\\probe_qualcomm_qwen3_4b.py --part 1
+    .venv\\Scripts\\python.exe npu_engine\\probe_qualcomm_qwen3_4b.py --part 2
 """
 
 from __future__ import annotations

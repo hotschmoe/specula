@@ -273,7 +273,7 @@ default. If a CPU device also shows, pass `-dev <adreno_uuid>` or use
 If `genie-t2t-run` refuses to load the 2.42-compiled binaries on
 QAIRT 2.45 (or if we want to double-check the number against a
 non-Genie runtime), the existing
-`scripts/probe_qualcomm_qwen3_4b.py` already validated parts 1 and 2.
+`npu_engine/probe_qualcomm_qwen3_4b.py` already validated parts 1 and 2.
 Extend it to parts 3 and 4 (wrappers for all four already live next
 to the bundle — `oracle_part3.wrapper.onnx`, `oracle_part4.wrapper.onnx`)
 and chain them in Python:

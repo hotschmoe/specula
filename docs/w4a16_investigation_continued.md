@@ -583,7 +583,7 @@ deployment target lives.
 
 - Background: `docs/w4a16_investigation.md` (sessions 12-19)
 - Side-quest results: `results/qwen3_4b_genie_w4a16_probe.md` (do not
-  re-run; the probe script `scripts/probe_qualcomm_qwen3_4b.py` is
+  re-run; the probe script `npu_engine/probe_qualcomm_qwen3_4b.py` is
   there if needed)
 - Local QAIRT pipeline: `docs/phase5_local_qairt_compile.md`,
   `docs/phase5_local_qairt_compile_findings.md`
