@@ -303,6 +303,14 @@ def main() -> int:
                    help="# of prompt tokens for PP measurement (CL=512 caps prefill+decode at 511 KV slots total, so 256+128 fits)")
     p.add_argument("--tg-tokens", type=int, default=128)
     p.add_argument("--skip-power-check", action="store_true")
+    p.add_argument("--no-ar128", action="store_true",
+                   help="skip the AR128 prefill chain even if pp_tokens >= 128. "
+                        "Loading 4 AR1 + 4 AR128 sessions exhausts HTP context "
+                        "memory on this bundle (8th session fails with QNN 1002). "
+                        "A combined-wrapper rewrite (one session per .bin, both "
+                        "graphs reachable) is the long-term fix; until then this "
+                        "flag falls back to pure AR1 prefill so the IOBinding work "
+                        "can still be measured.")
     args = p.parse_args()
 
     online = sample_power_online()
@@ -343,10 +351,11 @@ def main() -> int:
     prompt_ids = tokenizer.encode(prompt_text).ids[: args.pp_tokens]
     print(f"prompt tokenized to {len(prompt_ids)} (target {args.pp_tokens})")
 
-    n_ar128_calls = len(prompt_ids) // AR128_BATCH
+    want_ar128 = (len(prompt_ids) >= AR128_BATCH) and not args.no_ar128
+    n_ar128_calls = (len(prompt_ids) // AR128_BATCH) if want_ar128 else 0
     n_ar1_tail = len(prompt_ids) - n_ar128_calls * AR128_BATCH
 
-    print("\n--- loading sessions: 4 AR1 + 4 AR128 ---")
+    print(f"\n--- loading sessions: 4 AR1{' + 4 AR128' if want_ar128 else ''} ---")
     sessions_ar1: dict[int, ort.InferenceSession] = {}
     sessions_ar128: dict[int, ort.InferenceSession] = {}
     t_load = time.perf_counter()
@@ -361,10 +370,27 @@ def main() -> int:
             build_wrapper(parts_cfg_ar1[part_idx], ar1_path)
         sessions_ar1[part_idx] = load_session(ar1_path)
 
-        ar128_path = BUNDLE_DIR / f"oracle_part{part_idx}_ar128.wrapper.onnx"
-        if not ar128_path.exists():
-            build_wrapper(parts_cfg_ar128[part_idx], ar128_path)
-        sessions_ar128[part_idx] = load_session(ar128_path)
+        if want_ar128:
+            ar128_path = BUNDLE_DIR / f"oracle_part{part_idx}_ar128.wrapper.onnx"
+            if not ar128_path.exists():
+                build_wrapper(parts_cfg_ar128[part_idx], ar128_path)
+            try:
+                sessions_ar128[part_idx] = load_session(ar128_path)
+            except Exception as e:
+                # 8 simultaneous sessions exceeds HTP context memory on
+                # this bundle (last partition is ~1 GB). Tear down any
+                # AR128 sessions loaded so far and fall back to AR1.
+                print(
+                    f"WARNING: AR128 part {part_idx} session failed to "
+                    f"load ({type(e).__name__}: {str(e)[:120]}...). "
+                    f"Falling back to AR1-only prefill. The combined-"
+                    f"wrapper fix (one session per .bin, both graphs) "
+                    f"is required to use AR128 here."
+                )
+                sessions_ar128.clear()
+                want_ar128 = False
+                n_ar128_calls = 0
+                n_ar1_tail = len(prompt_ids)
     load_s = time.perf_counter() - t_load
     print(f"loaded in {load_s:.1f} s")
 
@@ -385,14 +411,17 @@ def main() -> int:
         )
 
     scales_ar1 = _scales_tuple(parts_cfg_ar1)
-    scales_ar128 = _scales_tuple(parts_cfg_ar128)
+    scales_ar128 = _scales_tuple(parts_cfg_ar128) if want_ar128 else None
 
     # IOBinding setup: pre-allocate output buffers + bind once per
     # session. Inputs are bound per call via bind_cpu_input. Eliminates
     # the per-step output-tensor allocation that vanilla sess.run does.
-    print("\n--- building IOBinding for AR1 + AR128 chains ---")
+    print("\n--- building IOBinding " + ("for AR1 + AR128" if want_ar128 else "for AR1 only") + " ---")
     bindings_ar1, out_bufs_ar1 = make_bound_chain(sessions_ar1, parts_cfg_ar1)
-    bindings_ar128, out_bufs_ar128 = make_bound_chain(sessions_ar128, parts_cfg_ar128)
+    if want_ar128:
+        bindings_ar128, out_bufs_ar128 = make_bound_chain(sessions_ar128, parts_cfg_ar128)
+    else:
+        bindings_ar128, out_bufs_ar128 = {}, {}
 
     # Power sampling (battery only). 2 s interval for parity with the
     # llama.cpp bench driver.
@@ -406,11 +435,15 @@ def main() -> int:
     if sampler:
         sampler.start()
 
-    # Warmup: throw-away calls to absorb HMX context-init for both AR1
-    # and AR128 graphs. The first call in each AR mode pays a ~1s
-    # init cost that would otherwise dominate the short PP/TG windows.
-    print("\n--- warmup (1 AR1 + 1 AR128 step, discarded) ---")
-    if n_ar128_calls > 0:
+    # Warmup: throw-away calls to absorb HMX context-init. The first
+    # call in each AR mode pays a ~1s init cost that would otherwise
+    # dominate the short PP/TG windows.
+    print(
+        "\n--- warmup ("
+        + ("1 AR1 + 1 AR128" if want_ar128 else "1 AR1")
+        + " step, discarded) ---"
+    )
+    if want_ar128:
         warmup_batch = list(prompt_ids[:AR128_BATCH])
         _, _ = _step_ar128(
             sessions_ar128, bindings_ar128, out_bufs_ar128,
@@ -421,7 +454,7 @@ def main() -> int:
         sessions_ar1, bindings_ar1, out_bufs_ar1,
         kv, 0, prompt_ids[0], scales_ar1,
     )
-    kv = KVStore(NUM_LAYERS, with_ar128_input=(n_ar128_calls > 0))
+    kv = KVStore(NUM_LAYERS, with_ar128_input=want_ar128)
 
     # Prefill: AR128 batches first, then AR1 for any tail tokens.
     print(

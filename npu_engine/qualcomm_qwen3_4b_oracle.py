@@ -168,9 +168,19 @@ def build_part_cfg(metadata: dict, ar: int = 1) -> dict:
                 # /model/model/.../foo_output_0  ->  _model_model_..._foo_output_0
                 return name.replace("/", "_").replace(".", "_")
             return name
+        # Qualcomm names decode-mode graphs `token_ar1_cl{N}_*` and
+        # prefill-mode graphs `prompt_ar128_cl{N}_*`. Both graph names
+        # live in the SAME .bin (each .bin is multi-graph: 5 ctx tiers
+        # × 2 AR modes = 10 graphs). Multiple ORT sessions backed by
+        # the same .bin coexist as long as they all point at the same
+        # file path — QNN registers all graphs once and binds each
+        # session's EPContext to its named graph. Pointing different
+        # sessions at distinct paths (even byte-identical copies) trips
+        # QNN error 1002 because the runtime manager indexes by path.
+        prefix = "token" if ar == 1 else "prompt"
         cfg[part] = {
             "bin": f"qwen3_4b_part_{part}_of_4.bin",
-            "graph_name": f"token_ar{ar}_cl512_{part}_of_4",
+            "graph_name": f"{prefix}_ar{ar}_cl512_{part}_of_4",
             "ar": ar,
             "inputs": [
                 {

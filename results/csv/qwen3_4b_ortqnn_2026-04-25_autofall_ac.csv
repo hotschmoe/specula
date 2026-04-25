@@ -1,0 +1,2 @@
+backend,pp_mode,pp_tokens,pp_ar128_calls,pp_ar1_steps,tg_tokens,pp_wall_s,tg_wall_s,pp_tps,tg_tps,pp_median_ms,pp_ar128_median_ms,pp_ar1_median_ms,tg_median_ms,load_s,mwh_before,mwh_after,mwh_drop,mean_w,j_per_tok,power_state,tag,ctx_tier,note
+npu-ortqnn,ar1,256,0,256,128,9.601374899968505,4.819635699968785,26.66284804698541,26.558023877370857,37.663449998945,0.0,37.663449998945,38.510150043293834,28.56384109996725,,,,,,ac,2026-04-25_autofall_ac,512,AR128 prefill + AR1 decode + IOBinding; same binary as Genie via ORT-QNN 1.24.4
