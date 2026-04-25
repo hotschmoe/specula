@@ -1,0 +1,2 @@
+backend,pp_tps,tg_tps,pp_tokens,tg_tokens,pp_time_s,tg_time_s,wall_s,mwh_before,mwh_after,mwh_drop,mean_w,n_power_samples,j_per_tok,power_state,ok,notes
+npu-genie,1219.047619047619,22.90702812874832,512,254,0.42,11.0883,17.563343100016937,,,,,0,,ac,True,

@@ -1,0 +1,6 @@
+backend,pp_tps,tg_tps,pp_tokens,tg_tokens,pp_time_s,tg_time_s,wall_s,mwh_before,mwh_after,mwh_drop,mean_w,n_power_samples,j_per_tok,power_state,ok,notes
+npu-genie,1114.0121845082672,,512,0,0.45960000000000034,,19.35906609997619,,,,,0,,ac,False,"failed to parse timestamps (exit=0, tokens_done=0)"
+cpu,122.98278,24.174121,512,128,4.165097466,5.299093366,36.69739210000262,,,,,0,,ac,True,
+cpu-kleidiai,125.570094,25.419159,512,128,4.0785442,5.035572166,33.970221500028856,,,,,0,,ac,True,
+gpu-opencl,237.022247,10.7169,512,128,2.160447166,11.943754266,55.92533579992596,,,,,0,,ac,True,
+gpu-vulkan,,,0,0,,,600.4845222999575,,,,,0,,ac,False,"exception: TimeoutExpired: Command '['C:\\Users\\hotschmoe\\Documents\\GitHub\\specula\\llama.cpp\\build-vulkan\\bin\\llama-bench.exe', '-m', 'C:\\Users\\hotschmoe\\Documents\\GitHub\\specula\\models\\Qwen2.5-7B-Instruct-Q4_K_M.gguf', '-p', '512', '-n', '128', '-r', '3', '-o', 'json', '-ngl', '99']' timed out after 600 seconds"
