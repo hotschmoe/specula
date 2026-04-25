@@ -304,13 +304,12 @@ def main() -> int:
     p.add_argument("--tg-tokens", type=int, default=128)
     p.add_argument("--skip-power-check", action="store_true")
     p.add_argument("--no-ar128", action="store_true",
-                   help="skip the AR128 prefill chain even if pp_tokens >= 128. "
-                        "Loading 4 AR1 + 4 AR128 sessions exhausts HTP context "
-                        "memory on this bundle (8th session fails with QNN 1002). "
-                        "A combined-wrapper rewrite (one session per .bin, both "
-                        "graphs reachable) is the long-term fix; until then this "
-                        "flag falls back to pure AR1 prefill so the IOBinding work "
-                        "can still be measured.")
+                   help="skip the AR128 prefill chain. Used as an escape "
+                        "hatch / for AR1-only baseline measurements. "
+                        "Default: AR128 prefill is used in swap mode "
+                        "(load AR128 → prefill → tear down → load AR1 → "
+                        "decode). The swap is necessary because 4 AR1 + "
+                        "4 AR128 sessions exceed HTP context memory.")
     args = p.parse_args()
 
     online = sample_power_online()
@@ -355,45 +354,6 @@ def main() -> int:
     n_ar128_calls = (len(prompt_ids) // AR128_BATCH) if want_ar128 else 0
     n_ar1_tail = len(prompt_ids) - n_ar128_calls * AR128_BATCH
 
-    print(f"\n--- loading sessions: 4 AR1{' + 4 AR128' if want_ar128 else ''} ---")
-    sessions_ar1: dict[int, ort.InferenceSession] = {}
-    sessions_ar128: dict[int, ort.InferenceSession] = {}
-    t_load = time.perf_counter()
-    for part_idx in (1, 2, 3, 4):
-        # Skip rebuild if a wrapper already exists. build_wrapper is
-        # deterministic given the same parts_cfg from metadata.yaml, so
-        # an existing file is identical to what we'd produce. Skipping
-        # also avoids a write race when multiple bench processes are
-        # spawned concurrently against the same bundle.
-        ar1_path = BUNDLE_DIR / f"oracle_part{part_idx}.wrapper.onnx"
-        if not ar1_path.exists():
-            build_wrapper(parts_cfg_ar1[part_idx], ar1_path)
-        sessions_ar1[part_idx] = load_session(ar1_path)
-
-        if want_ar128:
-            ar128_path = BUNDLE_DIR / f"oracle_part{part_idx}_ar128.wrapper.onnx"
-            if not ar128_path.exists():
-                build_wrapper(parts_cfg_ar128[part_idx], ar128_path)
-            try:
-                sessions_ar128[part_idx] = load_session(ar128_path)
-            except Exception as e:
-                # 8 simultaneous sessions exceeds HTP context memory on
-                # this bundle (last partition is ~1 GB). Tear down any
-                # AR128 sessions loaded so far and fall back to AR1.
-                print(
-                    f"WARNING: AR128 part {part_idx} session failed to "
-                    f"load ({type(e).__name__}: {str(e)[:120]}...). "
-                    f"Falling back to AR1-only prefill. The combined-"
-                    f"wrapper fix (one session per .bin, both graphs) "
-                    f"is required to use AR128 here."
-                )
-                sessions_ar128.clear()
-                want_ar128 = False
-                n_ar128_calls = 0
-                n_ar1_tail = len(prompt_ids)
-    load_s = time.perf_counter() - t_load
-    print(f"loaded in {load_s:.1f} s")
-
     # Quant scales used every step. AR1 and AR128 happen to share the
     # same cos/sin/mask scales on this bundle, but extract from each
     # config explicitly so this script doesn't break if a future bundle
@@ -413,83 +373,136 @@ def main() -> int:
     scales_ar1 = _scales_tuple(parts_cfg_ar1)
     scales_ar128 = _scales_tuple(parts_cfg_ar128) if want_ar128 else None
 
-    # IOBinding setup: pre-allocate output buffers + bind once per
-    # session. Inputs are bound per call via bind_cpu_input. Eliminates
-    # the per-step output-tensor allocation that vanilla sess.run does.
-    print("\n--- building IOBinding " + ("for AR1 + AR128" if want_ar128 else "for AR1 only") + " ---")
-    bindings_ar1, out_bufs_ar1 = make_bound_chain(sessions_ar1, parts_cfg_ar1)
-    if want_ar128:
-        bindings_ar128, out_bufs_ar128 = make_bound_chain(sessions_ar128, parts_cfg_ar128)
-    else:
-        bindings_ar128, out_bufs_ar128 = {}, {}
+    def _load_chain(parts_cfg, suffix):
+        """Load 4 ORT-QNN sessions for the parts in parts_cfg. Wrappers
+        are built lazily and reused across runs."""
+        sessions = {}
+        for part_idx in (1, 2, 3, 4):
+            wrapper = BUNDLE_DIR / f"oracle_part{part_idx}{suffix}.wrapper.onnx"
+            if not wrapper.exists():
+                build_wrapper(parts_cfg[part_idx], wrapper)
+            sessions[part_idx] = load_session(wrapper)
+        return sessions
 
-    # Power sampling (battery only). 2 s interval for parity with the
-    # llama.cpp bench driver.
+    # Power sampling (battery only). Sample over the full run including
+    # session swaps so mWh-based energy reflects real-world cost.
     sampler = PowerSampler(interval_s=2.0) if args.power_state == "bat" else None
     mwh_before = sample_battery_mwh() if args.power_state == "bat" else None
-
-    # AR128 path needs the matching-shape KV input buffer; the AR1 path
-    # reads kv.keys / kv.values directly.
-    kv = KVStore(NUM_LAYERS, with_ar128_input=(n_ar128_calls > 0))
-
     if sampler:
         sampler.start()
 
-    # Warmup: throw-away calls to absorb HMX context-init. The first
-    # call in each AR mode pays a ~1s init cost that would otherwise
-    # dominate the short PP/TG windows.
-    print(
-        "\n--- warmup ("
-        + ("1 AR1 + 1 AR128" if want_ar128 else "1 AR1")
-        + " step, discarded) ---"
-    )
+    # AR128 path needs the matching-shape KV input buffer; the AR1 path
+    # reads kv.keys / kv.values directly.
+    kv = KVStore(NUM_LAYERS, with_ar128_input=want_ar128)
+
+    last_logits = None
+    pp_ar128_latencies_ms: list[float] = []
+    pp_ar1_latencies_ms: list[float] = []
+    ar128_load_s = ar1_load_s = ar128_teardown_s = 0.0
+
+    # ============================================================
+    # Phase A: AR128 prefill (in swap mode — only AR128 sessions live)
+    # ============================================================
     if want_ar128:
+        print(f"\n--- phase A: load 4 AR128 sessions for prefill ---")
+        t = time.perf_counter()
+        sessions_ar128 = _load_chain(parts_cfg_ar128, suffix="_ar128")
+        bindings_ar128, out_bufs_ar128 = make_bound_chain(
+            sessions_ar128, parts_cfg_ar128
+        )
+        ar128_load_s = time.perf_counter() - t
+        print(f"  AR128 load: {ar128_load_s:.1f} s")
+
+        # warmup AR128 — first call has ~1 s HMX init cost
+        print("  warmup (1 AR128 step, discarded)")
         warmup_batch = list(prompt_ids[:AR128_BATCH])
         _, _ = _step_ar128(
             sessions_ar128, bindings_ar128, out_bufs_ar128,
             kv, 0, warmup_batch, scales_ar128,
         )
         kv = KVStore(NUM_LAYERS, with_ar128_input=True)
-    _, _ = _step(
-        sessions_ar1, bindings_ar1, out_bufs_ar1,
-        kv, 0, prompt_ids[0], scales_ar1,
-    )
-    kv = KVStore(NUM_LAYERS, with_ar128_input=want_ar128)
 
-    # Prefill: AR128 batches first, then AR1 for any tail tokens.
-    print(
-        f"\n--- prefill: {n_ar128_calls} AR128 calls"
-        + (f" + {n_ar1_tail} AR1 steps" if n_ar1_tail else "")
-        + f" = {len(prompt_ids)} tokens ---"
-    )
-    t_pp_start = time.perf_counter()
-    pp_ar128_latencies_ms: list[float] = []
-    pp_ar1_latencies_ms: list[float] = []
-    last_logits = None
-    p = 0
-    for call_idx in range(n_ar128_calls):
-        batch = list(prompt_ids[p : p + AR128_BATCH])
-        last_logits, ms = _step_ar128(
-            sessions_ar128, bindings_ar128, out_bufs_ar128,
-            kv, p, batch, scales_ar128,
-        )
-        pp_ar128_latencies_ms.append(ms)
-        print(
-            f"  pp ar128 call {call_idx} (positions {p}..{p + AR128_BATCH - 1})  "
-            f"{ms:.1f} ms  ({AR128_BATCH * 1000 / ms:.1f} t/s in-call)"
-        )
-        p += AR128_BATCH
-    while p < len(prompt_ids):
-        last_logits, ms = _step(
-            sessions_ar1, bindings_ar1, out_bufs_ar1,
-            kv, p, prompt_ids[p], scales_ar1,
-        )
-        pp_ar1_latencies_ms.append(ms)
-        if (p - n_ar128_calls * AR128_BATCH) % 32 == 0 or p == len(prompt_ids) - 1:
-            print(f"  pp ar1 step {p}  {ms:.1f} ms")
-        p += 1
-    pp_wall_s = time.perf_counter() - t_pp_start
-    pp_tps = len(prompt_ids) / pp_wall_s
+        print(f"  prefill: {n_ar128_calls} AR128 calls = "
+              f"{n_ar128_calls * AR128_BATCH} tokens")
+        t_pp_ar128 = time.perf_counter()
+        p = 0
+        for call_idx in range(n_ar128_calls):
+            batch = list(prompt_ids[p : p + AR128_BATCH])
+            last_logits, ms = _step_ar128(
+                sessions_ar128, bindings_ar128, out_bufs_ar128,
+                kv, p, batch, scales_ar128,
+            )
+            pp_ar128_latencies_ms.append(ms)
+            print(
+                f"    ar128 call {call_idx} (positions {p}..{p + AR128_BATCH - 1})  "
+                f"{ms:.1f} ms  ({AR128_BATCH * 1000 / ms:.0f} t/s in-call)"
+            )
+            p += AR128_BATCH
+        pp_ar128_wall_s = time.perf_counter() - t_pp_ar128
+
+        print(f"\n--- phase A.5: tear down AR128 sessions ---")
+        t = time.perf_counter()
+        # Drop all references → InferenceSession.__del__ releases the
+        # QNN context. gc.collect() forces immediate cleanup so the
+        # AR1 load below has the freed HTP memory available.
+        del sessions_ar128, bindings_ar128, out_bufs_ar128
+        import gc
+        gc.collect()
+        ar128_teardown_s = time.perf_counter() - t
+        print(f"  teardown: {ar128_teardown_s:.1f} s")
+    else:
+        pp_ar128_wall_s = 0.0
+
+    # ============================================================
+    # Phase B: AR1 sessions (used for AR1 tail prefill if any, plus decode)
+    # ============================================================
+    print(f"\n--- phase B: load 4 AR1 sessions for "
+          f"{'tail prefill + decode' if n_ar1_tail else 'decode'} ---")
+    t = time.perf_counter()
+    sessions_ar1 = _load_chain(parts_cfg_ar1, suffix="")
+    bindings_ar1, out_bufs_ar1 = make_bound_chain(sessions_ar1, parts_cfg_ar1)
+    ar1_load_s = time.perf_counter() - t
+    print(f"  AR1 load: {ar1_load_s:.1f} s")
+
+    # warmup AR1 (only meaningful if we'll do many AR1 calls — but cheap
+    # insurance so we always do it)
+    print("  warmup (1 AR1 step, discarded)")
+    if not want_ar128:
+        # No prior prefill yet; warm up against a fresh KV (use prompt[0]).
+        kv_w = KVStore(NUM_LAYERS)
+        _, _ = _step(sessions_ar1, bindings_ar1, out_bufs_ar1, kv_w, 0, prompt_ids[0], scales_ar1)
+    else:
+        # KV is already at position n_ar128_calls*128; warm up at the next
+        # slot using the prefill-predicted next token, then DISCARD that
+        # write by snapshotting the KV state. Simpler: just warm with a
+        # 0 token at a throwaway position past the cache, restoring kv.t.
+        # Even simpler: skip — the per-call AR1 latency variance is small
+        # (~38ms median) and the first real step's overhead is bounded.
+        # We accept up to ~1 s skew on the first AR1 step.
+        pass
+
+    # AR1 tail prefill (when pp_tokens isn't a multiple of 128)
+    pp_ar1_wall_s = 0.0
+    if want_ar128:
+        p = n_ar128_calls * AR128_BATCH
+    else:
+        p = 0
+    if not want_ar128 or n_ar1_tail > 0:
+        print(f"  AR1 prefill: {len(prompt_ids) - p} steps")
+        t_pp_ar1 = time.perf_counter()
+        while p < len(prompt_ids):
+            last_logits, ms = _step(
+                sessions_ar1, bindings_ar1, out_bufs_ar1,
+                kv, p, prompt_ids[p], scales_ar1,
+            )
+            pp_ar1_latencies_ms.append(ms)
+            if p % 32 == 0 or p == len(prompt_ids) - 1:
+                print(f"    ar1 step {p}  {ms:.1f} ms")
+            p += 1
+        pp_ar1_wall_s = time.perf_counter() - t_pp_ar1
+
+    pp_wall_s = pp_ar128_wall_s + pp_ar1_wall_s
+    pp_tps = len(prompt_ids) / pp_wall_s if pp_wall_s > 0 else 0.0
     pp_ar128_median_ms = (
         float(np.median(pp_ar128_latencies_ms)) if pp_ar128_latencies_ms else 0.0
     )
@@ -498,12 +511,12 @@ def main() -> int:
     )
     pp_median_ms = pp_ar128_median_ms if pp_ar128_latencies_ms else pp_ar1_median_ms
     print(
-        f"  PP total {pp_wall_s:.2f} s  -> {pp_tps:.2f} t/s  "
+        f"\n  PP total compute {pp_wall_s:.2f} s  -> {pp_tps:.2f} t/s  "
         f"(ar128 median {pp_ar128_median_ms:.1f} ms; ar1-tail median {pp_ar1_median_ms:.1f} ms)"
     )
 
-    # Decode: generate `tg_tokens` with greedy argmax from last logits.
-    print(f"\n--- decode: {args.tg_tokens} AR1 steps (greedy) ---")
+    # Decode: generate tg_tokens with greedy argmax from last logits.
+    print(f"\n--- phase C: decode {args.tg_tokens} AR1 steps (greedy) ---")
     t_tg_start = time.perf_counter()
     tg_latencies_ms: list[float] = []
     next_token = int(np.argmax(last_logits))
@@ -530,17 +543,23 @@ def main() -> int:
     print(f"\n  TG total {tg_wall_s:.2f} s  -> {tg_tps:.2f} t/s  (median step {tg_median_ms:.1f} ms)")
 
     total_tokens = len(prompt_ids) + args.tg_tokens
-    total_wall_s = pp_wall_s + tg_wall_s
+    swap_wall_s = ar128_load_s + ar128_teardown_s + ar1_load_s
+    compute_wall_s = pp_wall_s + tg_wall_s
+    total_wall_s = compute_wall_s + swap_wall_s
     mean_w = sampler.mean_watts if sampler else None
     mwh_drop = None
     if mwh_before is not None and mwh_after is not None:
         mwh_drop = mwh_before - mwh_after
-    energy_j = mean_w * total_wall_s if mean_w is not None else (mwh_drop * 3.6 if mwh_drop else None)
+    # J/tok against pure compute (excludes session swaps) so the number
+    # is comparable to Genie's run that doesn't pay swap cost.
+    energy_j = mean_w * compute_wall_s if mean_w is not None else (mwh_drop * 3.6 if mwh_drop else None)
     j_per_tok = energy_j / total_tokens if energy_j is not None and total_tokens > 0 else None
 
-    print(f"\n  mean W         : {mean_w}")
-    print(f"  mWh drop       : {mwh_drop}")
-    print(f"  J/tok (total)  : {j_per_tok}")
+    print(f"\n  mean W              : {mean_w}")
+    print(f"  mWh drop            : {mwh_drop}")
+    print(f"  J/tok (compute-only): {j_per_tok}")
+    print(f"  swap overhead       : {swap_wall_s:.1f} s  "
+          f"(AR128 load {ar128_load_s:.1f} + teardown {ar128_teardown_s:.1f} + AR1 load {ar1_load_s:.1f})")
 
     pp_mode = (
         "ar128+ar1tail" if n_ar128_calls and n_ar1_tail
@@ -555,14 +574,21 @@ def main() -> int:
         pp_ar1_steps=n_ar1_tail,
         tg_tokens=args.tg_tokens,
         pp_wall_s=pp_wall_s,
+        pp_ar128_wall_s=pp_ar128_wall_s,
+        pp_ar1_wall_s=pp_ar1_wall_s,
         tg_wall_s=tg_wall_s,
+        compute_wall_s=compute_wall_s,
+        swap_wall_s=swap_wall_s,
+        total_wall_s=total_wall_s,
+        ar128_load_s=ar128_load_s,
+        ar128_teardown_s=ar128_teardown_s,
+        ar1_load_s=ar1_load_s,
         pp_tps=pp_tps,
         tg_tps=tg_tps,
         pp_median_ms=pp_median_ms,
         pp_ar128_median_ms=pp_ar128_median_ms,
         pp_ar1_median_ms=pp_ar1_median_ms,
         tg_median_ms=tg_median_ms,
-        load_s=load_s,
         mwh_before=mwh_before,
         mwh_after=mwh_after,
         mwh_drop=mwh_drop,
@@ -571,7 +597,7 @@ def main() -> int:
         power_state=args.power_state,
         tag=tag,
         ctx_tier=CTX_LEN,
-        note="AR128 prefill + AR1 decode + IOBinding; same binary as Genie via ORT-QNN 1.24.4",
+        note="AR128 swap-mode prefill + AR1 decode + IOBinding; ORT-QNN 1.24.4",
     )
 
     csv_path = CSV_DIR / f"qwen3_4b_ortqnn_{tag}.csv"
@@ -581,9 +607,10 @@ def main() -> int:
         w.writerow(row)
 
     print(f"\n=== Summary ===")
-    print(f"  PP     : {pp_tps:.2f} t/s  ({pp_mode}; Genie AR128 baseline is ~1598 t/s)")
+    print(f"  PP     : {pp_tps:.2f} t/s  ({pp_mode}; Genie AR128 baseline ~1598 t/s)")
     print(f"  TG-AR1 : {tg_tps:.2f} t/s  (Genie AR1 baseline ~23.3 t/s on same binary)")
     print(f"  J/tok  : {j_per_tok}")
+    print(f"  total wall (incl swap): {total_wall_s:.1f} s   compute-only: {compute_wall_s:.1f} s")
     print(f"  csv    : {csv_path}")
     return 0
 
