@@ -101,13 +101,26 @@ HIDDEN_FROM_PART1 = "_model_model_embed_tokens_Gather_output_0"
 HIDDEN_FROM_PART2 = "_model_model_layers_11_Add_1_output_0"
 HIDDEN_FROM_PART3 = "_model_model_layers_23_Add_1_output_0"
 
-
-def layer_input_name(part_idx: int, kv: str, layer: int) -> str:
+# Parts 2/3/4 share the same per-layer KV input/output naming scheme.
+# Layer indices are global (0..35) regardless of which part owns them.
+def layer_input_name(kv: str, layer: int) -> str:
     return f"past_{kv}_{layer}_in"
 
 
-def layer_output_name(part_idx: int, kv: str, layer: int) -> str:
+def layer_output_name(kv: str, layer: int) -> str:
     return f"past_{kv}_{layer}_out"
+
+
+# Layer ranges owned by each transformer partition.
+PART_LAYER_RANGES = {
+    2: (0, LAYERS_PER_PART),
+    3: (LAYERS_PER_PART, 2 * LAYERS_PER_PART),
+    4: (2 * LAYERS_PER_PART, NUM_LAYERS),
+}
+# Each transformer part takes its hidden state from the previous part's
+# output and (for parts 2/3) emits a hidden state for the next.
+PART_HIDDEN_IN = {2: HIDDEN_FROM_PART1, 3: HIDDEN_FROM_PART2, 4: HIDDEN_FROM_PART3}
+PART_HIDDEN_OUT = {2: HIDDEN_FROM_PART2, 3: HIDDEN_FROM_PART3}
 
 
 _DTYPE_NUMPY = {
@@ -150,14 +163,46 @@ def make_bound_chain(sessions, parts_cfg):
     return bindings, out_bufs
 
 
+def _run_transformer_part(
+    session, binding, out_bufs_part, *,
+    part_idx, hidden_in, mask_q, cos_q, sin_q,
+    kv_keys_src, kv_values_src,
+):
+    """Bind inputs for one transformer partition (2/3/4) and run.
+
+    Returns (new_keys, new_vals) — references into the part's pre-bound
+    output buffers (must be consumed/copied before the next call to the
+    same session reuses them).
+
+    `kv_keys_src` / `kv_values_src` are full 36-entry per-layer lists;
+    only the slice owned by `part_idx` is read, but passing the whole
+    list keeps the AR1 vs AR128 swap (kv.keys vs kv.keys_ar128_in) at
+    the call site clear.
+    """
+    layer_lo, layer_hi = PART_LAYER_RANGES[part_idx]
+    binding.clear_binding_inputs()
+    binding.bind_cpu_input(PART_HIDDEN_IN[part_idx], hidden_in)
+    binding.bind_cpu_input("attention_mask", mask_q)
+    binding.bind_cpu_input("position_ids_cos", cos_q)
+    binding.bind_cpu_input("position_ids_sin", sin_q)
+    for layer in range(layer_lo, layer_hi):
+        binding.bind_cpu_input(layer_input_name("key", layer), kv_keys_src[layer])
+        binding.bind_cpu_input(layer_input_name("value", layer), kv_values_src[layer])
+    session.run_with_iobinding(binding)
+    new_keys = [out_bufs_part[layer_output_name("key", layer)]
+                for layer in range(layer_lo, layer_hi)]
+    new_vals = [out_bufs_part[layer_output_name("value", layer)]
+                for layer in range(layer_lo, layer_hi)]
+    return new_keys, new_vals
+
+
 def _step(sessions, bindings, out_bufs, kv, position, token_in, scales):
     """One AR1 forward pass through all 4 partitions at `position` with
     `token_in`. Uses pre-bound IOBinding for outputs; inputs use
     bind_cpu_input each call. Stitches KV. Returns (logits_fp32, wall_ms).
 
-    Inputs are bound from numpy buffers. KV inputs come straight from
-    the persistent KVStore master buffers (zero-copy on read since the
-    AR1 graph wants exactly the [8,1,128,511] / [8,1,511,128] shape).
+    KV inputs come straight from the persistent KVStore master buffers
+    (zero-copy on read — the AR1 graph wants exactly the master's shape).
     Outputs land in out_bufs[part]; the stitch step COPIES from there
     into the persistent KV before the next call reuses out_bufs.
     """
@@ -167,69 +212,31 @@ def _step(sessions, bindings, out_bufs, kv, position, token_in, scales):
 
     t0 = time.perf_counter()
 
-    # part 1 — single int32 input, embedding output
-    b = bindings[1]
-    b.clear_binding_inputs()
-    b.bind_cpu_input("input_ids", np.array([[token_in]], dtype=np.int32))
-    sessions[1].run_with_iobinding(b)
-    emb_out = out_bufs[1][HIDDEN_FROM_PART1]
+    # part 1 — input_ids -> embedding
+    b1 = bindings[1]
+    b1.clear_binding_inputs()
+    b1.bind_cpu_input("input_ids", np.array([[token_in]], dtype=np.int32))
+    sessions[1].run_with_iobinding(b1)
+    hidden = out_bufs[1][HIDDEN_FROM_PART1]
 
-    # part 2 — layers 0..11
-    b = bindings[2]
-    b.clear_binding_inputs()
-    b.bind_cpu_input(HIDDEN_FROM_PART1, emb_out)
-    b.bind_cpu_input("attention_mask", mask_q)
-    b.bind_cpu_input("position_ids_cos", cos_q)
-    b.bind_cpu_input("position_ids_sin", sin_q)
-    for layer in range(0, LAYERS_PER_PART):
-        b.bind_cpu_input(layer_input_name(2, "key", layer), kv.keys[layer])
-        b.bind_cpu_input(layer_input_name(2, "value", layer), kv.values[layer])
-    sessions[2].run_with_iobinding(b)
-    hidden_after_p2 = out_bufs[2][HIDDEN_FROM_PART2]
-    new_keys_p2 = [out_bufs[2][layer_output_name(2, "key", layer)]
-                   for layer in range(0, LAYERS_PER_PART)]
-    new_vals_p2 = [out_bufs[2][layer_output_name(2, "value", layer)]
-                   for layer in range(0, LAYERS_PER_PART)]
-
-    # part 3 — layers 12..23
-    b = bindings[3]
-    b.clear_binding_inputs()
-    b.bind_cpu_input(HIDDEN_FROM_PART2, hidden_after_p2)
-    b.bind_cpu_input("attention_mask", mask_q)
-    b.bind_cpu_input("position_ids_cos", cos_q)
-    b.bind_cpu_input("position_ids_sin", sin_q)
-    for layer in range(LAYERS_PER_PART, 2 * LAYERS_PER_PART):
-        b.bind_cpu_input(layer_input_name(3, "key", layer), kv.keys[layer])
-        b.bind_cpu_input(layer_input_name(3, "value", layer), kv.values[layer])
-    sessions[3].run_with_iobinding(b)
-    hidden_after_p3 = out_bufs[3][HIDDEN_FROM_PART3]
-    new_keys_p3 = [out_bufs[3][layer_output_name(3, "key", layer)]
-                   for layer in range(LAYERS_PER_PART, 2 * LAYERS_PER_PART)]
-    new_vals_p3 = [out_bufs[3][layer_output_name(3, "value", layer)]
-                   for layer in range(LAYERS_PER_PART, 2 * LAYERS_PER_PART)]
-
-    # part 4 — layers 24..35 + lm_head
-    b = bindings[4]
-    b.clear_binding_inputs()
-    b.bind_cpu_input(HIDDEN_FROM_PART3, hidden_after_p3)
-    b.bind_cpu_input("attention_mask", mask_q)
-    b.bind_cpu_input("position_ids_cos", cos_q)
-    b.bind_cpu_input("position_ids_sin", sin_q)
-    for layer in range(2 * LAYERS_PER_PART, NUM_LAYERS):
-        b.bind_cpu_input(layer_input_name(4, "key", layer), kv.keys[layer])
-        b.bind_cpu_input(layer_input_name(4, "value", layer), kv.values[layer])
-    sessions[4].run_with_iobinding(b)
+    # parts 2/3/4 — transformer layers (and lm_head on part 4)
+    new_keys: list[np.ndarray] = []
+    new_vals: list[np.ndarray] = []
+    for part_idx in (2, 3, 4):
+        keys_p, vals_p = _run_transformer_part(
+            sessions[part_idx], bindings[part_idx], out_bufs[part_idx],
+            part_idx=part_idx, hidden_in=hidden,
+            mask_q=mask_q, cos_q=cos_q, sin_q=sin_q,
+            kv_keys_src=kv.keys, kv_values_src=kv.values,
+        )
+        new_keys.extend(keys_p)
+        new_vals.extend(vals_p)
+        if part_idx in PART_HIDDEN_OUT:
+            hidden = out_bufs[part_idx][PART_HIDDEN_OUT[part_idx]]
     logits_uint16 = out_bufs[4]["logits"]
-    new_keys_p4 = [out_bufs[4][layer_output_name(4, "key", layer)]
-                   for layer in range(2 * LAYERS_PER_PART, NUM_LAYERS)]
-    new_vals_p4 = [out_bufs[4][layer_output_name(4, "value", layer)]
-                   for layer in range(2 * LAYERS_PER_PART, NUM_LAYERS)]
 
     # Stitch must happen BEFORE the next step reuses out_bufs.
-    kv.stitch_step(
-        new_keys_p2 + new_keys_p3 + new_keys_p4,
-        new_vals_p2 + new_vals_p3 + new_vals_p4,
-    )
+    kv.stitch_step(new_keys, new_vals)
 
     wall_ms = (time.perf_counter() - t0) * 1000
     logits_fp32 = dequant_uint16(logits_uint16, logits_scale, logits_offset)
@@ -240,88 +247,47 @@ def _step_ar128(sessions, bindings, out_bufs, kv, p_base, token_batch, scales):
     """One AR128 forward pass through all 4 partitions for a 128-wide
     query batch starting at absolute position `p_base`.
 
-    Uses pre-bound IOBinding for outputs and binds KV inputs from the
-    persistent `kv.keys_ar128_in` / `values_ar128_in` buffers (which
-    `KVStore.stitch_batch` keeps in sync with the master). That removes
-    the per-call ~28 MB ascontiguousarray copy that slicing a 384-slot
-    prefix from the 511-slot master buffer would cost.
+    KV inputs are zero-copy from `kv.keys_ar128_in` / `values_ar128_in`,
+    the AR128-shaped mirror buffers `KVStore.stitch_batch` keeps in sync
+    with the master. That removes the per-call ~28 MB ascontiguousarray
+    copy that slicing a 384-slot prefix from the 511-slot master would
+    cost.
     """
     if not kv.has_ar128_in:
-        raise RuntimeError(
-            "_step_ar128 requires KVStore(with_ar128_input=True)"
-        )
+        raise RuntimeError("_step_ar128 requires KVStore(with_ar128_input=True)")
     cos_scale, cos_offset, mask_scale, mask_offset, logits_scale, logits_offset = scales
     cos_q, sin_q = half_dim_rope_quantized_ar128(p_base, cos_scale, cos_offset)
     mask_q = attention_mask_quantized_ar128(p_base, mask_scale, mask_offset)
 
     t0 = time.perf_counter()
 
-    # part 1
-    b = bindings[1]
-    b.clear_binding_inputs()
-    b.bind_cpu_input(
+    # part 1 — input_ids batch -> embedding batch
+    b1 = bindings[1]
+    b1.clear_binding_inputs()
+    b1.bind_cpu_input(
         "input_ids",
         np.asarray(token_batch, dtype=np.int32).reshape(1, AR128_BATCH),
     )
-    sessions[1].run_with_iobinding(b)
-    emb_out = out_bufs[1][HIDDEN_FROM_PART1]
+    sessions[1].run_with_iobinding(b1)
+    hidden = out_bufs[1][HIDDEN_FROM_PART1]
 
-    # part 2 — KV inputs zero-copy from persistent AR128 buffer
-    b = bindings[2]
-    b.clear_binding_inputs()
-    b.bind_cpu_input(HIDDEN_FROM_PART1, emb_out)
-    b.bind_cpu_input("attention_mask", mask_q)
-    b.bind_cpu_input("position_ids_cos", cos_q)
-    b.bind_cpu_input("position_ids_sin", sin_q)
-    for layer in range(0, LAYERS_PER_PART):
-        b.bind_cpu_input(layer_input_name(2, "key", layer), kv.keys_ar128_in[layer])
-        b.bind_cpu_input(layer_input_name(2, "value", layer), kv.values_ar128_in[layer])
-    sessions[2].run_with_iobinding(b)
-    hidden_after_p2 = out_bufs[2][HIDDEN_FROM_PART2]
-    new_keys_p2 = [out_bufs[2][layer_output_name(2, "key", layer)]
-                   for layer in range(0, LAYERS_PER_PART)]
-    new_vals_p2 = [out_bufs[2][layer_output_name(2, "value", layer)]
-                   for layer in range(0, LAYERS_PER_PART)]
-
-    # part 3
-    b = bindings[3]
-    b.clear_binding_inputs()
-    b.bind_cpu_input(HIDDEN_FROM_PART2, hidden_after_p2)
-    b.bind_cpu_input("attention_mask", mask_q)
-    b.bind_cpu_input("position_ids_cos", cos_q)
-    b.bind_cpu_input("position_ids_sin", sin_q)
-    for layer in range(LAYERS_PER_PART, 2 * LAYERS_PER_PART):
-        b.bind_cpu_input(layer_input_name(3, "key", layer), kv.keys_ar128_in[layer])
-        b.bind_cpu_input(layer_input_name(3, "value", layer), kv.values_ar128_in[layer])
-    sessions[3].run_with_iobinding(b)
-    hidden_after_p3 = out_bufs[3][HIDDEN_FROM_PART3]
-    new_keys_p3 = [out_bufs[3][layer_output_name(3, "key", layer)]
-                   for layer in range(LAYERS_PER_PART, 2 * LAYERS_PER_PART)]
-    new_vals_p3 = [out_bufs[3][layer_output_name(3, "value", layer)]
-                   for layer in range(LAYERS_PER_PART, 2 * LAYERS_PER_PART)]
-
-    # part 4
-    b = bindings[4]
-    b.clear_binding_inputs()
-    b.bind_cpu_input(HIDDEN_FROM_PART3, hidden_after_p3)
-    b.bind_cpu_input("attention_mask", mask_q)
-    b.bind_cpu_input("position_ids_cos", cos_q)
-    b.bind_cpu_input("position_ids_sin", sin_q)
-    for layer in range(2 * LAYERS_PER_PART, NUM_LAYERS):
-        b.bind_cpu_input(layer_input_name(4, "key", layer), kv.keys_ar128_in[layer])
-        b.bind_cpu_input(layer_input_name(4, "value", layer), kv.values_ar128_in[layer])
-    sessions[4].run_with_iobinding(b)
+    # parts 2/3/4 — transformer layers (and lm_head on part 4)
+    new_keys: list[np.ndarray] = []
+    new_vals: list[np.ndarray] = []
+    for part_idx in (2, 3, 4):
+        keys_p, vals_p = _run_transformer_part(
+            sessions[part_idx], bindings[part_idx], out_bufs[part_idx],
+            part_idx=part_idx, hidden_in=hidden,
+            mask_q=mask_q, cos_q=cos_q, sin_q=sin_q,
+            kv_keys_src=kv.keys_ar128_in, kv_values_src=kv.values_ar128_in,
+        )
+        new_keys.extend(keys_p)
+        new_vals.extend(vals_p)
+        if part_idx in PART_HIDDEN_OUT:
+            hidden = out_bufs[part_idx][PART_HIDDEN_OUT[part_idx]]
     logits_uint16_batch = out_bufs[4]["logits"]  # [1, 128, vocab]
-    new_keys_p4 = [out_bufs[4][layer_output_name(4, "key", layer)]
-                   for layer in range(2 * LAYERS_PER_PART, NUM_LAYERS)]
-    new_vals_p4 = [out_bufs[4][layer_output_name(4, "value", layer)]
-                   for layer in range(2 * LAYERS_PER_PART, NUM_LAYERS)]
 
-    kv.stitch_batch(
-        p_base,
-        new_keys_p2 + new_keys_p3 + new_keys_p4,
-        new_vals_p2 + new_vals_p3 + new_vals_p4,
-    )
+    kv.stitch_batch(p_base, new_keys, new_vals)
 
     wall_ms = (time.perf_counter() - t0) * 1000
     last_logits_uint16 = logits_uint16_batch[0, -1, :]  # last query position
@@ -406,25 +372,20 @@ def main() -> int:
     # same cos/sin/mask scales on this bundle, but extract from each
     # config explicitly so this script doesn't break if a future bundle
     # diverges.
-    def _io(part_cfg, key, side="inputs"):
-        return next(io for io in part_cfg[2][side] if io["name"] == key)
+    def _scales_tuple(part_cfg):
+        def find(side, part_idx, name):
+            return next(io for io in part_cfg[part_idx][side] if io["name"] == name)
+        cos = find("inputs", 2, "position_ids_cos")
+        mask = find("inputs", 2, "attention_mask")
+        logits = find("outputs", 4, "logits")
+        return (
+            cos["scale"], cos["offset"],
+            mask["scale"], mask["offset"],
+            logits["scale"], logits["offset"],
+        )
 
-    scales_ar1 = (
-        _io(parts_cfg_ar1, "position_ids_cos")["scale"],
-        _io(parts_cfg_ar1, "position_ids_cos")["offset"],
-        _io(parts_cfg_ar1, "attention_mask")["scale"],
-        _io(parts_cfg_ar1, "attention_mask")["offset"],
-        next(io for io in parts_cfg_ar1[4]["outputs"] if io["name"] == "logits")["scale"],
-        next(io for io in parts_cfg_ar1[4]["outputs"] if io["name"] == "logits")["offset"],
-    )
-    scales_ar128 = (
-        _io(parts_cfg_ar128, "position_ids_cos")["scale"],
-        _io(parts_cfg_ar128, "position_ids_cos")["offset"],
-        _io(parts_cfg_ar128, "attention_mask")["scale"],
-        _io(parts_cfg_ar128, "attention_mask")["offset"],
-        next(io for io in parts_cfg_ar128[4]["outputs"] if io["name"] == "logits")["scale"],
-        next(io for io in parts_cfg_ar128[4]["outputs"] if io["name"] == "logits")["offset"],
-    )
+    scales_ar1 = _scales_tuple(parts_cfg_ar1)
+    scales_ar128 = _scales_tuple(parts_cfg_ar128)
 
     # IOBinding setup: pre-allocate output buffers + bind once per
     # session. Inputs are bound per call via bind_cpu_input. Eliminates
