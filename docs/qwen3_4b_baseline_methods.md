@@ -23,13 +23,24 @@ Rows = backend, columns = metric. Each backend runs the same weight
 footprint (~w4 / Q4_K_M ≈ 2.5 GB) so we're comparing hardware on a
 roughly like-for-like quantization, not comparing quant schemes.
 
-| backend | runtime / build                           | PP512 (t/s) | TG128 (t/s) |
+| backend | runtime / build                           | PP (t/s) | TG128 (t/s) |
 |---|---|---|---|
-| NPU           | genie-t2t-run (QAIRT 2.45)                 | — | — |
-| CPU           | llama.cpp build-cpu (ARM64 NEON)           | — | — |
-| CPU+KleidiAI  | llama.cpp build-cpu-kleidiai (NEON + i8mm) | — | — |
-| GPU (OpenCL)  | llama.cpp build-opencl (Adreno kernels)    | — | — |
-| GPU (Vulkan)  | llama.cpp build-vulkan                     | — | — |
+| NPU (Genie)         | genie-t2t-run (QAIRT 2.45)                  | PP512 — | — |
+| NPU (npu_engine)    | our ORT-QNN stack (AR128 swap + AR1 decode) | PP256 — | — |
+| CPU                 | llama.cpp build-cpu (ARM64 NEON)            | PP512 — | — |
+| CPU+KleidiAI        | llama.cpp build-cpu-kleidiai (NEON + i8mm)  | PP512 — | — |
+| GPU (OpenCL)        | llama.cpp build-opencl (Adreno kernels)     | PP512 — | — |
+| GPU (Vulkan)        | llama.cpp build-vulkan                      | PP512 — | — |
+
+**PP cell is *not* uniform across backends.** llama.cpp backends and
+Genie use PP512 (full 512-token prompt). The `npu_engine` row uses
+PP256 because the Qualcomm bundle's CL=512 graphs cap prefill+decode at
+511 KV slots — `pp + tg ≤ 511`, so PP=256 + TG=128 is the largest
+AR128 configuration that fits. PP rate is throughput
+(`tokens / compute_time`), so the 256 vs 512 difference is amortization
+of fixed per-call overhead, not a fundamental geometry change. To get
+PP512 on `npu_engine` we'd need wrappers for the bundle's `cl1024` (or
+larger) AR128 graphs — workstream tracked separately.
 
 Secondary cells to fill if the primary row is ambiguous: PP128 (short
 prompt TTFT regime), TG512 (long decode / thermal soak). Don't gate the
@@ -268,41 +279,134 @@ Device selection: Vulkan on X2E enumerates Adreno as `device 0` by
 default. If a CPU device also shows, pass `-dev <adreno_uuid>` or use
 `-sm none` to force single-device on the GPU.
 
-## Fallback: NPU via ORT-QNN (chained 4-partition probe)
+## NPU via `npu_engine` (our stack — promoted from "fallback")
 
-If `genie-t2t-run` refuses to load the 2.42-compiled binaries on
-QAIRT 2.45 (or if we want to double-check the number against a
-non-Genie runtime), the existing
-`npu_engine/probe_qualcomm_qwen3_4b.py` already validated parts 1 and 2.
-Extend it to parts 3 and 4 (wrappers for all four already live next
-to the bundle — `oracle_part3.wrapper.onnx`, `oracle_part4.wrapper.onnx`)
-and chain them in Python:
+Originally a probe to verify the .bin parses outside Genie's vendor
+runtime. Now the **second NPU row in the headline matrix** in its own
+right: as of 2026-04-25 it beats Genie on the same .bin at PP (+27%)
+and TG (+17%). Two reasons it earned the promotion:
+
+1. Our spec-decode sidecar speaks ORT-QNN, not Genie. The "what we'd
+   get if we use Qwen3-4B as a draft / verifier through *our* runtime"
+   number is the load-bearing one for W4 (heterogeneous orchestration);
+   Genie is the silicon ceiling for context only.
+2. Genie is vendor-closed. ORT-QNN exposes lower-level knobs
+   (multi-AR graph routing, IOBinding for zero-copy outputs, async exec)
+   that future workstreams (W2.d tree drafts, W4 async orchestration)
+   need direct access to.
+
+### Architecture (commits `ac17196`..`3447862`)
 
 ```
-input_ids -> part1 (embed)
-          -> part2 (layers 0..11)   -> part3 (layers 12..23) -> part4 (layers 24..35 + head)
-                              ^-- past_kv propagates per layer, host-side stitch
+input_ids -> part1 (embed) -> part2 (layers 0..11)
+                           -> part3 (layers 12..23)
+                           -> part4 (layers 24..35 + LM head)
+                                   ^-- past_kv propagates per layer; host-side numpy stitch
 ```
 
-Per-step wall: the side-quest measured part 2 at 7.22 ms / 12 layers
-(0.60 ms/layer). Projecting linearly: full decode step ≈
-`embed (0.04 ms) + 3 × 12-layer parts × 7.22 ms + head overhead` ≈
-**~22 ms / step** → **~45 t/s TG** for a standalone Qwen3-4B decode.
-PP at ar=128 prefill batch is batched and much faster — expect ~400+
-t/s PP. Both numbers are unverified projections from single-partition
-measurements; Genie is the shorter path to a verified number.
+Two graph families per partition, both already in the Qualcomm bundle:
 
-This fallback matters for two reasons beyond "Genie refuses":
-1. Our own spec-decode sidecar speaks ORT-QNN, not Genie. If we ever
-   *use* Qwen3-4B as a draft inside a larger pipeline, we need to
-   know what we'd actually get through our runtime — not Genie's
-   best-case number.
-2. Genie is vendor-closed; ORT-QNN exposes lower-level knobs
-   (async-exec, custom KV strategies) that future workstreams
-   (W2.d tree drafts, W4 async orchestration) need.
+- `ar1_cl512_part_*_of_4` — single-token decode (also usable for AR1
+  prefill and any AR128 tail not divisible by 128).
+- `ar128_cl512_part_*_of_4` — 128-wide batched prefill. Same hardware
+  path as Genie's AR128 prefill; only the host-side dispatch differs.
 
-Both numbers on the same row in the results table, annotated as
-`Genie` vs `ORT-QNN chained`.
+### AR128 swap mode
+
+The HTP context has a hard cap of ~7 live ORT-QNN sessions on this
+bundle (`reference_ortqnn_session_limit.md`). Loading 4 AR128 + 4 AR1 = 8
+sessions concurrently exhausts memory and the 8th `CreateSession` fails
+with QNN error 1002. Workaround is **phase-batched swap**:
+
+1. **Phase A (prefill).** Load 4 AR128 sessions; run prefill in 128-wide
+   batches. AR128 path keeps a parallel AR128-shaped KV mirror buffer to
+   avoid `np.ascontiguousarray`-copying a slice of the 511-slot master
+   on every batched call (~28 MB / call saved).
+2. **Phase A.5 (teardown).** Drop AR128 session refs +
+   `gc.collect()` to release HTP context before phase B's loads.
+3. **Phase B (decode).** Load 4 AR1 sessions; greedy-argmax decode loop
+   reads KV from the master buffer.
+
+Total wall on a one-shot 256+128 run is ~41 s, of which ~36 s is session
+load/teardown. The compute itself is 4.8 s — apples-to-apples vs a warm
+runtime, the swap tax disappears (see sidecar below).
+
+### Routing (vLLM-style request-size threshold)
+
+`--ar128-min-tokens` (default 512) decides whether a given prompt is
+worth the AR128 swap. Below the threshold, prefill stays on AR1 — at
+prompt sizes < ~559 tokens the 36 s of session-load amortizes to a
+worse end-to-end latency than just running AR1 prefill. The bench
+script logs the routing decision in one line so it's visible in any
+log.
+
+### IOBinding for zero-copy output reuse
+
+Each session's output tensors are pre-allocated once and bound to ORT
+via `io_binding.bind_output(buffer_ptr=...)`. Subsequent
+`run_with_iobinding` calls reuse the same buffer — eliminating the
+per-step output-allocation that vanilla `sess.run()` does on every
+call. Inputs use `bind_cpu_input()` per call (zero-copy from numpy);
+KV stitch happens *before* the next step reuses the bound output
+buffer.
+
+### Sidecar (long-lived process, mode state machine)
+
+`npu_engine/sidecar.py` (commit `68c87f1`) keeps the engine alive
+across requests, holding either the AR128 chain or the AR1 chain in
+memory and swapping on demand. Net effect: the 36 s cold-start tax is
+paid once at process boot, then amortized over every subsequent
+request. Phase-batched execution (commit `564d330`) lets the sidecar
+process a queue of prefill requests against the AR128 chain before
+swapping to AR1 for their decodes — `prefill_all → decode_all` instead
+of one-prompt-at-a-time.
+
+### Bench command (used for the matrix)
+
+```bash
+PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe \
+    npu_engine/bench_qwen3_4b_ortqnn.py \
+    --power-state {ac,bat} \
+    --tag YYYY-MM-DD_<state> \
+    --ar128-min-tokens 128
+```
+
+Defaults: `--pp-tokens 256 --tg-tokens 128`. CL=512 caps total at 511 KV
+slots, so the maximum we can drive through the bundle in one prompt is
+`pp + tg ≤ 511`. To match the headline matrix's PP=256 + TG=128
+geometry, the defaults are sufficient. `--ar128-min-tokens 128` forces
+the AR128 swap (default 512 would route below-threshold prompts to
+AR1-only; for a baseline measurement we want the AR128 path
+exercised).
+
+### Outputs
+
+- `results/csv/qwen3_4b_ortqnn_<tag>.csv` — one row per run.
+  Columns include per-phase walls (`pp_ar128_wall_s`, `pp_ar1_wall_s`,
+  `tg_wall_s`, `compute_wall_s`, `swap_wall_s`, `total_wall_s`),
+  per-call medians, per-partition load profile (`ar128_per_part_s`,
+  `ar1_per_part_s`), and battery J/tok where applicable.
+- `marked_for_deletion/qwen3_4b_ortqnn_<tag>/stdout.log` — verbose
+  per-step trace; useful for root-causing variance, deletable once
+  the CSV row is in the doc.
+
+### Comparing to Genie
+
+Apples-to-apples: same .bin, same prompt token IDs, both run AR128
+prefill. PP rate is `tokens_processed / compute_time` (not including
+session load — Genie pays its own one-time init that we don't
+separate out, so neither does this script). TG rate is `gen_tokens /
+decode_time` over 128 greedy steps. J/tok in the BAT column uses the
+WMI `DischargeRate` sampler (2 s interval) over the **compute-only**
+window — swap-mode session loads burn CPU, but their energy is not
+load-bearing for steady-state efficiency, so we exclude them.
+
+Genie is still the right reference for **idle power between calls** —
+the 2026-04-23 J/tok delta (0.96 vs 0.54 ours) was driven by per-step
+Python+numpy keeping the CPU busy at ~23 W between NPU graph calls
+where Genie's C++ runtime drops to single-digit W. Whether the AR128
+swap mode improves or worsens that delta is the open question for the
+2026-04-25 BAT run.
 
 ## Run discipline
 
