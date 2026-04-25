@@ -3,10 +3,12 @@
 Last updated: 2026-04-25 (session 23 — **NPU engine v0 sidequest
 lands. Our ORT-QNN stack now beats Genie at PP (+39%, 2229 vs 1598
 t/s) and TG (+19%, 27.81 vs 23.30 t/s) on the same Qwen3-4B w4a16
-binary. Full writeup in `docs/npu_engine_prefill_sidequest.md`.
-Empirical AR128-vs-AR1 swap crossover: 576 prompt tokens. Next
-optimization is a long-lived sidecar process to amortize the ~15 s
-HTP context-init cost over many requests.**
+binary. Sidecar process amortizes the ~15 s HTP context-init
+across requests (51% faster on pure-AR1 workloads). Phase-batched
+execution (vLLM-style prefill_all → decode_all) gives 4.00× speedup
+on N=5 AR128 batched requests. Full writeup in
+`docs/npu_engine_prefill_sidequest.md`. Empirical AR128-vs-AR1 swap
+crossover: 576 prompt tokens.**
 
 Last session (22) — Qwen2.5-7B side-quest closes; concurrency-4
 (agentic) matrix + NPU-concurrency cliff finding land. Per-parameter

@@ -176,6 +176,107 @@ def _maybe_warmup(state, prompt_ids):
     state.warmup_done = True
 
 
+class Stream:
+    """Per-stream inference state — KV cache + decode position +
+    last logits. The engine's mode is shared; each Stream just owns
+    its own KV. Lets phase-batched workloads run N prefills against
+    N independent KVs in one AR128 mode-batch, then drain N decodes
+    in one AR1 mode-batch."""
+
+    __slots__ = ("id", "prompt_ids", "kv", "last_logits", "next_token",
+                 "position", "decoded")
+
+    def __init__(self, stream_id, prompt_ids, kv, last_logits):
+        self.id = stream_id
+        self.prompt_ids = prompt_ids
+        self.kv = kv
+        self.last_logits = last_logits
+        self.next_token = int(np.argmax(last_logits)) if last_logits is not None else None
+        self.position = len(prompt_ids)
+        self.decoded: list[int] = []
+
+
+def prefill_only(state, stream_id, prompt_ids, ar128_min_tokens, force_ar128):
+    """Run prefill (no decode). Returns a Stream with KV ready for
+    later decode_only() calls.
+
+    Caller is responsible for ordering — to get the phase-batching
+    win, batch all AR128-eligible prefills together so they share
+    one ensure_mode("ar128") swap. AR1-mode prefills can interleave
+    freely with AR1 decodes (same chain).
+
+    NOTE: prefills with an AR1 tail (pp_tokens not a multiple of
+    AR128_BATCH) currently force a swap to AR1 inside this call,
+    breaking the batch. To stay in AR128 across N batched prefills,
+    use multiple-of-128 prompt sizes.
+    """
+    if len(prompt_ids) > PAST_LEN:
+        raise ValueError(
+            f"prompt {len(prompt_ids)} exceeds CL-512 cap {PAST_LEN}"
+        )
+    use_ar128 = force_ar128 or (
+        len(prompt_ids) >= AR128_BATCH
+        and len(prompt_ids) >= ar128_min_tokens
+    )
+    n_ar128_calls = (len(prompt_ids) // AR128_BATCH) if use_ar128 else 0
+    n_ar1_tail = len(prompt_ids) - n_ar128_calls * AR128_BATCH
+
+    kv = KVStore(NUM_LAYERS, with_ar128_input=use_ar128)
+    last_logits = None
+
+    if use_ar128:
+        state.ensure_mode("ar128")
+        _maybe_warmup(state, prompt_ids)
+        # Re-init kv after warmup mutated it
+        kv = KVStore(NUM_LAYERS, with_ar128_input=True)
+        p = 0
+        for _ in range(n_ar128_calls):
+            batch = list(prompt_ids[p:p + AR128_BATCH])
+            last_logits, _ = _step_ar128(
+                state.sessions, state.bindings, state.out_bufs,
+                kv, p, batch, state.scales_ar128,
+            )
+            p += AR128_BATCH
+
+    if not use_ar128 or n_ar1_tail > 0:
+        state.ensure_mode("ar1")
+        _maybe_warmup(state, prompt_ids)
+        if not use_ar128:
+            kv = KVStore(NUM_LAYERS)
+        p = n_ar128_calls * AR128_BATCH if use_ar128 else 0
+        while p < len(prompt_ids):
+            last_logits, _ = _step(
+                state.sessions, state.bindings, state.out_bufs,
+                kv, p, prompt_ids[p], state.scales_ar1,
+            )
+            p += 1
+
+    return Stream(stream_id, prompt_ids, kv, last_logits)
+
+
+def decode_only(state, stream, n_tokens):
+    """Run n_tokens decode steps against `stream`. Mutates the stream
+    in place. Requires AR1 mode; ensure_mode is idempotent so calling
+    decode_only across multiple streams in a row pays only ONE swap
+    when transitioning from AR128 prefill mode."""
+    if stream.position + n_tokens > PAST_LEN:
+        raise ValueError(
+            f"stream {stream.id}: decode would overrun KV ({stream.position} + "
+            f"{n_tokens} > {PAST_LEN})"
+        )
+    state.ensure_mode("ar1")
+    _maybe_warmup(state, stream.prompt_ids)
+    for _ in range(n_tokens):
+        logits, _ = _step(
+            state.sessions, state.bindings, state.out_bufs,
+            stream.kv, stream.position, stream.next_token, state.scales_ar1,
+        )
+        stream.decoded.append(stream.next_token)
+        stream.next_token = int(np.argmax(logits))
+        stream.position += 1
+        stream.last_logits = logits
+
+
 def serve_request(state, prompt_ids, tg_tokens, ar128_min_tokens, force_ar128):
     """Execute one full inference request.
 
@@ -420,9 +521,131 @@ def cmd_demo(args):
     state.shutdown()
 
 
+def cmd_demo_phase_batch(args):
+    """Head-to-head: NAIVE sequential (each request is full prefill+decode)
+    vs PHASE-BATCHED (all prefills in one AR128 mode-batch, then all
+    decodes in one AR1 mode-batch). Same workload, two execution orders.
+
+    The win comes from removing per-request swap round-trips. With N
+    AR128 requests, naive pays N round-trips (~42 s each); phase-batched
+    pays exactly two (~21 s each). Compute time is identical.
+    """
+    state, base_tokens, startup_s, per_part = _load_engine(args)
+    print(f"=== sidecar phase-batched A/B demo ===")
+    print(f"startup ({args.start_mode}) : {startup_s:.1f} s   "
+          f"per-part: {[round(x, 1) for x in per_part]}")
+    print()
+
+    # N requests of pp=384 (3 AR128 calls each, no AR1 tail), tg=64.
+    # Choosing pp=384 / tg=64 keeps each request well under CL-512
+    # (384+64=448) and exercises real AR128 batching.
+    n_requests = args.n_phase_batch
+    pp = 384
+    tg = 64
+
+    print(f"workload: {n_requests} × (pp={pp} forced AR128, tg={tg})")
+    print()
+
+    # ---------- Pass 1: NAIVE sequential ----------
+    print("--- NAIVE sequential (current sidecar default) ---")
+    print(f"  each request runs full prefill+decode, swapping AR1 ⇄ AR128")
+    naive_swap = naive_compute = 0.0
+    t = time.perf_counter()
+    for i in range(n_requests):
+        prompt_ids = synth_prompt(base_tokens, pp)
+        result = serve_request(
+            state, prompt_ids, tg_tokens=tg,
+            ar128_min_tokens=args.ar128_min_tokens, force_ar128=True,
+        )
+        if not result["ok"]:
+            print(f"  req {i}: FAILED {result.get('error')}")
+            continue
+        naive_swap += result["swap_s"]
+        naive_compute += result["pp_compute_s"] + result["tg_compute_s"]
+        print(f"  req {i}: route={result['route']:>13}  "
+              f"swap={result['swap_s']:5.1f}s  "
+              f"pp={result['pp_compute_s']:5.2f}s  tg={result['tg_compute_s']:5.2f}s")
+    naive_total = time.perf_counter() - t
+    print(f"  totals: swap={naive_swap:.1f}s  compute={naive_compute:.1f}s  "
+          f"wall={naive_total:.1f}s")
+    print()
+
+    # ---------- Pass 2: PHASE-BATCHED ----------
+    print("--- PHASE-BATCHED (prefill all → decode all) ---")
+    print(f"  one swap to AR128 for all prefills, one swap to AR1 for all decodes")
+    pb_swap = pb_compute_pp = pb_compute_tg = 0.0
+    t = time.perf_counter()
+
+    # Phase 1: batch all prefills in AR128
+    streams: list[Stream] = []
+    pre_mode = state.mode
+    t_pre = time.perf_counter()
+    for i in range(n_requests):
+        prompt_ids = synth_prompt(base_tokens, pp)
+        # Detect if this prefill_only call triggers a swap by sampling
+        # state.mode before and after; we add the swap time post hoc.
+        before_mode = state.mode
+        t_call = time.perf_counter()
+        stream = prefill_only(
+            state, stream_id=i, prompt_ids=prompt_ids,
+            ar128_min_tokens=args.ar128_min_tokens, force_ar128=True,
+        )
+        dt = time.perf_counter() - t_call
+        # If mode changed at this call, attribute the leading slack to swap.
+        # Simpler: just measure compute as the per-call AR128 latency budget
+        # (n_ar128_calls × ~60 ms) and let the rest be swap. Approximate.
+        n_ar128 = pp // AR128_BATCH
+        approx_compute = n_ar128 * 0.060
+        approx_swap = max(0.0, dt - approx_compute)
+        if before_mode != state.mode:
+            pb_swap += approx_swap
+            pb_compute_pp += approx_compute
+        else:
+            pb_compute_pp += dt
+        streams.append(stream)
+        print(f"  prefill stream {i}: {dt:.2f}s  "
+              f"(mode now={state.mode}, swap_approx={approx_swap:.1f}s)")
+
+    # Phase 2: batch all decodes in AR1
+    for s in streams:
+        before_mode = state.mode
+        t_call = time.perf_counter()
+        decode_only(state, s, tg)
+        dt = time.perf_counter() - t_call
+        approx_compute = tg * 0.038
+        approx_swap = max(0.0, dt - approx_compute)
+        if before_mode != state.mode:
+            pb_swap += approx_swap
+            pb_compute_tg += approx_compute
+        else:
+            pb_compute_tg += dt
+        print(f"  decode stream {s.id}: {dt:.2f}s  "
+              f"(mode now={state.mode}, swap_approx={approx_swap:.1f}s)")
+
+    pb_total = time.perf_counter() - t
+    print(f"  totals: swap={pb_swap:.1f}s  pp={pb_compute_pp:.1f}s  "
+          f"tg={pb_compute_tg:.1f}s  wall={pb_total:.1f}s")
+    print()
+
+    # ---------- Comparison ----------
+    speedup = naive_total / pb_total if pb_total > 0 else 0
+    saved = naive_total - pb_total
+    print("--- comparison ---")
+    print(f"  NAIVE     : {naive_total:.1f} s ({n_requests} swap round-trips)")
+    print(f"  PHASE-BAT : {pb_total:.1f} s (~2 swap round-trips total)")
+    print(f"  speedup   : {speedup:.2f}×   saved {saved:.0f} s on {n_requests} requests")
+    print(f"  per-request avg: NAIVE {naive_total/n_requests:.1f}s vs "
+          f"PHASE-BAT {pb_total/n_requests:.1f}s")
+    state.shutdown()
+
+
 def main():
     p = argparse.ArgumentParser(description="NPU engine sidecar")
-    p.add_argument("--mode", choices=("demo", "serve"), default="demo")
+    p.add_argument("--mode", choices=("demo", "demo-phase-batch", "serve"), default="demo")
+    p.add_argument("--n-phase-batch", type=int, default=3,
+                   help="number of AR128 requests in the phase-batched A/B demo "
+                        "(default 3). Larger N exaggerates the speedup since "
+                        "naive pays per-request swap and phase-batched doesn't.")
     p.add_argument("--start-mode", choices=("ar1", "ar128"), default="ar1",
                    help="which chain to load at startup. ar1 is the steady-"
                         "state for decode + short prompts.")
@@ -432,6 +655,8 @@ def main():
     args = p.parse_args()
     if args.mode == "demo":
         cmd_demo(args)
+    elif args.mode == "demo-phase-batch":
+        cmd_demo_phase_batch(args)
     else:
         cmd_serve(args)
 

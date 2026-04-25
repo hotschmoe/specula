@@ -60,6 +60,12 @@ graphs **faster than Genie does** by a clean +39%. This was the
    workload of 10 short-prompt requests is 51% faster than 10
    standalone bench runs; mixed (5 AR1 + 2 AR128) is 34% faster.
    See "Sidecar architecture" section below.
+8. **Phase batching**. `prefill_only` / `decode_only` primitives +
+   per-stream KV (Stream type). Caller batches N AR128 prefills in
+   one mode then drains N decodes in another — total mode swaps
+   drop from N round-trips to two regardless of N. N=5 batch:
+   4.00× speedup vs sequential, 169 s saved. See "Phase-batched
+   execution" section below.
 
 ## Architecture findings
 
@@ -243,20 +249,76 @@ requests that share a mode.
 
 These are addressed by the next two items below.
 
+## Phase-batched execution (landed)
+
+vLLM-style separation: `prefill_only(...)` returns a `Stream` (KV
+cache + decode position) without running decode; `decode_only(...)`
+consumes a stream until N tokens are generated. Caller batches all
+prefills into one AR128 mode-batch, then drains all decodes in one
+AR1 mode-batch. Total mode swaps drop from N round-trips (one per
+request) to exactly two (one each direction).
+
+`--mode demo-phase-batch --n-phase-batch N` runs the same workload
+twice — once naive (current sidecar `serve_request`), once phase-
+batched — and reports the speedup.
+
+### Workload: N × (pp=384 forced AR128, tg=64)
+
+| N | naive total | phase-batched total | speedup | saved |
+|---:|---:|---:|---:|---:|
+| 3 | 134.1 s | 50.0 s | **2.68×** | 84 s |
+| 5 | 224.8 s | 56.2 s | **4.00×** | 169 s |
+
+Per-stream timing in the N=5 phase-batched pass shows the win
+crisply:
+
+```
+  prefill stream 0: 21.73 s  (one swap to AR128 + 0.17 s compute)
+  prefill stream 1:  0.18 s  (zero swap; same mode)
+  prefill stream 2:  0.17 s  (zero swap)
+  prefill stream 3:  0.20 s  (zero swap)
+  prefill stream 4:  0.22 s  (zero swap)
+  decode  stream 0: 23.93 s  (one swap to AR1 + 2.4 s compute)
+  decode  stream 1:  2.54 s  (zero swap)
+  decode  stream 2:  2.49 s  (zero swap)
+  decode  stream 3:  2.41 s  (zero swap)
+  decode  stream 4:  2.32 s  (zero swap)
+```
+
+Asymptotic speedup approaches `2 × per_request_naive_swap /
+per_request_compute` ≈ `84 s / 2.6 s` ≈ 32× as N grows. Real
+agentic workloads (3–10 batched prefills) sit in the 2.7–5× range.
+
+The compute cost is **identical** between naive and phase-batched —
+all that changes is whether the swap is paid once or N times.
+
+### What this enables
+
+- An agent that prefills 5 parallel sub-task prompts can do them all
+  in 56 s instead of 225 s.
+- A long-running session that processes a stream of long prompts
+  with delayed decode (e.g. tool-use chains where the LLM reads a
+  big context, then produces a short answer per turn) gets the
+  phase-batched savings naturally.
+- For draft-target spec-decode where one big context drives many
+  short hypotheses, the prefill is paid once for both target and
+  draft — same architecture.
+
 ## What's next
 
-1. **Phase batching** (vLLM-style). Separate prefill and decode into
-   distinct request operations; the engine batches all prefills in
-   one AR128 mode before swapping to AR1 to drain decodes. Major
-   protocol change but matches how production servers really run.
-
-2. **CL=1024 / 2048 / 4096 wrappers**. The bundle has these graphs
+1. **CL=1024 / 2048 / 4096 wrappers**. The bundle has these graphs
    too. Needed to support prompts > 512 tokens. Mechanical extension
    of `build_part_cfg` to take a `ctx` parameter alongside `ar`.
 
-3. **Battery J/tok measurement**. The original headline target was
+2. **Battery J/tok measurement**. The original headline target was
    closing Genie's 0.54 J/tok lead. The 5× lower compute wall in
    AR128 mode should drop J/tok dramatically; needs a battery run.
+
+3. **Async prefill / decode interleave**. Real chat workloads alternate
+   prefill (new turn) + decode (model response). Phase batching today
+   only wins when prefills queue up; an async scheduler that defers
+   AR1 swap-back until either a decode is requested OR the AR128
+   queue idles for some timeout would win even on streaming workloads.
 
 4. **C++ sidecar**. The ultimate Genie-parity move — eliminates
    Python's per-step overhead entirely. Only worth doing after the
@@ -287,3 +349,8 @@ These are addressed by the next two items below.
   Mixed workloads still pay AR128 round-trip per-request (decode
   forces swap-back to AR1) — phase batching is the architectural
   next step for AR128-heavy workloads.
+- 2026-04-25 (third pass, same day): phase batching landed.
+  `prefill_only` + `decode_only` + Stream type. N=3 batched
+  AR128 requests: 2.68× faster than naive. N=5: 4.00× faster
+  (169 s saved). Total mode swaps drop from N round-trips to
+  exactly two. Identical compute time, swap overhead amortized.
