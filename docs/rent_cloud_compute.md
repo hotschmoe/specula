@@ -1,16 +1,208 @@
-# Renting cloud Linux + CUDA compute for AIMET quantization of Qwen3-4B
+# Renting cloud Linux compute for NPU export and quantization
 
-This doc walks through renting a cloud GPU, running Qualcomm's AIMET
-Sequential-MSE quantization pipeline on our Qwen3-4B pathb ONNX, and
-bringing the resulting encodings back to the X2E dev machine to drive
-a final w4a16 bundle that should close the remaining ~50% size gap
-(and the remaining 37% argmax divergence) vs Qualcomm's shipping
-bundle.
+Two distinct rental scenarios this project hits — different goals,
+different hardware shapes, different costs. Pick by what you're trying
+to produce, not by reflex.
+
+## Decision tree — do I even need to rent?
+
+Before reading further, check the cheaper-or-free alternatives:
+
+1. **Precompiled X2 Elite Genie bundle on Qualcomm's CDN.** Some models
+   ship a chipset-specific bundle directly. Look for
+   `release_assets.json` in `huggingface.co/qualcomm/<MODEL>` — if X2
+   Elite is listed under `chipset_assets`, just download the zip.
+   *Example:* Qwen3-4B (`huggingface.co/qualcomm/Qwen3-4B/raw/main/release_assets.json`
+   has direct S3 URLs for X2 Elite, X Elite, 8 Elite, QCS9075, …).
+   **No rental, no AI Hub compile job needed.**
+
+2. **Pre-quantized AIMET ONNX intermediate on the public CDN.** Most
+   non-gated `qai-hub-models` ship a pre-quantized bundle at
+   `qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/<model_id>/v2/<model_id>.zip`.
+   The `qai_hub_models.models.<model_id>.export` command auto-downloads
+   it (~15-30 GB), then uploads to AI Hub Workbench for the X2-Elite-
+   specific compile. *No 150 GB RAM materialization, no AIMET-ONNX-
+   Linux requirement* — runs end-to-end on Windows-on-ARM with ~100 GB
+   free disk. *Example:* Qwen2.5-7B-Instruct works this way (verified
+   2026-04-25). **No rental needed; basic PTQ quality only.**
+
+   To check before launching an export: `curl -sI "https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/<model_id>/v2/<model_id>.zip"`.
+   200 = pre-quantized, 403 = not published.
+
+3. **Gated upstream weights blocking #2.** Models with restrictive
+   upstream licenses (Llama family, some Mistral) **cannot** have a
+   public pre-quantized intermediate — Qualcomm can't legally
+   redistribute even a quantized version. The export then falls through
+   to local FP16 materialization, which needs ~150 GB RAM+swap.
+   **This is Scenario A below.** *Example:* Llama-3.1-8B-Instruct.
+
+4. **Want better than basic PTQ quality?** Sequential MSE + AdaScale
+   close the cos-divergence gap on weight-sensitive layers. They
+   require CUDA + 24-40 GB VRAM. **This is Scenario B below.**
+   *Example:* Qwen3-4B Phase 5p quality work.
+
+## The two rental scenarios at a glance
+
+| | Scenario A: high-RAM CPU box | Scenario B: CUDA GPU box |
+|---|---|---|
+| **Goal** | Run AI Hub Workbench export for a model that has no public pre-quant intermediate (gated weights) | Run SEQ_MSE / AdaScale on top of basic PTQ to close quality gap on a model we already export |
+| **Output** | basic-PTQ AIMET ONNX → uploaded → cloud compile → Genie bundle | better-calibrated `encodings.json` → fed back into qairt-converter on the X2E |
+| **OS** | Linux x86_64 (AIMET-ONNX wheels are Linux-only; Windows fallback warns and may degrade) | Linux x86_64 (same constraint plus CUDA driver) |
+| **RAM** | 150 GB+ recommended (peak during FP16 materialization of an 8B-class model); 192 GB headroom is comfortable | 64 GB system + the GPU's VRAM |
+| **GPU** | none required — the local box just materializes FP16 weights and runs ONNX export; quantization-aware compile is on Qualcomm's cloud | A100 40GB minimum for SEQ_MSE on 4B; 80GB for headroom or larger models |
+| **Disk** | ~250 GB (HF cache for FP16 weights + AIMET intermediate + upload staging) | ~100 GB (HF cache + AIMET intermediate writes) |
+| **Cost** | ~$1-2/hr × 2-4 hrs = **$2-8 one-time** | ~$1.50/hr × 3-6 hrs = **$5-10 one-time** |
+| **Bottleneck** | network (FP16 weight download, then 30 GB upload to AI Hub) | GPU (SEQ_MSE iteration over weight tiles) |
+| **When to skip** | Whenever path #2 above works | Whenever basic PTQ is good enough for the workload |
+
+The two scenarios can compose on a single rental: a CUDA box has plenty
+of system RAM too, so renting a GPU instance and running both jobs
+back-to-back is fine if you want both deliverables in one session.
+
+## Scenario A: high-RAM CPU box for FP16 export
+
+### When this scenario applies
+
+You hit this when path #2 of the decision tree fails — typically a
+gated upstream model (Llama-3.1-8B, Llama-3.2-3B, etc.). The
+`qai-hub-models` export then falls through to:
+
+1. Pull FP16 weights from HuggingFace (gated, needs auth).
+2. Materialize the model in memory (~16 GB just for the safetensors,
+   peaks at 60-150 GB during ONNX trace + AIMET-encoding insertion).
+3. Run AIMET-ONNX to insert quant-sim ops + emit encodings.
+4. Upload the resulting ONNX + encodings to AI Hub Workbench.
+5. AI Hub compiles the model for your target chipset (~hours,
+   no local compute).
+6. Download the Genie bundle (~5-6 GB).
+
+Steps 2-3 are the OOM-prone phase on a 48 GB Windows-on-ARM box. They
+also require AIMET-ONNX, which has Linux-only wheels (the Windows
+fallback warns and may produce a degraded encoding). On a Linux box
+with 192+ GB RAM both issues vanish and the export becomes routine.
+
+### Sizing
+
+| provider + instance | vCPU | RAM | $/hr (on-demand) | $/hr (spot) | notes |
+|---|---:|---:|---:|---:|---|
+| AWS `r7a.8xlarge` | 32 | 256 GB | $1.93 | ~$0.65 | AMD Genoa, fast single-thread |
+| AWS `m7a.16xlarge` | 64 | 256 GB | $3.71 | ~$1.20 | more cores than needed for export |
+| GCP `n2d-highmem-32` | 32 | 256 GB | $1.85 | ~$0.55 | similar shape |
+| Vast.ai (CPU-only listings) | varies | 192-512 GB | $0.40-1.50 | n/a | marketplace, variable, faster spin-up |
+| Lambda Labs CPU-only | 16-64 | 128-256 GB | $0.50-1.50 | n/a | only some skus carry enough RAM |
+
+Recommendation: **AWS `r7a.8xlarge` spot** if you have AWS already
+configured (~$1.30 for a 2-hour Llama-3.1-8B export end-to-end), or
+**Vast.ai** if you want the cheapest possible thing and don't mind a
+manual setup. RunPod's catalog is mostly GPU instances; their CPU-only
+options are not consistently cheaper than the cloud big-three at this
+RAM tier.
+
+**Don't use less than 128 GB RAM** for an 8B-class export. The
+qai-hub-models warning of "150 GB RAM + swap recommended" is real;
+128 GB without swap occasionally OOMs during the AIMET trace. 192-256 GB
+is comfortable headroom.
+
+### Setup (~10-15 min)
+
+```bash
+# Pick a Linux x86_64 instance (Ubuntu 22.04 / 24.04 LTS works).
+
+# Install uv (or use pip directly with python 3.10).
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Clone the repo (or just rsync / scp the parts you need —
+# we only need pyproject.toml + the export command, not the
+# whole repo).
+git clone https://github.com/<your>/specula.git
+cd specula
+
+# Create the export venv.
+uv venv .venv-cloud-export --python 3.10
+VIRTUAL_ENV=.venv-cloud-export uv pip install \
+    "qai-hub-models[llama-v3-1-8b-instruct]" \
+    "qai-hub-models[qwen2-5-7b-instruct]"
+
+# Configure HF auth — required for the gated Llama weights.
+.venv-cloud-export/bin/hf auth login   # interactive; paste a read-scope token
+
+# Configure AI Hub.
+.venv-cloud-export/bin/qai-hub configure --api_token YOUR_TOKEN
+```
+
+### Run the export
+
+```bash
+mkdir -p out
+
+PYTHONIOENCODING=utf-8 PYTHONUTF8=1 \
+.venv-cloud-export/bin/python -m qai_hub_models.models.llama_v3_1_8b_instruct.export \
+    --chipset qualcomm-snapdragon-x2-elite \
+    --device-os 11 \
+    --context-length 4096 \
+    --skip-profiling \
+    --skip-inferencing \
+    --synchronous \
+    --output-dir out/llama_v3_1_8b-genie-w4a16-qualcomm_snapdragon_x2_elite
+
+# Watch RAM with `htop` in a second shell.
+# Expected peak: 100-140 GB during the AIMET-ONNX trace + insertion step.
+# If it OOMs, the instance was undersized — bump RAM, redo.
+```
+
+`--synchronous` keeps the local process alive until the AI Hub cloud
+compile finishes (~4-6 hr for an 8B model) and the bundle is
+downloaded. Run inside `tmux` / `screen` so an ssh dropout doesn't
+kill the job.
+
+### Transfer the bundle home + tear down
+
+```bash
+# Tar + scp back to the X2E (the bundle is ~5-6 GB for an 8B model).
+cd out
+tar czf llama_v3_1_8b-genie-w4a16-x2-elite.tar.gz \
+    llama_v3_1_8b-genie-w4a16-qualcomm_snapdragon_x2_elite/
+
+# From your local laptop:
+scp <user>@<cloud-host>:/path/to/out/llama_v3_1_8b-genie-w4a16-x2-elite.tar.gz \
+    models/qualcomm-llama-v3-1-8b-ref/
+
+# Then on the cloud box: shut it down.
+sudo poweroff
+# AWS: also stop or terminate the instance from the console — `poweroff`
+#      stops the OS, not the billing.
+```
+
+The bundle is now bench-able locally with the same runner as the 4B
+baseline (just point `--bundle-dir` at the new path).
+
+### Gotchas
+
+- **Linux Genie bundle ≠ Windows Genie bundle?** No — the bundle is
+  chipset-tied, not OS-tied. The `.bin` partitions are HTP bytecode
+  consumed by `genie-t2t-run.exe` on Windows-on-ARM at runtime. The
+  Linux export just produces those bytes.
+- **HF token leakage**: never pass the token as a CLI arg; it lands in
+  shell history. Always use `hf auth login` interactively.
+- **AI Hub credit usage**: a single 8B compile costs ~1-2 hours of cloud
+  compile credits (free tier on AI Hub Workbench is generous as of
+  2026-04). Check your credit balance at workbench.aihub.qualcomm.com
+  before starting if you're not sure.
+- **Don't leave the box running**. CPU-only instances are cheap by GPU
+  standards but $1.50/hr × 24 hr = $36 wasted overnight. Set a phone
+  alarm or use AWS auto-shutdown.
+
+## Scenario B: CUDA GPU box for AIMET SEQ_MSE / AdaScale
+
+This is the original use case for this doc — the Qwen3-4B Phase 5p
+quality work. Use this scenario when you already have a working basic-
+PTQ export and want to close the cos-divergence gap to Qualcomm's
+shipping bundle.
 
 Expected spend: **$2-4 one-time**.
 Expected wall time: **3-6 hours** (renting + install + quantize + transfer).
 
-## Why we need this (the short version)
+### Why we need this (the short version)
 
 At Phase 5o our bundle:
 - Matches Qualcomm's shipping bundle **structurally** (uint8 KV with
@@ -54,7 +246,7 @@ None of this runs on AI Hub's cloud compute, and none of this runs on
 our X2E Windows-on-ARM box. So we need to rent a Linux + CUDA box for
 a few hours.
 
-## Why not WSL / WSL2 on the X2E
+### Why not WSL / WSL2 on the X2E
 
 - WSL2 on Windows-on-ARM only supports **ARM64 Linux** distros.
 - Qualcomm's `aimet_onnx` wheel is published for
@@ -64,7 +256,7 @@ a few hours.
   numerically but be unusably slow for a 4B model (tens of hours).
 - No practical way to run AIMET on this machine.
 
-## Why not a consumer GPU like RTX 2080/2080 Ti
+### Why not a consumer GPU like RTX 2080/2080 Ti
 
 - RTX 2080: 8 GB VRAM. A 4B model in fp16 alone is 8 GB — activations
   and scratch don't fit.
@@ -77,7 +269,7 @@ a few hours.
   — skip the cloud and run locally. The instructions below still
   apply, just s/cloud/`your-local-linux-box`/.
 
-## Picking a provider
+### Picking a provider (CUDA)
 
 Any of these work. Ranked by typical cost (cheapest first):
 
@@ -100,7 +292,7 @@ drivers + common deps.
 - V100 16 GB — below target
 - T4 (16 GB) — below target
 
-## Step-by-step: RunPod path
+### Step-by-step: RunPod path
 
 ### 1. Sign up + add $5 credit
 
@@ -231,7 +423,7 @@ RunPod keeps billing by the minute. Once you've got the files locally,
 immediately stop (or terminate) the pod. A forgotten A100 for 24 hours
 is ~$30 you didn't mean to spend.
 
-## Applying the encodings on the X2E
+### Applying the encodings on the X2E
 
 The `encodings.json` is in AIMET format, which QAIRT's
 `qairt-converter` accepts directly via `--quantization_overrides`:
@@ -268,7 +460,7 @@ know the remainder is either calibration-set differences (Qualcomm's
 calibration set is proprietary) or compile-side differences
 (different SoC model version, different QAIRT version, etc.).
 
-## Gotchas
+### Gotchas (Scenario B)
 
 - **Token input shape**: the `quantize.py` script uses its OWN pathb
   ONNX with Qualcomm's internal structure, NOT our `model_halfdim.onnx`
@@ -291,7 +483,7 @@ calibration set is proprietary) or compile-side differences
 - **Do not leave the pod running overnight**. An A100 at $1.50/hr
   costs $36 in 24 hrs. Set a phone alarm.
 
-## If we have budget only for basic PTQ ($0.50 / ~30 min)
+### Budget alternative: basic PTQ on cheaper GPU ($0.50 / ~30 min)
 
 Basic AIMET PTQ without SEQ_MSE can run on a 24 GB card. Swap:
 - GPU: A10G 24GB (RunPod ~$0.50/hr)
@@ -302,7 +494,7 @@ measurements this is **probably not better** than our local
 qairt-quantizer w4+CLE+per-channel. Only worth doing if you want to
 measure the delta rigorously.
 
-## If we only want to sanity-check the pipeline ($0 / CPU-only)
+### CPU-only sanity check ($0 / local Linux box with ≥32 GB RAM)
 
 Per the source, `allow_cpu_to_quantize=True` is set for Qwen3-4B, so
 basic PTQ runs on CPU. Locally on a machine with ≥32 GB RAM:
