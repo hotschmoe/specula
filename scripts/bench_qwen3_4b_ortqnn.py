@@ -240,7 +240,13 @@ def main() -> int:
     t_load = time.perf_counter()
     for part_idx in (1, 2, 3, 4):
         wrapper_path = BUNDLE_DIR / f"oracle_part{part_idx}.wrapper.onnx"
-        build_wrapper(parts_cfg[part_idx], wrapper_path)
+        # Skip rebuild if a wrapper already exists. build_wrapper is
+        # deterministic given the same parts_cfg from metadata.yaml, so
+        # an existing file is identical to what we'd produce. Skipping
+        # also avoids a write race when multiple bench processes are
+        # spawned concurrently against the same bundle.
+        if not wrapper_path.exists():
+            build_wrapper(parts_cfg[part_idx], wrapper_path)
         sessions[part_idx] = load_session(wrapper_path)
     load_s = time.perf_counter() - t_load
     print(f"loaded in {load_s:.1f} s")
