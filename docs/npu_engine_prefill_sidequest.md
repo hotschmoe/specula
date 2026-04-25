@@ -29,7 +29,7 @@ graphs **faster than Genie does** by a clean +39%. This was the
 *efficiency* is the real engineering challenge" note in the original
 4B baseline doc — throughput is now solved, surpassed even.
 
-## What landed (5 commits in the npu_engine/ package)
+## What landed (npu_engine/ package, sequence of commits)
 
 1. **Reorganization** (`c412530`-ish era). 6 ORT-QNN scripts moved
    from `scripts/` into a dedicated `npu_engine/` package. Now has
@@ -54,6 +54,12 @@ graphs **faster than Genie does** by a clean +39%. This was the
    flag (default 512) skips the swap for short prompts where AR1 is
    already faster end-to-end. Per-partition load timing in both
    phases so we can see whether the load cost is I/O or HTP init.
+7. **Sidecar (long-lived engine)**. `npu_engine/sidecar.py`. State
+   machine swaps only when `target_mode != current_mode`, so
+   back-to-back same-mode requests pay zero load cost. Pure-AR1
+   workload of 10 short-prompt requests is 51% faster than 10
+   standalone bench runs; mixed (5 AR1 + 2 AR128) is 34% faster.
+   See "Sidecar architecture" section below.
 
 ## Architecture findings
 
@@ -167,30 +173,95 @@ vLLM's server-process pattern is the architectural shape we want.
 The 36 s swap cost is **a per-engine-startup cost, not per-request**,
 in a real engine that holds sessions alive.
 
+## Sidecar architecture (landed)
+
+`npu_engine/sidecar.py` is a long-lived process that holds the
+ORT-QNN sessions across many inference requests. State machine:
+
+```
+  current_mode != target_mode  ->  tear down + load target
+  current_mode == target_mode  ->  no swap; reuse loaded chain
+```
+
+Two run modes:
+- `--mode demo` — runs a fixed mixed-request schedule and prints a
+  per-request timing table; computes amortized cost vs N standalone
+  bench runs.
+- `--mode serve` — reads newline-delimited JSON requests from stdin,
+  emits responses to stdout. The IPC interface for external drivers
+  (future spec-decode glue, opencode session integration).
+
+### Demo: pure AR1 (10 short-prompt requests)
+
+10 × `pp=256, tg=64` requests. No mode boundaries → zero swaps after
+startup.
+
+```
+  N requests           : 10
+  swap events (>0.5 s) :  0  (would be 10 for N standalone bench runs)
+  cum compute_s        :  116.8 s
+  total wall (sidecar) :  131.6 s   (startup 14.8 + serve 116.8)
+  total wall standalone:  267.3 s
+  ===> sidecar saves ~136 s, ~51% faster over 10 standalone runs
+```
+
+Per-request consistency: pp 9.1-9.6 s (~27 t/s), tg 2.2-2.4 s
+(~27 t/s). Once the AR1 chain is warmed up, every request looks
+identical — clean amortization signature.
+
+### Demo: mixed workload (5 AR1 + 2 AR128)
+
+7-request schedule: 3 AR1 (pp=128/128/256) → 2 AR128 (pp=384,
+forced) → 2 AR1 (pp=128/128). Only 2 mode boundaries, so 2 swaps
+across 7 requests.
+
+```
+  swap events (>0.5 s) :  2  (would be 7 standalone)
+  cum compute_s        :  45.4 s
+  cum swap_s           :  84.3 s
+  total wall (sidecar) : 144.8 s
+  total wall standalone: 219.8 s
+  ===> sidecar saves ~75 s, ~34% faster over 7 standalone runs
+```
+
+The smaller win on mixed workloads is because AR128 requests still
+pay a full ~42 s round-trip swap (AR1 → AR128 prefill → AR1 decode
+→ next request needs AR1 again so we end on AR1). Each *individual*
+AR128 request is unchanged; the sidecar only amortizes cost across
+requests that share a mode.
+
+### What the sidecar can't help (without further work)
+
+- **Within-request swap.** A single request that has both prefill
+  AND decode pays a swap regardless: prefill needs AR128 (for long
+  prompts), decode needs AR1. The swap-back is in-flight and can't
+  be elided without splitting prefill and decode into separate
+  request types.
+- **Alternating-mode workloads.** ABABAB sequences swap on every
+  boundary, not just two — same as standalone. The state machine
+  fights pathological access patterns; only grouped patterns win.
+
+These are addressed by the next two items below.
+
 ## What's next
 
-1. **Sidecar architecture** — long-lived process holding sessions,
-   IPC entry point. Eliminates per-request swap cost in steady state.
-   Each user-visible request just pays compute time:
-     - Prompt < ~576 tokens: AR1 prefill, ~37 ms/token
-     - Prompt ≥ ~576 tokens: AR128 prefill at ~2200 t/s + decode
+1. **Phase batching** (vLLM-style). Separate prefill and decode into
+   distinct request operations; the engine batches all prefills in
+   one AR128 mode before swapping to AR1 to drain decodes. Major
+   protocol change but matches how production servers really run.
 
-2. **Multi-prefill batching** — when multiple long prompts queue, do
-   them all in one AR128 session before swapping back. Single 36 s
-   swap amortizes across N prefills.
-
-3. **CL=1024 / 2048 / 4096 wrappers** — the bundle has these graphs
+2. **CL=1024 / 2048 / 4096 wrappers**. The bundle has these graphs
    too. Needed to support prompts > 512 tokens. Mechanical extension
    of `build_part_cfg` to take a `ctx` parameter alongside `ar`.
 
-4. **Battery J/tok measurement** — the original headline target was
+3. **Battery J/tok measurement**. The original headline target was
    closing Genie's 0.54 J/tok lead. The 5× lower compute wall in
    AR128 mode should drop J/tok dramatically; needs a battery run.
 
-5. **C++ sidecar** — the ultimate Genie-parity move. Would eliminate
-   Python's per-step overhead entirely. Worth doing only after the
-   Python sidecar establishes the architecture and we know
-   precisely what perf is left on the table.
+4. **C++ sidecar**. The ultimate Genie-parity move — eliminates
+   Python's per-step overhead entirely. Only worth doing after the
+   Python sidecar establishes the architecture and tells us precisely
+   what perf is left on the table.
 
 ## Artifacts
 
@@ -210,3 +281,9 @@ in a real engine that holds sessions alive.
   empirical crossover 576 tokens. HTP context init (not I/O) is the
   dominant load cost — argues for sidecar architecture as the next
   optimization.
+- 2026-04-25 (follow-up, same day): sidecar landed
+  (`npu_engine/sidecar.py`). Pure-AR1 amortization is perfect
+  (10 requests, 0 swaps after startup, 51% faster than standalone).
+  Mixed workloads still pay AR128 round-trip per-request (decode
+  forces swap-back to AR1) — phase batching is the architectural
+  next step for AR128-heavy workloads.
