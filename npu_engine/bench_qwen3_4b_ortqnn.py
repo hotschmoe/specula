@@ -304,12 +304,16 @@ def main() -> int:
     p.add_argument("--tg-tokens", type=int, default=128)
     p.add_argument("--skip-power-check", action="store_true")
     p.add_argument("--no-ar128", action="store_true",
-                   help="skip the AR128 prefill chain. Used as an escape "
-                        "hatch / for AR1-only baseline measurements. "
-                        "Default: AR128 prefill is used in swap mode "
-                        "(load AR128 → prefill → tear down → load AR1 → "
-                        "decode). The swap is necessary because 4 AR1 + "
-                        "4 AR128 sessions exceed HTP context memory.")
+                   help="skip the AR128 prefill chain unconditionally. "
+                        "Hard escape hatch / AR1-only baseline.")
+    p.add_argument("--ar128-min-tokens", type=int, default=512,
+                   help="prompt-token threshold for taking the AR128 swap "
+                        "path (vLLM-style request-size routing). Below the "
+                        "threshold the bench runs AR1-only — the ~36 s swap "
+                        "would dominate end-to-end latency. The default 512 "
+                        "is just below the empirical crossover (~559 tokens) "
+                        "where AR128-with-swap starts winning end-to-end on "
+                        "Qwen3-4B + this hardware.")
     args = p.parse_args()
 
     online = sample_power_online()
@@ -350,9 +354,27 @@ def main() -> int:
     prompt_ids = tokenizer.encode(prompt_text).ids[: args.pp_tokens]
     print(f"prompt tokenized to {len(prompt_ids)} (target {args.pp_tokens})")
 
-    want_ar128 = (len(prompt_ids) >= AR128_BATCH) and not args.no_ar128
+    want_ar128 = (
+        not args.no_ar128
+        and len(prompt_ids) >= AR128_BATCH
+        and len(prompt_ids) >= args.ar128_min_tokens
+    )
     n_ar128_calls = (len(prompt_ids) // AR128_BATCH) if want_ar128 else 0
     n_ar1_tail = len(prompt_ids) - n_ar128_calls * AR128_BATCH
+
+    # One-line routing summary for the log so the policy is visible.
+    if args.no_ar128:
+        route = "AR1-only (--no-ar128 forced)"
+    elif len(prompt_ids) < AR128_BATCH:
+        route = f"AR1-only (prompt {len(prompt_ids)} < AR128 batch {AR128_BATCH})"
+    elif len(prompt_ids) < args.ar128_min_tokens:
+        route = (f"AR1-only (prompt {len(prompt_ids)} < threshold "
+                 f"{args.ar128_min_tokens}; AR1 prefill is faster end-to-end "
+                 f"than AR128-with-swap below ~559 tokens)")
+    else:
+        route = (f"AR128 swap (prompt {len(prompt_ids)} >= threshold "
+                 f"{args.ar128_min_tokens})")
+    print(f"route          : {route}")
 
     # Quant scales used every step. AR1 and AR128 happen to share the
     # same cos/sin/mask scales on this bundle, but extract from each
@@ -373,16 +395,31 @@ def main() -> int:
     scales_ar1 = _scales_tuple(parts_cfg_ar1)
     scales_ar128 = _scales_tuple(parts_cfg_ar128) if want_ar128 else None
 
-    def _load_chain(parts_cfg, suffix):
+    def _load_chain(parts_cfg, suffix, label):
         """Load 4 ORT-QNN sessions for the parts in parts_cfg. Wrappers
-        are built lazily and reused across runs."""
+        are built lazily and reused across runs.
+
+        Per-partition timing is logged so we can see whether load cost
+        scales with .bin size (~I/O dominated) or is roughly fixed per
+        partition (~HTP context init dominated). Sizes for reference:
+        part 1 ~742 MB, part 2/3 ~637 MB, part 4 ~1020 MB.
+        """
         sessions = {}
+        per_part_s: list[float] = []
         for part_idx in (1, 2, 3, 4):
             wrapper = BUNDLE_DIR / f"oracle_part{part_idx}{suffix}.wrapper.onnx"
             if not wrapper.exists():
                 build_wrapper(parts_cfg[part_idx], wrapper)
+            bin_path = BUNDLE_DIR / parts_cfg[part_idx]["bin"]
+            bin_mb = bin_path.stat().st_size / 1024 / 1024 if bin_path.exists() else 0
+            t = time.perf_counter()
             sessions[part_idx] = load_session(wrapper)
-        return sessions
+            dt = time.perf_counter() - t
+            per_part_s.append(dt)
+            mb_per_s = bin_mb / dt if dt > 0 else 0
+            print(f"    {label} part {part_idx}: {dt:.1f} s  "
+                  f"({bin_mb:.0f} MB → {mb_per_s:.0f} MB/s effective)")
+        return sessions, per_part_s
 
     # Power sampling (battery only). Sample over the full run including
     # session swaps so mWh-based energy reflects real-world cost.
@@ -399,6 +436,8 @@ def main() -> int:
     pp_ar128_latencies_ms: list[float] = []
     pp_ar1_latencies_ms: list[float] = []
     ar128_load_s = ar1_load_s = ar128_teardown_s = 0.0
+    ar128_per_part_s: list[float] = []
+    ar1_per_part_s: list[float] = []
 
     # ============================================================
     # Phase A: AR128 prefill (in swap mode — only AR128 sessions live)
@@ -406,12 +445,14 @@ def main() -> int:
     if want_ar128:
         print(f"\n--- phase A: load 4 AR128 sessions for prefill ---")
         t = time.perf_counter()
-        sessions_ar128 = _load_chain(parts_cfg_ar128, suffix="_ar128")
+        sessions_ar128, ar128_per_part_s = _load_chain(
+            parts_cfg_ar128, suffix="_ar128", label="AR128",
+        )
         bindings_ar128, out_bufs_ar128 = make_bound_chain(
             sessions_ar128, parts_cfg_ar128
         )
         ar128_load_s = time.perf_counter() - t
-        print(f"  AR128 load: {ar128_load_s:.1f} s")
+        print(f"  AR128 load total: {ar128_load_s:.1f} s")
 
         # warmup AR128 — first call has ~1 s HMX init cost
         print("  warmup (1 AR128 step, discarded)")
@@ -459,10 +500,12 @@ def main() -> int:
     print(f"\n--- phase B: load 4 AR1 sessions for "
           f"{'tail prefill + decode' if n_ar1_tail else 'decode'} ---")
     t = time.perf_counter()
-    sessions_ar1 = _load_chain(parts_cfg_ar1, suffix="")
+    sessions_ar1, ar1_per_part_s = _load_chain(
+        parts_cfg_ar1, suffix="", label="AR1",
+    )
     bindings_ar1, out_bufs_ar1 = make_bound_chain(sessions_ar1, parts_cfg_ar1)
     ar1_load_s = time.perf_counter() - t
-    print(f"  AR1 load: {ar1_load_s:.1f} s")
+    print(f"  AR1 load total: {ar1_load_s:.1f} s")
 
     # warmup AR1 (only meaningful if we'll do many AR1 calls — but cheap
     # insurance so we always do it)
@@ -561,6 +604,16 @@ def main() -> int:
     print(f"  swap overhead       : {swap_wall_s:.1f} s  "
           f"(AR128 load {ar128_load_s:.1f} + teardown {ar128_teardown_s:.1f} + AR1 load {ar1_load_s:.1f})")
 
+    # Per-partition load profile: if load time tracks .bin size, I/O
+    # dominates and a sidecar architecture (warm page cache) closes
+    # the gap. If load time is roughly fixed per partition, HTP
+    # context init dominates and only a long-lived engine helps.
+    if ar128_per_part_s or ar1_per_part_s:
+        print(f"  per-partition load profile (sec each):")
+        if ar128_per_part_s:
+            print(f"    AR128: {[round(x, 1) for x in ar128_per_part_s]}")
+        print(f"    AR1  : {[round(x, 1) for x in ar1_per_part_s]}")
+
     pp_mode = (
         "ar128+ar1tail" if n_ar128_calls and n_ar1_tail
         else "ar128" if n_ar128_calls
@@ -583,6 +636,8 @@ def main() -> int:
         ar128_load_s=ar128_load_s,
         ar128_teardown_s=ar128_teardown_s,
         ar1_load_s=ar1_load_s,
+        ar128_per_part_s=";".join(f"{x:.2f}" for x in ar128_per_part_s),
+        ar1_per_part_s=";".join(f"{x:.2f}" for x in ar1_per_part_s),
         pp_tps=pp_tps,
         tg_tps=tg_tps,
         pp_median_ms=pp_median_ms,
