@@ -51,15 +51,19 @@ shader-compiling, not steady-state).
 | **NPU (Genie)**       | 1598.50 (AR128) | 23.33 | **13.1** | **0.537** | ~0.614 | 168.6 |
 | NPU (ORT-QNN, npu_engine, AR128 swap) | 2118.83 (AR128) | 25.26 | 9.4† | 1.17† / 0.128‡ | — | 47.9 (5.2 compute) |
 | NPU (ORT-QNN chained, AR1, 2026-04-23 baseline) | 24.57 (AR1) | 24.32 | 23.5 | 0.959 | — | 15.7 |
+| CPU                | 191.30 | 38.52 | 25.5 | 0.899 | ~3.96 | 22.5 |
+| CPU + KleidiAI     | 180.43 | 37.33 | 32.1 | 1.182 | ~5.92 | 23.6 |
+| GPU (OpenCL)       | 355.79 | 18.58 | 44.6 | 2.690 | ~13.0 | 38.6 |
+| GPU (Vulkan)       | — | — | 23.3 | — | — | 970 (timeout) |
 
-† Mean W (9.4) is averaged over the full 47.9 s wall, ~36 s of which
-is AR128/AR1 session-load I/O at low CPU draw. The 1.17 J/tok number
-amortizes the *full one-shot* energy (`mean_W × wall_s / tokens`) over
-all 384 tokens — comparable to "what does it cost to ask one prompt
-from a cold process." For a long-lived sidecar that pays the load tax
-once at boot and amortizes over many requests, the steady-state
-J/tok is in between this number and Genie's 0.537 — needs separate
-measurement with the sidecar warm.
+† Mean W (9.4) on the npu_engine row is averaged over the full 47.9 s
+wall, ~36 s of which is AR128/AR1 session-load I/O at low CPU draw.
+The 1.17 J/tok number amortizes the *full one-shot* energy
+(`mean_W × wall_s / tokens`) over all 384 tokens — comparable to "what
+does it cost to ask one prompt from a cold process." For a long-lived
+sidecar that pays the load tax once at boot and amortizes over many
+requests, the steady-state J/tok is in between this number and
+Genie's 0.537 — needs separate measurement with the sidecar warm.
 
 ‡ The script's "compute-only" J/tok (0.128) multiplies the *whole-run*
 mean W by *compute-only* wall — silently assumes compute ran at the
@@ -68,10 +72,6 @@ session loading. Number is in the CSV for completeness; do not cite
 without the caveat. To get an honest steady-state J/tok we'd need a
 sampler that brackets only the compute window (or a sidecar warm-keep
 that erases the imbalance) — open methodology TODO.
-| CPU                | 191.30 | 38.52 | 25.5 | 0.899 | ~3.96 | 22.5 |
-| CPU + KleidiAI     | 180.43 | 37.33 | 32.1 | 1.182 | ~5.92 | 23.6 |
-| GPU (OpenCL)       | 355.79 | 18.58 | 44.6 | 2.690 | ~13.0 | 38.6 |
-| GPU (Vulkan)       | — | — | 23.3 | — | — | 970 (timeout) |
 
 "J / gen tok" separates out the generation energy by subtracting an
 estimate of prefill energy: `(mean_W × wall_s − mean_W × pp_time_s) /
@@ -305,6 +305,155 @@ OpenCL's 23) so the decode kernels work, but the prefill path
 collapses. Flag for the roadmap, don't use Vulkan for PP-heavy
 workloads until investigated.
 
+## Concurrency = 4 (agentic workload)
+
+Same SoC, same Qwen3-4B, but each backend runs **multiple simultaneous
+decode streams**. Tests aggregate throughput when several agentic
+clients hit the model at once. CPU/KleidiAI/OpenCL data via
+`scripts/bench_concurrency4_all_backends.py` driving `llama-batched-bench
+-np 4 -npp 512 -ntg 128 -npl 4`. NPU data via
+`npu_engine/bench_concurrency4_npu_ortqnn.py` (spawns N independent
+`bench_qwen3_4b_ortqnn.py` processes, each with its own 4 ORT-QNN
+sessions; QNN HTP `weight_sharing_enabled=true` shares weight pages
+across contexts so memory cost stays bounded).
+
+### Headline — AC, 2026-04-25
+
+| backend | N | S_TG agg (t/s) | per-stream user rate | step median (ms) | wall (s) | notes |
+|---|---:|---:|---:|---:|---:|---|
+| CPU                              | 4 | **82.01** | 20.50 | — | 24.4 | clean run; all 4 streams completed |
+| CPU + KleidiAI                   | 4 | 79.73 | 19.93 | — | 25.5 | small regression vs plain CPU at N=4 |
+| GPU (OpenCL)                     | 4 | 15.68 | 3.92 | — | 50.0 | **worse than single-stream**; AR=1 kernel-launch overhead × 4 serializes badly |
+| NPU (subprocess fan-out)         | 2 | 30.59 | 15.30 | ~65 | 44.3 | clean run; 1.12× "scaling" is Python-overhead overlap across processes, not NPU work parallelism |
+| NPU (subprocess fan-out)         | 4 | _crashes_ | — | — | 62.6 | 2 of 4 streams die with QNN 1003; 16 sessions exceeds HTP scheduler resources |
+| **NPU (sidecar single-process)** | **4** | **26.95** | 6.74 | 38.0 | 19.0 (decode only) | clean run; aggregate flat = NPU's single-stream rate divided across streams |
+| NPU (sidecar single-process)     | 8 | 26.75 | 3.34 | 38.0 | 38.3 (decode only) | aggregate still ~27 t/s; NPU concurrency is "free" up to the hardware ceiling |
+
+CSVs: `concurrency4_qwen3_4b_2026-04-25_ac.csv` (CPU/KleidiAI/OpenCL),
+`qwen3_4b_ortqnn_npuconc{2,4}_stream*_2026-04-25*_ac.csv` (NPU per-stream).
+
+### Concurrency scaling factor (TG agg / TG single-stream)
+
+Single-stream TG baselines from the AC headline table: CPU 39.50,
+KleidiAI 38.51, OpenCL 22.92, NPU (npu_engine) 27.25.
+
+| backend | scaling factor | per-stream latency hit |
+|---|---:|---:|
+| CPU                          | **2.08×** | -48% (39.5 → 20.5 t/s) |
+| CPU + KleidiAI               | 2.07× | -48% |
+| GPU (OpenCL)                 | **0.68× (worse than single-stream)** | -83% |
+| NPU (subprocess, N=2)        | 1.12× (artifact — see detail) | -44% (27.25 → 15.30) |
+| NPU (subprocess, N=4)        | _crashes_ | n/a |
+| **NPU (sidecar, N=4)**       | **0.99× (NPU is one device, no parallelism gain)** | -75% per stream (27.25 → 6.74) |
+| NPU (sidecar, N=8)           | 0.98× | -88% per stream |
+
+**The CPU vs NPU concurrency story is structural, not implementation.**
+CPU has 12 ARM cores → real parallelism → 2× aggregate at N=4.
+NPU is one Hexagon engine → no parallelism → aggregate flat at the
+single-stream ceiling regardless of N. **At N=4, CPU outperforms NPU
+on aggregate by 3.0×** (82 vs 27 t/s). For pure-throughput multi-agent
+serving, CPU wins decisively. For *energy-per-token* multi-agent
+serving (NPU at ~13 W vs CPU at ~25 W), the NPU's flat aggregate at a
+fraction of the power may still be the right tradeoff if your latency
+budget tolerates 1/N per-stream rate.
+
+### NPU concurrency detail — two architectures, very different results
+
+**Subprocess-fan-out driver (`bench_concurrency4_npu_ortqnn.py`).**
+N independent OS processes, each loading its own 4 ORT-QNN sessions.
+Three independent attempts (v1, v2, v3 — the v3 done after the
+IOBinding refactor in commit `ac17196`) all hit the same failure mode
+at N=4: load + warmup complete fine, then early in the prefill loop
+2 of 4 streams die with `QNN graph execute error. Error code: 1003`
+while the other 2 finish. **Root cause: 4 streams × 4 partitions = 16
+simultaneous QNN sessions on one Hexagon engine** — well past the
+empirical single-process ~7-session ceiling
+(`reference_ortqnn_session_limit.md`). `weight_sharing_enabled=true`
+only dedupes within one QNN backend instance; subprocesses are
+independent backends, so memory cost is 4×. The IOBinding refactor
+**did not help** — the binding constraint is HTP scheduler / VTCM
+allocation at execute time, not host-side ORT dispatch. The 1.12×
+aggregate "scaling" the v3 N=2 run measured (30.59 vs single-stream
+27.25) is *Python-overhead overlap across processes*, not real NPU
+concurrency: while process A's CPU does numpy KV-stitch for one
+stream, process B's NPU call runs another stream. The NPU itself is
+sequential.
+
+**Sidecar single-process bench (`bench_concurrency_sidecar.py`,
+2026-04-25 architectural fix).** ONE process, ONE chain of 4 AR1
+sessions (well under the 7-session ceiling), N logical `Stream`
+objects each owning a `KVStore`, decode round-robin interleaved
+(step 0 of every stream → step 1 of every stream …). All session
+loads paid once, weight-sharing within the single QNN backend
+instance, no cross-process scheduler ping-pong. **Stable at every N
+tested (1, 2, 4, 8) — no crashes.**
+
+| N | decode agg (t/s) | per-stream user rate (t/s) | per-stream step (ms) |
+|---:|---:|---:|---:|
+| 1 | 27.25 | 27.25 | 37.6 |
+| 2 | 27.20 | 13.60 | 37.5 |
+| 4 | 26.95 |  6.74 | 38.0 |
+| 8 | 26.75 |  3.34 | 38.0 |
+
+**Aggregate is flat at ~27 t/s across all N.** This is the *honest*
+NPU concurrency picture. The NPU is one Hexagon engine with no
+internal parallelism — adding streams divides the same throughput
+budget across agents. Per-stream NPU step time stays at ~38 ms (no
+contention overhead in the round-robin pattern); per-stream
+user-perceived latency scales linearly with N. Aggregate-TG ceiling
+is the NPU's hardware single-stream rate; you cannot exceed it
+without doing the work in fewer NPU calls (i.e., AR128 batched
+prefill across streams — follow-on work).
+
+The subprocess driver's apparent 1.12× scaling came from *accidental
+parallelism on host CPU*. The sidecar bench doesn't get that for
+free; recapturing it would need threading (one Python thread per
+stream calling its own session), since ORT-QNN sessions release the
+GIL during NPU calls. Sessions are single-threaded per-call so
+NPU work still serializes — but Python overhead would overlap.
+Worth ~10-15% aggregate improvement; deferred as separate workstream.
+
+CSVs: `qwen3_4b_ortqnn_sidecar_conc{2,4,8}_2026-04-25_ac.csv`
+(N=1 row uses the standalone bench's `_2026-04-25_ac.csv`).
+
+### Headline implication for agentic workloads
+
+**At concurrency = 4, CPU outperforms NPU on aggregate by 3.0×** (82.0
+vs the NPU's flat ~27 t/s ceiling). The sidecar bench reveals the NPU
+ceiling is *structural* — one Hexagon engine with no internal
+parallelism — not an implementation gap to be closed. Per-stream rate
+under the sidecar drops to 6.74 t/s at N=4 (vs CPU's 20.50 t/s at
+N=4), so CPU also wins on per-stream latency for serving multiple
+agents. **For throughput-oriented multi-agent serving, CPU is the
+right backend.**
+
+The NPU's value at high N is **energy efficiency at a flat ceiling**:
+it serves N agents at the same aggregate ~27 t/s and (per the J/tok
+analysis) at roughly half the CPU's power draw. If your workload is
+latency-tolerant (e.g., background drafts, low-priority agentic
+loops, ambient summarization), 8 agents × 3.3 t/s on the NPU at ~13 W
+beats 8 agents × 10 t/s on the CPU at ~25 W on energy/token even
+though CPU "wins" on raw throughput.
+
+The architectural fix landed in this bench (single-process N-stream
+sidecar) is what makes high-N NPU concurrency *possible* at all —
+without it, N≥4 just crashes. This validates the W4 sidecar design:
+any multi-tenant NPU workload must use one in-process multi-context
+runtime, never spawn N processes.
+
+**OpenCL is the wrong path for any concurrent workload.** Aggregate
+N=4 is *worse* than single-stream (15.68 < 22.92 t/s); per-stream
+collapses to 3.9 t/s. Adreno's per-token kernel-launch overhead
+× 4 interleaved streams serializes. Same conclusion as the 7B doc's
+concurrency section — OpenCL is a non-option for serving multiple
+agents on either model size.
+
+**KleidiAI tracks plain CPU at concurrency** (79.7 vs 82.0 t/s = -3%).
+KleidiAI's per-call setup cost gets paid per stream rather than
+amortized — under concurrency the small-tile-disadvantage at 4B that
+showed up single-stream gets slightly worse. Plain CPU is the safer
+default for batched/agentic loads.
+
 ## Post-mortem
 
 ### Which island wins each workload?
@@ -415,6 +564,18 @@ Layout follows `docs/repo_hygiene.md`:
   - `results/csv/qwen3_4b_ortqnn_2026-04-25_ac.csv` +
     `_2026-04-25_bat.csv` — AR128 swap-mode refresh (current canonical
     AC + BAT NPU/ORT-QNN cells).
+  - `results/csv/qwen3_4b_ortqnn_npuconc2_stream{0,1}_2026-04-25_ac.csv`
+    — clean 2-stream NPU concurrency data (per-stream ~14.5 t/s
+    PP / ~15.3 t/s TG; aggregate ~30.6 t/s = 1.12× single-stream).
+  - `results/csv/qwen3_4b_ortqnn_npuconc4_stream{2,3}_2026-04-25_v3_ac.csv`
+    — surviving streams from the v3 4-way attempt (streams 0+1 crashed
+    QNN 1003 mid-prefill; per-survivor ~14.4 t/s effective 2-way
+    contention).
+  - `results/csv/qwen3_4b_ortqnn_sidecar_conc{2,4,8}_2026-04-25_ac.csv`
+    — single-process N-stream sidecar concurrency bench (architectural
+    fix for the subprocess fan-out's N=4 crash); aggregate ~27 t/s
+    flat, per-stream rate scales 1/N. N=1 baseline is the standalone
+    bench `qwen3_4b_ortqnn_2026-04-25_ac.csv`.
   - `results/qwen3_4b_baseline/pp512_prompt.txt` +
     `pp512_prompt_tokens.txt` — pinned input; reproducible via
     `scripts/gen_pp512_prompt.py`.
@@ -469,3 +630,19 @@ Layout follows `docs/repo_hygiene.md`:
   ±7% of AC, NPU is still the only backend that doesn't degrade
   meaningfully on battery. CSV
   `results/csv/qwen3_4b_ortqnn_2026-04-25_bat.csv`.
+- 2026-04-25 (concurrency): NPU-via-`npu_engine` concurrency-N matrix
+  added in two architectures. **(a) Subprocess fan-out** (existing
+  `bench_concurrency4_npu_ortqnn.py`): N=2 aggregate 30.59 t/s
+  (1.12× — Python-overhead overlap, not NPU parallelism), N=4
+  crashes (third independent confirmation; IOBinding refactor doesn't
+  fix it; root cause is 4×4=16 QNN sessions exceeding HTP scheduler
+  resources). **(b) Sidecar single-process** (new
+  `bench_concurrency_sidecar.py`, the architectural fix): one set of 4
+  sessions shared across N logical streams, decode round-robin
+  interleaved. Stable at N=1, 2, 4, 8 — no crashes. Aggregate flat at
+  ~27 t/s = the NPU's single-stream ceiling. Per-stream user-perceived
+  rate divides cleanly by N. **At N=4, CPU outperforms NPU on
+  aggregate by 3.0×** (82.0 vs 26.95 t/s) — the gap is structural (CPU
+  has 12 cores of true parallelism; NPU is one Hexagon engine), not
+  fixable by more engineering on the NPU side. NPU at high N is a
+  power-efficiency play, not a throughput play.

@@ -1,0 +1,2 @@
+backend,n_streams,pp_tokens,tg_tokens,engine_load_s,pp_wall_s,tg_wall_s,pp_aggregate_tps,tg_aggregate_tps,tg_per_stream_avg_tps,tg_step_ms_median,pp_step_ms_median,per_part_load_s,power_state,tag,note
+npu-ortqnn-sidecar,8,256,128,14.954291800037026,75.81128430005629,38.28218189999461,27.01444803248742,26.74873659696351,26.789707148817723,37.92032497585751,37.7223500108812,1.67;2.35;4.45;6.48,ac,2026-04-25_ac,"single-process, shared 4 AR1 sessions, round-robin decode interleave"
