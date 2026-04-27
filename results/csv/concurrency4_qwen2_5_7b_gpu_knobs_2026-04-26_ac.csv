@@ -1,0 +1,5 @@
+date,backend,build_commit,model,quant,knobs,N,n_prompt,n_gen,t_pp_s,pp_t_per_s_agg,t_tg_s,tg_t_per_s_agg,t_total_s,total_t_per_s_agg,wall_s,notes
+2026-04-26,opencl,f53577432,Qwen2.5-7B-Instruct-Q4_0.gguf,Q4_0,default,4,512,128,7.533,271.86,26.329,19.45,33.862,75.60,44.1,
+2026-04-26,vulkan,f53577432,Qwen2.5-7B-Instruct-Q4_0.gguf,Q4_0,GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1,4,512,128,28.925,70.80,6.615,77.40,35.541,72.03,38.7,3.0x scaling vs single-stream; new agg-TG champion at 7B
+2026-04-26,opencl,f53577432,Qwen2.5-7B-Instruct-Q4_K_M.gguf,Q4_K_M,default,4,512,128,10.674,191.86,39.715,12.89,50.390,50.80,62.2,refresh of 2026-04-25 baseline
+2026-04-26,vulkan,f53577432,Qwen2.5-7B-Instruct-Q4_K_M.gguf,Q4_K_M,GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1,4,512,128,44.887,45.63,11.141,45.96,56.028,45.69,59.3,

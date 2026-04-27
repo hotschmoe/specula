@@ -1,0 +1,9 @@
+date,backend,build_commit,model,quant,knobs,test,t_per_s,stddev,reps,notes
+2026-04-26,opencl,f53577432,Qwen2.5-7B-Instruct-Q4_0.gguf,Q4_0,default,pp512,367.36,1.59,3,recommended Adreno path
+2026-04-26,opencl,f53577432,Qwen2.5-7B-Instruct-Q4_0.gguf,Q4_0,default,tg128,13.58,0.03,3,
+2026-04-26,vulkan,f53577432,Qwen2.5-7B-Instruct-Q4_0.gguf,Q4_0,GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1,pp512,70.38,0.12,3,fixed from 600s timeout
+2026-04-26,vulkan,f53577432,Qwen2.5-7B-Instruct-Q4_0.gguf,Q4_0,GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1,tg128,25.80,0.01,3,beats CPU TG (24.17) and OpenCL TG (13.58)
+2026-04-26,opencl,f53577432,Qwen2.5-7B-Instruct-Q4_K_M.gguf,Q4_K_M,default,pp512,231.41,0.42,3,refresh of 2026-04-25 baseline
+2026-04-26,opencl,f53577432,Qwen2.5-7B-Instruct-Q4_K_M.gguf,Q4_K_M,default,tg128,11.66,0.03,3,
+2026-04-26,vulkan,f53577432,Qwen2.5-7B-Instruct-Q4_K_M.gguf,Q4_K_M,GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1,pp512,48.46,0.14,3,fixed from 600s timeout
+2026-04-26,vulkan,f53577432,Qwen2.5-7B-Instruct-Q4_K_M.gguf,Q4_K_M,GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1,tg128,20.09,0.01,3,

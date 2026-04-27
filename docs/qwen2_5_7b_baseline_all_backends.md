@@ -60,16 +60,21 @@ HF, and the genie config adapted from the 4B's with `n-vocab=152064`,
 ## Headline — AC (wall power, idle system)
 
 Commit: `e365e658f` (cpu, vulkan) / `fd6ae4ca1` (opencl) / `cf8b0dbda`
-(cpu-kleidiai), QAIRT 2.45.40, Genie 1.17.0, bundle compiled QAIRT
-2.45.0.260326154327. Context=4096 (Workbench export's only allowed value).
+(cpu-kleidiai). NPU + CPU rows from 2026-04-25; **GPU rows refreshed
+2026-04-26** at llama.cpp `f53577432` against pure-Q4_0 model
+(`Qwen2.5-7B-Instruct-Q4_0.gguf` from bartowski) with the same knob
+combos that fixed the 4B Vulkan PP and unlocked OpenCL Q4_0. CSV
+`results/csv/qwen2_5_7b_baseline_2026-04-26_ac_knob_sweep.csv`. QAIRT
+2.45.40, Genie 1.17.0, bundle compiled QAIRT 2.45.0.260326154327.
+Context=4096 (Workbench export's only allowed value).
 
 | backend | runtime / build | PP (t/s) | TG (t/s) | TG tokens | notes |
 |---|---|---:|---:|---:|---|
 | **NPU (Genie)**     | genie-t2t-run (QAIRT 2.45, AR128 prefill) | **1219.05** | 22.91 | 254 | EOS at 254 (vs ctx-fill on 4B); see notes |
-| CPU                 | llama.cpp build-cpu (-t 8 ARM64 NEON)     | 122.98     | 24.17 | 128 | |
-| CPU + KleidiAI      | llama.cpp build-cpu-kleidiai (-t 8, i8mm) | 125.57     | **25.42** | 128 | +2% PP, +5% TG vs plain CPU |
-| GPU (OpenCL)        | llama.cpp build-opencl -ngl 99 (Adreno)   | 237.02     | 10.72 | 128 | TG halved vs 4B |
-| GPU (Vulkan)        | llama.cpp build-vulkan -ngl 99            | —          | —     | 0 | timed out at 600 s — same PP-broken pattern as 4B |
+| CPU                 | llama.cpp build-cpu (-t 8 ARM64 NEON), Q4_K_M | 122.98 | 24.17 | 128 | |
+| CPU + KleidiAI      | llama.cpp build-cpu-kleidiai (-t 8, i8mm), Q4_K_M | 125.57 | 25.42 | 128 | +2% PP, +5% TG vs plain CPU |
+| **GPU (OpenCL)**    | llama.cpp build-opencl -ngl 99 (Adreno), **Q4_0** | **367.36 ± 1.59** | 13.58 ± 0.03 | 128 | refreshed 2026-04-26; +55% PP / +27% TG vs Q4_K_M (231/11.66) |
+| **GPU (Vulkan)**    | llama.cpp build-vulkan -ngl 99, **Q4_0**, env `GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1` | 70.38 ± 0.12 | **25.80 ± 0.01** | 128 | refreshed 2026-04-26; PP unbroken (was 600s timeout); TG **beats CPU (24.17) and beats OpenCL by 90%** |
 
 The NPU PP row in `results/csv/qwen2_5_7b_baseline_2026-04-25_ac.csv`
 initially failed to parse (the 4B's parser hardcoded `_4_of_4` to detect
@@ -203,36 +208,88 @@ recommendation: pick the build by power state, not by silicon.
 
 ### GPU (Adreno / OpenCL)
 
+**Canonical AC numbers (Q4_0, 2026-04-26):**
+
 ```
-cmd:    llama-bench -m Qwen2.5-7B-Instruct-Q4_K_M.gguf -p 512 -n 128 -r 3 -ngl 99
-build:  llama.cpp build-opencl @ fd6ae4ca1 (GGML_OPENCL_USE_ADRENO_KERNELS=ON)
-AC   : PP 237.02 t/s  TG 10.72 t/s  (55.9 s wall)
-BAT  : PP 224.09 t/s  TG 10.74 t/s  (58.5 s wall, mean 58.3 W, 5.330 J/tok)
+cmd:    llama-bench -m Qwen2.5-7B-Instruct-Q4_0.gguf -p 512 -n 128 -r 3 -ngl 99
+build:  llama.cpp build-opencl @ f53577432 (GGML_OPENCL_USE_ADRENO_KERNELS=ON)
+AC   : PP 367.36 ± 1.59 t/s   TG 13.58 ± 0.03 t/s   (Q4_0 pure)
 ```
 
-**OpenCL TG halved 4B → 7B** (22.92 → 10.72 t/s). Adreno's per-token
-kernel-launch overhead at AR=1 is now the binding constraint:
-launching the same number of kernels per token on a model with bigger
-matmuls means each kernel runs longer in absolute wall time, so the
-launch overhead's *fraction* of step time stays roughly fixed, but
-the absolute step time grows faster than 1/throughput. **OpenCL TG
-falls below half of CPU TG at 7B** — even less viable than at 4B.
+**Quant matters at 7B too** (2026-04-26 finding). Same upstream
+guidance as for 4B — Adreno's OpenCL backend has optimized kernels
+only for Q4_0/Q8_0/MXFP4; Q4_K is unsupported and goes through a
+fallback. Switching to pure Q4_0 (downloaded from
+`bartowski/Qwen2.5-7B-Instruct-GGUF` on HF) takes OpenCL from
+`231 → 367 PP (+59%)` and `11.66 → 13.58 TG (+16%)` at 7B. Same
+direction as 4B (+55% / +14%) — the fast-path kernel scales the
+same way per-parameter at both model sizes.
 
-OpenCL also draws 58.3 W mean — 4× the NPU, 3× the CPU. PP at
-237 t/s is only 19% of NPU's 1219 t/s. There is no workload at 7B on
-this silicon where OpenCL is the right pick.
+| model | PP512 t/s | TG128 t/s |
+|---|---:|---:|
+| Q4_K_M (old baseline) | 237.02 | 10.72 |
+| Q4_K_M (rebuild only, 2026-04-26) | 231.41 ± 0.42 | 11.66 ± 0.03 |
+| **Q4_0** | **367.36 ± 1.59** | **13.58 ± 0.03** |
+
+**Old-baseline BAT numbers** (Q4_K_M, kept as reference until a
+Q4_0 BAT refresh): PP 224.09 / TG 10.74 / mean 58.3 W / 5.330 J/tok.
+
+**TG still drops dramatically vs 4B** (4B Q4_0 OpenCL: 26.22 → 7B
+Q4_0: 13.58, -48%). Adreno's per-token kernel-launch overhead at
+AR=1 is still the binding constraint at 7B even on the optimized
+quant — bigger matmuls per token push absolute step time up faster
+than throughput. **OpenCL TG (13.58) still falls below CPU TG
+(24.17)** at 7B, just like the old reading. **Vulkan is now the
+right GPU backend for TG at 7B** — see next section.
+
+**OpenCL is still the right GPU backend for PP at 7B**: 367 t/s
+PP is **5.2× Vulkan's 70.38 PP**, only 30% of NPU's 1219 — the
+ranking is `NPU >> OpenCL > CPU > Vulkan` for prefill at 7B.
 
 ### GPU (Vulkan)
 
+**Canonical AC numbers (Q4_0 + env knobs, 2026-04-26):**
+
 ```
-cmd:    llama-bench -m Qwen2.5-7B-Instruct-Q4_K_M.gguf -p 512 -n 128 -r 3 -ngl 99
-build:  llama.cpp build-vulkan
-AC   : timed out at 600 s — PP collapsed (same pattern as 4B)
-BAT  : timed out at 633 s
+cmd:    GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1 \
+            llama-bench -m Qwen2.5-7B-Instruct-Q4_0.gguf -p 512 -n 128 -r 3 -ngl 99
+build:  llama.cpp build-vulkan @ f53577432
+AC   : PP 70.38 ± 0.12 t/s   TG 25.80 ± 0.01 t/s   (Q4_0 pure)
 ```
 
-Same shader-recompilation-per-prefill-tile failure mode as 4B. Don't
-use Vulkan for any prefill workload on X2E + Adreno until investigated.
+**The 2026-04-25 "Vulkan timed out at 600 s — same PP-broken pattern
+as 4B" finding has been resolved as runtime config, identical fix
+to the 4B writeup**: `GGML_VK_DISABLE_F16=1` forces FP32 matmul
+which Adreno's Vulkan ICD handles cleanly (the FP16 codepath silently
+falls into a slow scalar fallback for Q4 matmul on this driver),
+and `GGML_VK_PREFER_HOST_MEMORY=1` adds a small uma=1 win.
+
+| model | PP512 t/s | TG128 t/s |
+|---|---:|---:|
+| Q4_K_M (old default) | — (timed out at 600 s) | — |
+| Q4_K_M + `DISABLE_F16+PREFER_HOST` | 48.46 ± 0.14 | 20.09 ± 0.01 |
+| **Q4_0 + `DISABLE_F16+PREFER_HOST`** | **70.38 ± 0.12** | **25.80 ± 0.01** |
+
+**Implication for the all-backends ranking at 7B.** On Q4_0:
+
+- **Vulkan TG (25.80) beats CPU TG (24.17) AND beats OpenCL TG
+  (13.58) by 90%** — biggest TG margin of any backend at 7B.
+- Vulkan PP (70.38) is still 5.2× slower than OpenCL PP (367.36),
+  so OpenCL stays the GPU PP path.
+- The 4B reading "TG-heavy → Vulkan, PP-heavy → OpenCL" carries
+  to 7B with the *Vulkan TG advantage growing*: at 4B Vulkan TG
+  was within 1 t/s of CPU; at 7B Vulkan TG **beats** CPU.
+
+**Why Vulkan TG advantage grows with model size**: per-token decode
+on Vulkan with the F16-off path uses Adreno's `KHR_coopmat` matrix
+cores for the matmul; the matmul shape `[1, hidden]·[hidden, vocab]`
+is more "rectangular" at 7B (hidden=3584 vs 2560 at 4B), giving
+the coopmat tile better fit. CPU TG at 7B drops -39% from 4B (memory-
+bound), while Vulkan TG only drops -33% — Vulkan scales gentler with
+parameter count.
+
+**BAT for Vulkan-Q4_0 at 7B is the next data point** to fill in
+(should be ~5-10% BAT-vs-AC delta based on the 4B reading).
 
 ## Concurrency = 4 (agentic workload)
 
@@ -246,42 +303,70 @@ Runner: `scripts/bench_concurrency4_all_backends.py`.
 
 ### Headline — AC, both models
 
+GPU rows refreshed 2026-04-26 with the canonical knob+quant combos
+from the single-stream sweep. **The 7B headline reorders just like
+the 4B headline did**: Vulkan-Q4_0 with F16-off + host-mem is the
+new aggregate-TG champion at N=4 / 7B too.
+
 | model | backend | S_PP agg (t/s) | S_TG agg (t/s) | per-stream TG | wall (s) |
 |---|---|---:|---:|---:|---:|
-| 4B | CPU          | 126.61 | **82.01** | 20.50 | 24.4 |
-| 4B | KleidiAI     | 116.63 | 79.73     | 19.93 | 25.5 |
-| 4B | OpenCL       | 251.08 | 15.68     | 3.92  | 50.0 |
-| 7B | CPU          | 104.64 | **62.78** | 15.70 | 30.4 |
-| 7B | KleidiAI     |  99.65 | 62.25     | 15.56 | 31.4 |
-| 7B | OpenCL       | 196.35 | 13.18     | 3.29  | 60.7 |
+| 4B | **GPU (Vulkan, Q4_0, knobs)** | 115.01 | **102.33** | **25.58** | 25.5 |
+| 4B | CPU          | 126.61 | 82.01 | 20.50 | 24.4 |
+| 4B | KleidiAI     | 116.63 | 79.73 | 19.93 | 25.5 |
+| 4B | GPU (OpenCL, Q4_0, refresh) | 315.12 | 19.95 | 4.99 | 41.8 |
+| 4B | GPU (OpenCL, Q4_K_M, baseline) | 251.08 | 15.68 | 3.92 | 50.0 |
+| 7B | **GPU (Vulkan, Q4_0, knobs)** | 70.80 | **77.40** | **19.35** | 38.7 |
+| 7B | CPU          | 104.64 | 62.78 | 15.70 | 30.4 |
+| 7B | KleidiAI     |  99.65 | 62.25 | 15.56 | 31.4 |
+| 7B | GPU (Vulkan, Q4_K_M, knobs) | 45.63 | 45.96 | 11.49 | 59.3 |
+| 7B | GPU (OpenCL, Q4_0, refresh) | 271.86 | 19.45 | 4.86 | 44.1 |
+| 7B | GPU (OpenCL, Q4_K_M, refresh) | 191.86 | 12.89 | 3.22 | 62.2 |
+| 7B | GPU (OpenCL, Q4_K_M, 2026-04-25 baseline) | 196.35 | 13.18 | 3.29 | 60.7 |
 
-Stored in `results/csv/concurrency4_qwen3_4b_2026-04-25_ac.csv` and
-`results/csv/concurrency4_qwen2_5_7b_2026-04-25_ac.csv`.
+Stored in `results/csv/concurrency4_qwen3_4b_2026-04-25_ac.csv`
+(2026-04-25 CPU/KleidiAI/OpenCL baseline),
+`results/csv/concurrency4_qwen2_5_7b_2026-04-25_ac.csv` (same),
+`results/csv/concurrency4_gpu_knobs_2026-04-26_ac.csv` (the
+2026-04-26 4B GPU refresh, canonical), and
+`results/csv/concurrency4_qwen2_5_7b_gpu_knobs_2026-04-26_ac.csv`
+(this run — canonical 7B GPU rows at N=4).
 
 ### Concurrency scaling factor (TG aggregate / TG single-stream)
 
-| model | CPU | KleidiAI | OpenCL |
-|---|---:|---:|---:|
-| 4B | 2.08× | 2.07× | **0.68× (worse than single-stream)** |
-| 7B | **2.60×** | 2.45× | 1.23× |
+GPU rows use 2026-04-26 single-stream baselines as the denominator
+(Q4_0 for canonical, Q4_K_M for comparators).
+
+| model | CPU | KleidiAI | OpenCL Q4_0 (refresh) | OpenCL Q4_K_M | **Vulkan Q4_0 (knobs)** | Vulkan Q4_K_M (knobs) |
+|---|---:|---:|---:|---:|---:|---:|
+| 4B | 2.08× | 2.07× | 0.76× | **0.68×** | **2.66×** | — |
+| 7B | **2.60×** | 2.45× | 1.43× | 1.10× | **3.00×** | 2.29× |
+
+**Vulkan-Q4_0 has the strongest concurrency scaling at every model
+size we've measured.** 4B: 2.66×. 7B: **3.00×** (better than 4B!).
+The same explanation that fits 4B applies harder at 7B: at AR=1
+single-stream Vulkan decode the matmul shape `[1, hidden]·[hidden,
+vocab]` under-utilizes Adreno's `KHR_coopmat` 16×16 tile; N=4 batched
+decode lifts the shape to `[4, hidden]` which fits the tile better,
+and at 7B the `hidden` dimension is 3584 (vs 4B's 2560) so the
+coopmat fit is even cleaner. Per-token kernel-launch overhead
+amortizes across 4 streams.
+
+**OpenCL N=4 finally crosses 1.0× at 7B** (1.43× on Q4_0, 1.10× on
+Q4_K_M) — but absolute aggregate (19.45 / 12.89 t/s) is dwarfed
+by CPU (62.78) and Vulkan (77.40). OpenCL still doesn't get the
+coopmat path; even at 7B it remains the wrong concurrency backend.
 
 **CPU scaling factor *grows* with model size** — at 7B, 4-way batching
 recovers 2.60× of the single-stream throughput vs 2.08× at 4B. Bigger
 matmul per step amortizes batched dispatch better. Per-stream TG drops
-from 24 → 16 t/s, a ~35% latency hit per agent for ~2.6× aggregate.
-Tradeoff curve agentic deployments would actually accept.
+from 24 → 16 t/s — but Vulkan-Q4_0 N=4 per-stream TG is **19.35 t/s**,
+still better than CPU's 15.70. Vulkan wins both axes at 7B
+concurrency.
 
-**OpenCL is the wrong path for any concurrent workload.** At 4B the
-aggregate at concurrency=4 is *worse* than concurrency=1 (15.68 < 22.92
-t/s). At 7B it's barely positive (1.23×) but absolute throughput is
-13 t/s aggregate — **CPU beats OpenCL by 4.8× at concurrency=4 / 7B**.
-Adreno's per-token kernel-launch overhead × 4 interleaved streams
-serializes badly.
-
-**KleidiAI's small 7B win evaporates under concurrency.** The +5% TG
-single-stream advantage becomes −0.8% at concurrency=4 — vector-kernel
-setup cost gets paid once per stream rather than amortized. At
-concurrency, plain CPU is the safer default.
+**KleidiAI's small 7B single-stream win evaporates under concurrency.**
+The +5% TG single-stream advantage becomes −0.8% at concurrency=4 —
+vector-kernel setup cost gets paid once per stream rather than
+amortized. At concurrency, plain CPU is the safer CPU choice.
 
 ### NPU concurrency experiment (ORT-QNN-chained, spawn-N-procs)
 
@@ -400,17 +485,27 @@ guess.
 ### Which island wins each workload at 7B?
 
 **PP**: NPU dominates by a wider margin than at 4B — 1219 t/s vs
-OpenCL's 237 (5.1×) and CPU's 123 (9.9×). Take prefill to the NPU
-whenever a bundle exists.
+OpenCL-Q4_0 (refreshed 2026-04-26) at 367 (3.3×) and CPU's 123
+(9.9×). The Q4_0 refresh narrowed the NPU-vs-OpenCL gap from the
+old 5.1× to 3.3× by lifting OpenCL PP +55%. Take prefill to the NPU
+whenever a bundle exists; otherwise OpenCL-Q4_0 is the second-best
+option, with Vulkan a distant third (70 PP).
 
-**TG single-stream**: KleidiAI > CPU > Vulkan > NPU > OpenCL.
-KleidiAI flipped from a regression at 4B to a small win at 7B
-(25.4 vs 24.2 plain CPU). NPU at 22.9 is still useful for the silent/
-cool/UX-friendly use case (see 4B doc § Qualitative UX axis), just
-not the throughput champion.
+**TG single-stream (revised 2026-04-26)**: **Vulkan-Q4_0 (25.80) >
+KleidiAI (25.42) > CPU (24.17) > NPU (22.91) > OpenCL-Q4_0 (13.58)
+> Vulkan-Q4_K_M (20.09 with knobs) > OpenCL-Q4_K_M (11.66)**. Vulkan
+took the TG lead from KleidiAI by switching to Q4_0 with the
+F16-off knob. NPU at 22.9 is still useful for the silent/cool/
+UX-friendly use case (see 4B doc § Qualitative UX axis); it's no
+longer next-to-last on TG, just middle-of-pack.
 
-**TG concurrency=4**: CPU > KleidiAI > OpenCL. CPU's 2.6× scaling at 7B
-is the headline — agentic loads land here, not on GPU.
+**TG concurrency=4 (revised 2026-04-26)**: **Vulkan-Q4_0 (77.40) >
+CPU (62.78) > KleidiAI (62.25) > Vulkan-Q4_K_M (45.96) >
+OpenCL-Q4_0 (19.45) > OpenCL-Q4_K_M (12.89)**. Same inversion as 4B:
+the 2026-04-25 conclusion "CPU is the right backend for 7B agentic
+loads" is **superseded** — Vulkan-Q4_0 with knobs hits 77 t/s
+aggregate, +23% over CPU. Per-stream Vulkan also wins (19.35 vs
+CPU's 15.70 per-stream TG).
 
 **J/gen-tok**: NPU still dominates by 4.3× over CPU and 26× over
 OpenCL, but the gap to CPU narrowed from 6.4× at 4B. NPU's efficiency
@@ -437,18 +532,25 @@ fundamental).
    target with quality matching), the AIMET SEQ_MSE/AdaScale path
    (Scenario B in `docs/rent_cloud_compute.md`) should produce a
    smaller w4a16 bundle if quality tracking matters.
-4. **OpenCL ruled out at 7B+.** Too slow (TG halved), too power-hungry
-   (mean W ↑31%), worse than CPU at concurrency. Don't include OpenCL
-   in any 7B+ deployment. Document and move on.
+4. **OpenCL is the GPU PP path at 7B+; Vulkan is the GPU TG path**
+   (revised 2026-04-26). Q4_0 lifts OpenCL PP to 367 t/s — second-best
+   PP behind NPU, so OpenCL keeps its prefill role. But OpenCL TG at
+   13.58 is still half of CPU and half of Vulkan; **Vulkan-Q4_0 at 25.80
+   single-stream / 77.40 N=4 is the TG champion**. Route by phase
+   when GPU is the chosen island.
 5. **KleidiAI re-introduced as a build option for AC-only large-model
    workloads.** The per-power-state pick (KleidiAI on AC, plain CPU
    on BAT) is a mode the runner doesn't currently express; either
    parameterize via flag or document the rule of thumb in
    `docs/build_picks.md` (TBD).
-6. **CPU as the agentic-workload backend.** 7B at concurrency=4
-   delivers 63 agg t/s on CPU — viable for serving a handful of
-   concurrent agents per laptop. NPU goes single-tenant until W4
-   sidecar is built; until then, CPU owns concurrency.
+6. **Vulkan-Q4_0 as the agentic-workload backend** (revised
+   2026-04-26). 7B at concurrency=4 delivers **77 agg t/s on Vulkan
+   with the F16-off + host-mem knobs** — +23% over CPU's 63, and
+   per-stream 19.35 t/s vs CPU's 15.70 also wins. NPU still goes
+   single-tenant (~23 t/s flat — useful for energy-sensitive
+   latency-tolerant agents) until W4 sidecar is built; for
+   throughput-or-latency-critical multi-agent serving, route to
+   Vulkan-Q4_0.
 
 ### What to re-measure in 2-4 weeks
 
@@ -483,6 +585,18 @@ Layout follows `docs/repo_hygiene.md`:
     — surviving streams from the second 4-way attempt; streams 0 and 3
     crashed with QNN error 1003 mid-prefill. Streams 1 and 2 effectively
     measure 2-way contention (~14 t/s per stream, ~29 t/s aggregate).
+  - `results/csv/qwen2_5_7b_baseline_2026-04-26_ac_knob_sweep.csv` —
+    GPU knob+quant sweep at llama.cpp `f53577432`. Canonical rows:
+    OpenCL Q4_0 default (367/13.58) and Vulkan Q4_0 +
+    `GGML_VK_DISABLE_F16+PREFER_HOST` (70.38/25.80). Supersedes the
+    2026-04-25 GPU AC baselines.
+  - `results/csv/concurrency4_qwen2_5_7b_gpu_knobs_2026-04-26_ac.csv`
+    — GPU N=4 sweep: Vulkan Q4_0 + knobs at TG_agg 77.40 t/s is the
+    new aggregate-TG champion at 7B (+23% vs CPU's 62.78). Supersedes
+    the 2026-04-25 GPU concurrency rows for 7B.
+  - `models/Qwen2.5-7B-Instruct-Q4_0.gguf` — pure-Q4_0 quant from
+    `bartowski/Qwen2.5-7B-Instruct-GGUF` (HF), 4.13 GiB. Recommended
+    Adreno OpenCL quant per `llama.cpp/docs/backend/OPENCL.md`.
   - `results/qwen2_5_7b_baseline/pp512_prompt.txt` +
     `pp512_prompt_tokens.txt` — pinned prompt; reproducible via
     `scripts/gen_pp512_prompt_qwen2_5_7b.py`.
@@ -516,3 +630,32 @@ Layout follows `docs/repo_hygiene.md`:
   4 added on the same day (CPU/KleidiAI/OpenCL on both 4B and 7B).
   NPU concurrency-4 via ORT-QNN spawn-4-procs landed alongside.
   Genie 4× async path documented as feasibility-only, not run.
+- 2026-04-26 (GPU refresh @ llama.cpp `f53577432`): re-ran the GPU
+  rows with the canonical knob+quant combos that worked on 4B
+  (OpenCL on pure Q4_0, Vulkan on Q4_0 with `DISABLE_F16+PREFER_HOST`).
+  Both single-stream and concurrency-4 measured. **The 4B headline
+  reorder reproduces at 7B**:
+  **(1) Vulkan PP unbroken at 7B** — was 600 s timeout, now
+  PP 70.38 / TG 25.80 single-stream. Same fix mechanism (Adreno
+  Vulkan ICD's FP16 codepath silently falls into a slow scalar path
+  on Q4 matmuls; FP32 runs cleanly).
+  **(2) OpenCL faster on Q4_0** — PP 231 → 367 (+59%), TG 11.66 →
+  13.58 (+16%); Q4_K is officially unsupported on Adreno OpenCL,
+  Q4_0 hits the optimized path.
+  **(3) Vulkan TG at 7B beats CPU**: 25.80 vs 24.17 single-stream,
+  77.40 vs 62.78 N=4 (+23%). At 7B Vulkan's TG advantage *grows*
+  vs 4B (where Vulkan TG ≈ CPU TG within 1 t/s) — the matmul shape
+  with hidden=3584 fits Adreno's `KHR_coopmat` 16×16 tile better
+  than 4B's hidden=2560.
+  **(4) Concurrency scaling at 7B**: Vulkan-Q4_0 hits **3.0× scaling**
+  N=1→N=4 (vs 4B's 2.66×), the strongest in the matrix. CPU also
+  scales better at 7B (2.60× vs 4B's 2.08×) but Vulkan still wins.
+  OpenCL N=4 finally crosses 1.0× scaling at 7B (1.43× on Q4_0)
+  but absolute aggregate (19.45) is dwarfed by Vulkan (77.40) and
+  CPU (62.78). **The 2026-04-25 conclusion "CPU as the agentic
+  backend" is superseded** — Vulkan-Q4_0 wins on aggregate AND
+  per-stream at 7B too. CSVs
+  `results/csv/qwen2_5_7b_baseline_2026-04-26_ac_knob_sweep.csv` and
+  `results/csv/concurrency4_qwen2_5_7b_gpu_knobs_2026-04-26_ac.csv`.
+  BAT refresh + power numbers for the new 7B GPU configs is the next
+  data point.
