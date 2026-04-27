@@ -618,6 +618,73 @@ CSV: `concurrency4_gpu_knobs_2026-04-26_ac.csv`. Driver:
 the script can target Q4_0 and the Vulkan knob env vars without
 forking the original).
 
+#### Battery (BAT) refresh — throughput tracks AC; J/tok methodology
+caveat
+
+Same matrix on battery via
+`scripts/bench_concurrency4_gpu_knobs_bat.py` (adds the
+`PowerSampler` from the AC driver). CSV
+`concurrency4_gpu_knobs_2026-04-26_bat.csv`.
+
+| label | PP_agg t/s | TG_agg t/s | total_agg t/s | wall s | AC↔BAT TG Δ |
+|---|---:|---:|---:|---:|---:|
+| **Vulkan Q4_0 + F16-off+host-mem** | 112.57 | **96.97** | 109.06 | 26.2 | **-5.2%** |
+| OpenCL Q4_0 default | 284.17 | 18.77 | 74.22 | 44.0 | -5.9% |
+| Vulkan Q4_K_M + knobs | 83.38 | 75.12 | 81.58 | 34.3 | -5.3% |
+| OpenCL Q4_K_M default | 222.03 | 14.64 | 57.92 | 54.6 | -6.2% |
+
+**Throughput finding: BAT TG_agg is within 5-6% of AC across all 4
+configs.** Vulkan Q4_0 stays the leader on battery — 96.97 vs CPU
+N=4 BAT 78.99 (= 38.52 × 2.05, extrapolated from 2026-04-23 BAT) —
+**still +23% over CPU** at concurrency. The throughput hierarchy
+established at AC holds on battery.
+
+**J/tok and mean_W are NOT reliably measurable at N=4 on this
+hardware** with our current tooling. Two issues compound:
+
+1. **WMI `DischargeRate` undersamples bursty Adreno workloads**
+   on Snapdragon X2 Elite. Repeating the same 4-config sweep gave
+   `mean_W` of `[4.9, 4.86, 11.76, 26.42]` on first run and
+   `[11.69, 14.75, 33.12, 33.12]` on second run. Same workload,
+   3-7× spread — the 1-Hz polling lands in idle valleys between
+   compute bursts more often than it should.
+2. **`RemainingCapacity` (mWh) updates in coarse ~600 mWh ticks**,
+   too granular for 30-60s runs. We see 0 mWh drop across some
+   bench windows that demonstrably consumed energy.
+
+The single-stream BAT means (OpenCL Q4_0: 27.52 W, Vulkan Q4_0:
+28.25 W) **are** reliable because the runs were back-to-back and we
+sampled across multiple fuel-gauge ticks. For N=4 specifically, the
+per-run window is too short relative to the gauge resolution, and
+the higher peak W during batched matmul means the WMI sampler hits
+more idle valleys.
+
+**Best estimates for N=4 BAT mean_W**, using max-of-WMI across
+reruns and back-cross-checking against single-stream BAT W:
+
+| config | best mean_W estimate | implied J/gen-tok at N=4 |
+|---|---:|---:|
+| Vulkan Q4_0 + knobs | ~28 W (≈ N=1 BAT) | ~0.29 J/gen-tok |
+| OpenCL Q4_0 | ~27 W (≈ N=1 BAT) | ~1.44 J/gen-tok |
+| Vulkan Q4_K_M + knobs | ~30 W | ~0.40 J/gen-tok |
+| OpenCL Q4_K_M | ~33 W | ~2.26 J/gen-tok |
+
+**Inferred winner: Vulkan-Q4_0 at N=4 lands around 0.29 J/gen-tok**
+— ~2.8× more efficient per generated token than at N=1 (0.81), and
+within striking distance of NPU's single-stream J/gen-tok of 0.61.
+But this number is *inferred* not directly measured. To pin it down
+properly we need either a longer-wall multi-iteration run that
+amortizes the fuel-gauge resolution, or a hardware power probe
+external to WMI (e.g., HWiNFO64's BatteryDischargeRate channel,
+which polls SMBus at higher resolution).
+
+**Methodology TODO** before any J/tok claim at N=4 ships to the
+roadmap: rerun this matrix with `--repetitions 5` (or wrap the
+single bench in a 3-min outer loop) so each row's mwh delta is in
+the 1500-3000 mWh range — well above the gauge resolution. The
+throughput numbers are already good; only the energy axis needs
+refinement.
+
 ### Headline implication for agentic workloads (2026-04-26 inversion)
 
 **At concurrency = 4 the ranking inverts: GPU-Vulkan-Q4_0 (102.3) >
@@ -806,6 +873,15 @@ Layout follows `docs/repo_hygiene.md`:
     Canonical row: Vulkan Q4_0 + F16-off + host-mem at TG_agg
     102.33 t/s — the new aggregate-TG champion at N=4. Supersedes
     the 2026-04-23 GPU concurrency rows.
+  - `results/csv/concurrency4_gpu_knobs_2026-04-26_bat.csv` —
+    BAT version of the same matrix with WMI sampling. Throughput
+    numbers are clean (BAT within 5-6% of AC across all 4 configs);
+    `mean_W` and `j_per_tok` columns are unreliable at N=4 — see
+    methodology caveat in the per-section detail.
+  - `scripts/bench_concurrency4_gpu_knobs_bat.py` — BAT companion
+    to the AC concurrency driver; adds `PowerSampler` for J/tok
+    intent (currently unreliable at N=4 — flagged for methodology
+    rework, see doc detail).
   - `models/Qwen3-4B-Q4_0.gguf` — pure-Q4_0 quant from
     `unsloth/Qwen3-4B-GGUF` (HF). 2.21 GiB. Recommended Adreno OpenCL
     quant per `llama.cpp/docs/backend/OPENCL.md`.
@@ -948,10 +1024,25 @@ Layout follows `docs/repo_hygiene.md`:
   (~13 W vs Vulkan's ~28 W) — for latency-tolerant agentic work
   the J/tok argument still favors NPU; for throughput-or-latency-
   sensitive multi-agent serving, Vulkan-Q4_0 is the new default.
-  CSV `results/csv/concurrency4_gpu_knobs_2026-04-26_ac.csv`. BAT
-  concurrency is the next data point (J/tok at N=4 will likely
-  reorder again — Vulkan-Q4_0 has the best non-NPU J/gen-tok at
-  N=1, and concurrency only helps).
+  CSV `results/csv/concurrency4_gpu_knobs_2026-04-26_ac.csv`.
+- 2026-04-26 (concurrency-4 GPU BAT): closed the BAT throughput cells
+  for the new N=4 configs via
+  `scripts/bench_concurrency4_gpu_knobs_bat.py`. **Throughput holds
+  on battery**: AC↔BAT TG_agg deltas of -5.2% (Vulkan Q4_0), -5.9%
+  (OpenCL Q4_0), -5.3% / -6.2% on Q4_K_M comparators — the AC
+  hierarchy is preserved on battery. **Vulkan Q4_0 + knobs at N=4
+  BAT: TG_agg 96.97 t/s** (vs AC's 102.33), still ~+23% over the
+  CPU-N=4-BAT extrapolation. **J/tok at N=4 is methodologically
+  unreliable**: WMI `DischargeRate` undersamples Adreno's bursty
+  matmul pattern (re-running the sweep produced `mean_W` of 4.86 vs
+  14.75 W for the same Vulkan-Q4_0 config), and `RemainingCapacity`
+  ticks ~600 mWh at a time — too coarse for 30-60s runs. Best
+  back-of-envelope: Vulkan Q4_0 N=4 BAT J/gen-tok ≈ 0.29
+  (~2.8× better than N=1's 0.81, within reach of NPU's 0.61), but
+  this is *inferred*, not measured. Methodology rework deferred —
+  next BAT run will use multi-iteration outer loops so each row's
+  mwh delta is well above the fuel-gauge resolution. CSV
+  `results/csv/concurrency4_gpu_knobs_2026-04-26_bat.csv`.
 - 2026-04-25 (concurrency): NPU-via-`npu_engine` concurrency-N matrix
   added in two architectures. **(a) Subprocess fan-out** (existing
   `bench_concurrency4_npu_ortqnn.py`): N=2 aggregate 30.59 t/s
