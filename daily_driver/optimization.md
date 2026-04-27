@@ -388,6 +388,39 @@ PP or TG moves > 5%, re-bench the matrix.
     llama.cpp. Promoted to "first non-trivial spec-decode bet"
     once llama.cpp baseline is locked.
 
+### 2026-04-27 — Phase 3: Vulkan env A/B confirms F16-off mandatory
+
+CSV: `results/csv/daily_driver_2026-04-26_vulkan_no_env.csv` (file
+keeps the 04-26 tag; bench started at 23:50 local and ran into the
+27th).
+
+Ran Vulkan with default env (no `GGML_VK_DISABLE_F16=1`, no
+`GGML_VK_PREFER_HOST_MEMORY=1`). After **10 minutes wall**, GPU at
+~99% utilization continuously, **zero measurable progress** (CPU
+flat at 89s for the duration). Killed externally at 617s. Compare
+to Phase 1's Vulkan-with-knobs at 75s wall — that's **>8× slower**
+on the same model+quant.
+
+Pattern matches the 7B doc's "FP16 codepath silently falls into
+slow scalar fallback for quantized matmul on Adreno Vulkan ICD"
+finding, now confirmed for **MXFP4_MOE** (not just Q4_0).
+**`GGML_VK_DISABLE_F16=1` is mandatory** for Vulkan + this model;
+removing it triggers the slow path. PREFER_HOST_MEMORY also stays.
+
+This is also where the **bench-runner safety upgrade** got added
+(see commit). New `run_streaming()` in `scripts/bench_daily_driver.py`:
+
+- Streams stdout+stderr to log_path in real time (line-buffered) so
+  we can `tail -f` mid-run.
+- Adds `--progress` to llama-bench so progress lines emit on stderr.
+- Stale-output watchdog: kills if no byte in either stream for
+  `STALE_TIMEOUT_S` (default 300 s = 5 min). This catches the
+  "GPU 99% but never finishes" pattern that Phase 3 demonstrated.
+- Hard timeout backstop preserved at 1800 s.
+
+Next time we hit a slow scalar fallback, we'll lose at most 5 min
+instead of 30+ min.
+
 ### 2026-04-26 — Phase 1: full 4-backend AC matrix, PP512/TG128
 
 CSV: `results/csv/daily_driver_2026-04-26_full_ac.csv`. llama.cpp

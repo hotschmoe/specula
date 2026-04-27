@@ -167,9 +167,134 @@ class PowerSampler:
 # spend 8-12 minutes on PP+TG combined. 1800 s = 30 min ceiling.
 LLAMA_BENCH_TIMEOUT_S = 1800
 
+# Stale-output watchdog: if neither stdout nor stderr emits a byte for
+# this long, kill the process. With `--progress` enabled, llama-bench
+# emits a progress line every test repetition, so even a cold 131k
+# prefill should produce a stderr byte every ~1-2 minutes max. 300 s
+# = 5 min is generous but still catches the "100% GPU, no output"
+# livelock pattern that bit us on Vulkan-Q4 at 7B.
+STALE_TIMEOUT_S = 300
+
 
 def gguf_for_preset(preset: str) -> Path:
     return GGUF_GPU if preset in ("opencl", "vulkan") else GGUF_CPU
+
+
+def run_streaming(
+    cmd: list[str],
+    log_path: Path,
+    env: dict,
+    hard_timeout_s: int = LLAMA_BENCH_TIMEOUT_S,
+    stale_timeout_s: int = STALE_TIMEOUT_S,
+) -> tuple[int, str, str, str]:
+    """Run cmd via Popen, stream stdout+stderr to log_path in real time,
+    enforce hard timeout AND stale-output watchdog.
+
+    Two safety mechanisms:
+      - hard_timeout_s: total wall time ceiling. Fired as a backstop.
+      - stale_timeout_s: max silence between any byte of output. This
+        is the catch for the "GPU at 99% but no output for hours"
+        livelock that we hit on Vulkan-Q4 at the 7B baseline.
+
+    Streams output to log_path as it arrives (line-buffered + flush
+    after each write), so a separate process can `tail -f` mid-run
+    to see progress. stderr lines get a [err] prefix in the log.
+
+    Returns (returncode, stdout_full, stderr_full, status). status
+    is one of: "ok", "hard_timeout", "stale_timeout", "error".
+    """
+    last_activity_lock = threading.Lock()
+    last_activity = [time.monotonic()]
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def reader(pipe, prefix: str, sink: list[str], log_f):
+        try:
+            for line in iter(pipe.readline, ""):
+                with last_activity_lock:
+                    last_activity[0] = time.monotonic()
+                sink.append(line)
+                try:
+                    log_f.write(prefix + line)
+                    log_f.flush()
+                except Exception:
+                    pass
+        finally:
+            try:
+                pipe.close()
+            except Exception:
+                pass
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w", encoding="utf-8", errors="replace", buffering=1) as log_f:
+        log_f.write("=== cmd ===\n")
+        log_f.write(" ".join(cmd) + "\n")
+        log_f.write("=== streaming output ===\n")
+        log_f.flush()
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                bufsize=1,
+            )
+        except Exception as e:
+            log_f.write(f"\n=== Popen failed: {e} ===\n")
+            return -1, "", "", "error"
+
+        out_thread = threading.Thread(
+            target=reader, args=(proc.stdout, "", stdout_chunks, log_f),
+            daemon=True,
+        )
+        err_thread = threading.Thread(
+            target=reader, args=(proc.stderr, "[err] ", stderr_chunks, log_f),
+            daemon=True,
+        )
+        out_thread.start()
+        err_thread.start()
+
+        t0 = time.monotonic()
+        status = "ok"
+        while True:
+            rc = proc.poll()
+            if rc is not None:
+                break
+            now = time.monotonic()
+            elapsed = now - t0
+            with last_activity_lock:
+                silence = now - last_activity[0]
+            if elapsed > hard_timeout_s:
+                log_f.write(f"\n=== KILLED: hard timeout {hard_timeout_s}s ===\n")
+                log_f.flush()
+                proc.kill()
+                status = "hard_timeout"
+                break
+            if silence > stale_timeout_s:
+                log_f.write(
+                    f"\n=== KILLED: no output for {silence:.0f}s "
+                    f"(stale > {stale_timeout_s}s) ===\n"
+                )
+                log_f.flush()
+                proc.kill()
+                status = "stale_timeout"
+                break
+            time.sleep(1.0)
+
+        # Drain readers + collect exit code
+        out_thread.join(timeout=10)
+        err_thread.join(timeout=10)
+        try:
+            rc = proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            rc = proc.wait(timeout=5)
+
+        log_f.write(f"\n=== exit={rc}  status={status}  wall={time.monotonic()-t0:.1f}s ===\n")
+
+    return rc, "".join(stdout_chunks), "".join(stderr_chunks), status
 
 
 def run_llama_bench(
@@ -207,6 +332,9 @@ def run_llama_bench(
         "-n", "128",
         "-r", "3",
         "-o", "json",
+        "--progress",  # emits per-test progress to stderr; powers the
+                       # stale-output watchdog and lets `tail -f` show
+                       # progress mid-run.
     ]
     if threads is not None:
         cmd += ["-t", str(threads)]
@@ -221,33 +349,32 @@ def run_llama_bench(
     print(f"  cmd: {' '.join(cmd)}")
     if extra_env:
         print(f"  env: {extra_env}")
+    print(f"  log: {log_path}  (tail -f to watch progress)")
 
     t0 = time.perf_counter()
-    with log_path.open("w", encoding="utf-8", errors="replace") as f:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, env=env,
-            timeout=LLAMA_BENCH_TIMEOUT_S,
-        )
-        f.write("=== cmd ===\n")
-        f.write(" ".join(cmd) + "\n")
-        if extra_env:
-            f.write(f"env extras: {extra_env}\n")
-        f.write("\n=== stdout ===\n")
-        f.write(proc.stdout)
-        f.write("\n=== stderr ===\n")
-        f.write(proc.stderr)
+    rc, stdout_full, stderr_full, status = run_streaming(cmd, log_path, env)
     result.wall_s = time.perf_counter() - t0
-    result.extra["exit_code"] = proc.returncode
+    result.extra["exit_code"] = rc
+    result.extra["status"] = status
 
-    if proc.returncode != 0:
+    if status == "stale_timeout":
         result.ok = False
-        result.notes = f"llama-bench exit {proc.returncode}"
+        result.notes = f"stale output timeout (no bytes for >{STALE_TIMEOUT_S}s) — likely GPU livelock"
+        return result
+    if status == "hard_timeout":
+        result.ok = False
+        result.notes = f"hard timeout {LLAMA_BENCH_TIMEOUT_S}s exceeded"
+        return result
+    if rc != 0:
+        result.ok = False
+        result.notes = f"llama-bench exit {rc}"
         return result
 
     # llama-bench emits JSON on stdout. Adreno OpenCL sometimes fails to
     # flush the closing `]` — retry-with-`]` is the same dance the 7B
-    # runner does.
-    raw = proc.stdout.strip()
+    # runner does. With --progress on, stderr has progress noise but
+    # stdout still contains only the JSON.
+    raw = stdout_full.strip()
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:

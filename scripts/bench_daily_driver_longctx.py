@@ -47,7 +47,9 @@ from bench_daily_driver import (  # type: ignore
     TRASH_ROOT,
     REPO_ROOT,
     VULKAN_DEFAULT_ENV,
+    STALE_TIMEOUT_S,
     gguf_for_preset,
+    run_streaming,
     sample_power_online,
 )
 
@@ -124,6 +126,10 @@ def run_longctx_one(
         "-ctk", kv_type,
         "-ctv", kv_type,
         "-o", "json",
+        "--progress",  # progress lines power the stale-output watchdog
+                       # AND make `tail -f log_path` show real-time
+                       # progress mid-run (the per-rep prefill on a
+                       # 131k-depth run can be 15+ min on CPU).
     ]
     if threads is not None:
         cmd += ["-t", str(threads)]
@@ -136,35 +142,33 @@ def run_longctx_one(
         row.extra["env"] = dict(extra_env)
 
     print(f"  [{name} d={ctx_depth}] cmd: {' '.join(cmd)}")
+    print(f"  [{name} d={ctx_depth}] log: {log_path}  (tail -f to watch)")
 
     t0 = time.perf_counter()
-    try:
-        with log_path.open("w", encoding="utf-8", errors="replace") as f:
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True, env=env,
-                timeout=LLAMA_BENCH_TIMEOUT_S,
-            )
-            f.write(f"=== cmd ===\n{' '.join(cmd)}\n")
-            if extra_env:
-                f.write(f"env extras: {extra_env}\n")
-            f.write("\n=== stdout ===\n")
-            f.write(proc.stdout)
-            f.write("\n=== stderr ===\n")
-            f.write(proc.stderr)
-    except subprocess.TimeoutExpired:
-        row.ok = False
-        row.notes = f"timeout after {LLAMA_BENCH_TIMEOUT_S}s"
-        row.wall_s = LLAMA_BENCH_TIMEOUT_S
-        return row
-
+    rc, stdout_full, stderr_full, status = run_streaming(
+        cmd, log_path, env,
+        hard_timeout_s=LLAMA_BENCH_TIMEOUT_S,
+        stale_timeout_s=STALE_TIMEOUT_S,
+    )
     row.wall_s = time.perf_counter() - t0
-    row.extra["exit_code"] = proc.returncode
-    if proc.returncode != 0:
+    row.extra["exit_code"] = rc
+    row.extra["status"] = status
+
+    if status == "stale_timeout":
         row.ok = False
-        row.notes = f"llama-bench exit {proc.returncode}; tail: {proc.stderr.strip()[-200:]}"
+        row.notes = f"stale output timeout (>{STALE_TIMEOUT_S}s) — likely GPU livelock"
+        return row
+    if status == "hard_timeout":
+        row.ok = False
+        row.notes = f"hard timeout {LLAMA_BENCH_TIMEOUT_S}s exceeded"
+        return row
+    if rc != 0:
+        tail = stderr_full.strip()[-200:] if stderr_full else ""
+        row.ok = False
+        row.notes = f"llama-bench exit {rc}; stderr tail: {tail}"
         return row
 
-    raw = proc.stdout.strip()
+    raw = stdout_full.strip()
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
