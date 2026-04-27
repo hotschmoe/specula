@@ -1,0 +1,3 @@
+config,ctx_depth,tg_tps,wall_s,ok,notes
+vulkan_f16_noFA,4096,23.821,125.1,1,
+vulkan_f16_noFA,131072,,4277.6,0,hard timeout 3600s exceeded

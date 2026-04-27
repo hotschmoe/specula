@@ -81,19 +81,27 @@ Canonical config is **f16 KV + no FA**. The winner depends on ctx:
 | backend                       | model     | TG@~0 | TG@8k | TG@32k | TG@131k |
 |---|---|---:|---:|---:|---:|
 | **CPU** (-t 8)                | Q4_K_M    | 36.01 | **27.29** | 15.27  | (~6-7¹) |
-| **Vulkan** (knobs, ngl=99)    | MXFP4_MOE | 22.73 | 22.99     | **16.89** | (untested²) |
+| **Vulkan** (knobs, ngl=99)    | MXFP4_MOE | 22.73 / 23.82³ | 22.99 | **16.89** | (untested²) |
 | OpenCL (ngl=99)               | MXFP4_MOE | 17.43 | 14.13     | 8.58   | (~5-6¹) |
 | CPU+KleidiAI                  | Q4_K_M    | (Phase 1: 33.6 @ d=128) | — | — | — (lost Phase 1, deprecated) |
 
 **Crossover ~ d=10-16k**: CPU wins below, Vulkan wins above. Use
 case-driven pick — see § Decisions below.
 
-¹ d=131k extrapolated by 1/ctx slope. Actual measurement deferred
-because CPU d=131k prefill exceeded our 30-min stale watchdog.
+¹ d=131k extrapolated by 1/ctx slope. CPU d=131k prefill exceeded
+our 30-min stale watchdog (Phase 2 v3) AND the 60-min hard cap
+(later attempt). Genuinely too slow for single-shot llama-bench.
 
-² Vulkan d=131k untested. Wall-time budget would be ~50 min
-(prefill at PP=46 t/s for 131k tokens). Worth running once if we
-care about the exact number.
+² **Vulkan d=131k attempted, hard-timed-out at 60 min** (Phase 8
+follow-up: `..._phase8_vulkan_d4k_d131k.csv`). Vulkan PP at long
+ctx is even slower than the d=128 PP=46 t/s suggested — probably
+attention compute scaling makes the prefill ~50+ min. Real d=131k
+measurement requires either llama-server's slot-cache (warm KV
+across calls) or manually chunked prefill — separate workstream.
+
+³ Vulkan d=4k = 23.82 t/s (Phase 8 follow-up). Filled in for
+completeness; Phase 1 d=128 = 22.73 stays the baseline. CPU still
+wins at d=4k by +15% (27.29 vs 23.82).
 
 CSVs:
 - Phase 2 v3 (q8+FA, deprecated config):
