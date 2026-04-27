@@ -85,7 +85,13 @@ CONFIGS = [
         "label": "vulkan_baseline",
         "exe": VK_SERVER,
         "model": GGUF_GPU,
-        "extra": ["-ngl", "99"],
+        # --flash-attn off: Phase 4 found FA+f16 KV livelocks on Vulkan
+        #   in this llama.cpp commit; default --flash-attn auto enables it
+        #   during the warmup pass and the server hangs.
+        # --no-warmup: defer shader-compilation/first-pass cost to the
+        #   actual cold_session request (it was tripping the 15-min health
+        #   timeout in the first two attempts).
+        "extra": ["-ngl", "99", "--flash-attn", "off", "--no-warmup"],
         "env": {"GGML_VK_DISABLE_F16": "1", "GGML_VK_PREFER_HOST_MEMORY": "1"},
     },
 ]

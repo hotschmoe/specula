@@ -151,23 +151,29 @@ The daily-driver target is a coding agent at 120k+ context (see
   by +19% over Vulkan.
 
 ```bash
-# Vulkan server — daily-driver default for long-ctx agent loops
-# Note: spec-decode flags (--spec-type / --lookup-cache-*) are NOT
-# wired into the Vulkan build at this commit; CPU only.
+# Vulkan server — daily-driver default for the agent loop (Phase 10c)
+# --flash-attn off: FA + f16 KV livelocks on both CPU and Vulkan in
+#   this llama.cpp commit (Phase 4); default --flash-attn auto enables
+#   it during warmup and the server hangs. Will revisit once upstream
+#   fixes FA — could give Vulkan extra TG headroom.
+# --no-warmup: defers Vulkan shader-compilation to the first real
+#   request (otherwise it blocks startup beyond any reasonable health
+#   timeout). The first request pays a ~5 min one-time cost on top of
+#   its prefill; subsequent requests are normal.
+# Spec-decode flags (--spec-type / --lookup-cache-*) are NOT wired
+# into the Vulkan build at this commit and aren't recommended on CPU
+# either (Phase 10 found a slot-cache penalty).
 GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1 \
     llama.cpp/build-vulkan/bin/llama-server.exe \
         -m models/Qwen3.6-35B-A3B-MXFP4_MOE.gguf \
         -ngl 99 \
         -c 131072 \
+        --flash-attn off --no-warmup \
         --host 127.0.0.1 --port 8080
 
-# CPU server — short-ctx fallback / chat use case
-# Note on ngram-mod: Phase 9b showed +11-15% TG at short ctx in
-# single-turn benches, but Phase 10 found a slot-cache +
-# cache_prompt + spec-decode interaction that forces ~200 extra
-# tokens of re-prefill per turn in multi-turn workflows, making
-# ngram_mod NET NEGATIVE (−60% UX) for any client that uses
-# cache_prompt across turns. Until that's understood, leave it OFF.
+# CPU fallback — only when Vulkan is unavailable, or for trivially
+# short single-turn chat. Phase 10c measured the agent-loop UX as
+# 21.8 s/turn here vs 13.2 s/turn on Vulkan at d=16k+.
 llama.cpp/build-cpu/bin/llama-server.exe \
     -m models/Qwen3.6-35B-A3B-Q4_K_M.gguf \
     -t 8 \

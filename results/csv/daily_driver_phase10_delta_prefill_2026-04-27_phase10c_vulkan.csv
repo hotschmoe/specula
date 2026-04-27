@@ -1,0 +1,6 @@
+config,turn,tg_tps,pp_tps,predicted_n,prompt_n,delta_chars,wall_s,ok,notes
+vulkan_baseline,0,20.090,49.432,200,16306,0,339.9,1,
+vulkan_baseline,1,19.916,37.205,200,132,538,13.6,1,
+vulkan_baseline,2,19.985,31.359,200,92,1100,13.0,1,
+vulkan_baseline,3,19.988,38.449,200,68,1504,11.8,1,
+vulkan_baseline,4,19.877,37.427,200,158,1971,14.3,1,

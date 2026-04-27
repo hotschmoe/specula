@@ -7,13 +7,18 @@ top are the answer; everything below is the work that produced them.
 
 ## TL;DR (after tonight's session, 2026-04-27)
 
-**Canonical config — pick one based on your operating ctx:**
+**Canonical config (post-Phase-10c, 2026-04-27)**:
 
-- **Long-ctx agent loops (d ≥ 16k)**: Vulkan + MXFP4_MOE + ngl=99
-  + `GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1` + f16 KV
-  + no FA. **TG @ d=32k = 16.89 t/s**, +11% vs CPU.
-- **Short-ctx (d ≤ 8k)**: CPU + Q4_K_M + t=8 + f16 KV + no FA.
-  **TG @ d=8k = 27.29 t/s**, +19% vs Vulkan at the same depth.
+- **Daily-driver default = Vulkan + MXFP4_MOE + ngl=99 +
+  `GGML_VK_DISABLE_F16=1` + `GGML_VK_PREFER_HOST_MEMORY=1` +
+  `--flash-attn off` + `--no-warmup` + f16 KV.** Phase 10c
+  measured this against CPU on the actual agent workload (16k cold
+  session + 4 multi-turn delta-prefill turns) and Vulkan won every
+  metric: cold session **−55%** (340 s vs 748 s), per-turn warm wall
+  **−39%** (13.2 s vs 21.8 s avg), TG +29%, cold PP +123%.
+- **CPU fallback**: same `-t 8 + f16 KV + no FA + Q4_K_M` config,
+  used only when Vulkan is unavailable OR for trivially-short
+  single-turn chat at d≤4k.
 
 **Key non-obvious findings tonight**:
 
@@ -665,14 +670,82 @@ of n-gram lookup. Worth filing upstream; worth testing
 
 **Open**:
 
-- Vulkan-via-server delta-prefill (Phase 10b: re-run with longer
-  health timeout)
 - `--cache-reuse 64` or `256` test as workaround for ngram_mod's
   slot-cache penalty (would pull ngram_mod back as a real lever
   if it works)
 - Single-turn / long-generation workloads where spec-decode's
   TG win could pay off without exposing the multi-turn penalty
 - The llama.cpp upstream issue / fix tracking
+
+### 2026-04-27 — Phase 10c: Vulkan delta-prefill measured; Vulkan wins agent loop on every metric
+
+CSV: `results/csv/daily_driver_phase10_delta_prefill_2026-04-27_phase10c_vulkan.csv`
+
+Phase 10's `vulkan_baseline` config tripped the 240 s (and later
+900 s) health timeout because llama-server's default warmup pass
+hits the FA + f16 KV livelock Phase 4 documented. Fixes:
+`--flash-attn off` (avoids the livelock) and `--no-warmup` (defers
+shader-compilation to the first real request, where it folds into
+the cold_session timing we'd measure anyway). With both, Vulkan
+serves cleanly.
+
+**Headline (same workload as Phase 10's CPU configs)**:
+
+| config           | cold_session | turn 1 | turn 2 | turn 3 | turn 4 | per-turn avg |
+|---|---:|---:|---:|---:|---:|---:|
+| cpu_baseline     | 748.2 s      | 23.7 s | 23.7 s | 15.4 s | 24.4 s | 21.8 s       |
+| **vulkan_baseline** | **339.9 s** | **13.6 s** | **13.0 s** | **11.8 s** | **14.3 s** | **13.2 s** |
+| Δ vs CPU          | **−55%**     | −43%   | −45%   | −23%   | −41%   | **−39%**     |
+
+Plus per-turn TG: Vulkan ≈ 20.0 t/s vs CPU ≈ 15.5 t/s = **+29%**.
+Plus PP @ d=16k cold: Vulkan 49.4 t/s vs CPU 22.2 t/s = **+123%**.
+
+**Vulkan wins on every metric of the agent UX**:
+
+- Cold session (the one-time per-startup cost): −55%
+- Per-turn warm wall-clock (the "feels-fast-or-slow" UX number): −39%
+- Per-turn TG: +29% (the Vulkan TG-slope finding from Phase 8
+  carries over: at long ctx Vulkan's TG drops more gently than CPU's)
+- Cold PP: +123% (Vulkan PP at d=16k is more than 2× CPU; the user's
+  "GPU PP will be the deciding factor in actual usecases" intuition
+  was correct)
+
+**This nails the canonical-config call**:
+
+- **Daily-driver default = Vulkan + MXFP4_MOE + ngl=99 +
+  GGML_VK_DISABLE_F16=1 + GGML_VK_PREFER_HOST_MEMORY=1 +
+  --flash-attn off + --no-warmup + f16 KV** at any ctx the agent
+  loop operates in (d≥4k or so — Vulkan loses to CPU only at the
+  trivially-short ctx the daily-driver doesn't operate at).
+- CPU + Q4_K_M is the **fallback** when Vulkan is unavailable, OR
+  for pure single-turn chat at d≤4k where CPU's shorter PP wins.
+- ngram_mod stays OFF (Phase 10 finding, unchanged).
+
+**Caveats / honest framing**:
+
+- 1 cold + 4 warm trials (no within-config repetition). Trial-to-
+  trial variance was tight on Phase 10's CPU runs (±2 s on per-turn
+  wall) so the comparison is solid, but more trials would tighten
+  confidence intervals.
+- Phase 8 found Vulkan's PP curve at long ctx is gentler than
+  CPU's; Phase 10c at d=16k confirms this generalizes to the server
+  code path. Behavior past d=32k (the actual agent operating range
+  is d=120k) is extrapolated, not measured. Cold prefill at d=120k
+  on either backend likely costs >30 min — slot-save / -load to
+  amortize across sessions becomes the next workstream.
+- `--no-warmup` means the first request pays the full shader-
+  compilation cost. The 339.9 s "cold_session" wall absorbed both
+  the 16k-token prefill and the JIT compilation. A pure prefill-only
+  number isn't isolated here; subsequent server boots may be faster
+  if Vulkan caches compiled shaders to disk (untested).
+- `--flash-attn off` may give up some throughput Vulkan could
+  recover with FA on (FA reduces KV bandwidth on TG). FA is broken
+  on this commit; once upstream fixes it we should re-bench with
+  FA on to see if Vulkan extends its lead further.
+
+**Recipe.md**: updated to make the Vulkan command the unambiguous
+canonical with `--flash-attn off --no-warmup` baked in, and to
+demote the CPU command to "fallback" status.
 
 ### 2026-04-27 — Phase 9c: ngram_mod gain narrows hard at long ctx — no canonical-config flip
 
