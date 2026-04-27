@@ -1,0 +1,2 @@
+backend,model,pp_tps,tg_tps,pp_tokens,tg_tokens,pp_time_s,tg_time_s,wall_s,mwh_before,mwh_after,mwh_drop,mean_w,n_power_samples,j_per_tok,power_state,ok,notes,env
+cpu,Qwen3.6-35B-A3B-Q4_K_M.gguf,135.691045,34.082616,512,128,3.773992533,3.755755866,63.41956620000019,,,,,0,,ac,True,,

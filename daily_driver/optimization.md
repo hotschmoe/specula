@@ -53,17 +53,22 @@ What we are *not* optimizing for:
 | GPU OpenCL  | `build-opencl`       | MXFP4_MOE (Unsloth)           | `-ngl 99 -p 512 -n 128 -r 3` | MXFP4 is on Adreno's fast-path list (`Q4_0/Q8_0/MXFP4`); plain Q4_0 doesn't exist for this model |
 | GPU Vulkan  | `build-vulkan`       | MXFP4_MOE (Unsloth)           | `-ngl 99 -p 512 -n 128 -r 3`, env `GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1` | 7B doc had this combo on Q4_0; whether it carries to MXFP4_MOE is an open question — confirm with knob A/B during matrix sweep |
 
-**Headline AC table — short-ctx baseline (TODO)**:
+**Headline AC table — short-ctx baseline (Phase 1 done 2026-04-26)**:
 
 Initial PP512/TG128 sanity sweep at default ctx — comparable to the
 4B/7B baselines, *not* representative of the daily-driver workload.
 
-| backend | model | PP512 t/s | TG128 t/s | wall (s) | CSV |
-|---|---|---:|---:|---:|---|
-| CPU         | Q4_K_M    | TODO | TODO | TODO | `results/csv/daily_driver_2026-04-XX_ac.csv` |
-| CPU+KleidiAI| Q4_K_M    | TODO | TODO | TODO | same |
-| GPU OpenCL  | MXFP4_MOE | TODO | TODO | TODO | same |
-| GPU Vulkan  | MXFP4_MOE | TODO | TODO | TODO | same |
+| backend | model | PP512 t/s | TG128 t/s | wall (s) |
+|---|---|---:|---:|---:|
+| **CPU**        | Q4_K_M    | 161.71      | **36.01**   | 38.5 |
+| CPU+KleidiAI   | Q4_K_M    | 140.86      | 33.61       | 39.7 |
+| **GPU OpenCL** | MXFP4_MOE | **180.28**  | 17.43       | 59.7 |
+| GPU Vulkan     | MXFP4_MOE | 46.05       | 22.73       | 75.1 |
+
+CSV: `results/csv/daily_driver_2026-04-26_full_ac.csv`. CPU wins TG
+by a wide margin; OpenCL wins PP. Vulkan is broken with the
+DISABLE_F16+PREFER_HOST combo that worked on Q4_0 at 7B — Phase 3
+will A/B that. See § Findings for the full analysis.
 
 **Headline AC table — long-context (the one that actually matters, TODO)**:
 
@@ -382,6 +387,73 @@ PP or TG moves > 5%, re-bench the matrix.
     `z-lab/Qwen3.6-35B-A3B-DFlash`. Needs z-lab's runtime, not
     llama.cpp. Promoted to "first non-trivial spec-decode bet"
     once llama.cpp baseline is locked.
+
+### 2026-04-26 — Phase 1: full 4-backend AC matrix, PP512/TG128
+
+CSV: `results/csv/daily_driver_2026-04-26_full_ac.csv`. llama.cpp
+build `f53577432`. KV at f16 (default; the long-ctx sweep is where
+KV quant matters).
+
+| backend | model | PP512 (t/s) | TG128 (t/s) | wall (s) |
+|---|---|---:|---:|---:|
+| **CPU**        | Q4_K_M    | 161.71      | **36.01**   | 38.5 |
+| CPU+KleidiAI   | Q4_K_M    | 140.86      | 33.61       | 39.7 |
+| **GPU OpenCL** | MXFP4_MOE | **180.28**  | 17.43       | 59.7 |
+| GPU Vulkan     | MXFP4_MOE | 46.05       | 22.73       | 75.1 |
+
+(GPU Vulkan with default env knobs `GGML_VK_DISABLE_F16=1
+GGML_VK_PREFER_HOST_MEMORY=1`.)
+
+**Headline finding: CPU is the surprise winner on TG.** 36.01 t/s on
+a 35B model from a laptop CPU — the 3B-active MoE architecture is
+delivering exactly what it's engineered for. CPU TG beats every GPU
+backend. Comparison against prior baselines:
+
+| model | CPU PP | CPU TG |
+|---|---:|---:|
+| Qwen3-4B (dense)            | 188.30 | 39.50 |
+| Qwen2.5-7B (dense)          | 122.98 | 24.17 |
+| **Qwen3.6-35B-A3B (MoE)**   | **161.71** | **36.01** |
+
+35B-A3B CPU TG (36.01) beats the dense 7B (24.17) by **+49%** despite
+having 5× the parameter count, because only ~3B params are touched
+per decode step. PP also beats 7B (+31%) — batched prefill amortizes
+the larger expert pool well.
+
+**Surprises**:
+
+1. **KleidiAI lost on both axes** (-13% PP, -7% TG vs plain CPU).
+   This **inverts** the 7B finding (KleidiAI +2% PP / +5% TG on
+   dense Q4_K_M). Hypothesis: MoE routing breaks the matmul tile
+   shapes the i8mm ukernels are tuned for; per-token expert
+   selection produces irregularly-shaped GEMMs that don't fit the
+   ukernel sweet spot. **For 35B-A3B, plain CPU > KleidiAI — strip
+   KleidiAI from the daily-driver serve config.**
+
+2. **Vulkan PP crashed to 46 t/s** (3.5× slower than CPU, 4× slower
+   than OpenCL). Vulkan TG of 22.73 is *also worse than CPU*. The
+   `DISABLE_F16+PREFER_HOST` combo that fixed Vulkan PP on Q4_0 at
+   7B is the wrong combo for MXFP4_MOE. Either MXFP4 wants the F16
+   path on (it's a mixed-precision format by design), or there's
+   another knob. **Phase 3 (Vulkan env A/B) is now urgent** —
+   running default-Vulkan-env next will tell us if the F16-off
+   knob is actively hurting MXFP4.
+
+3. **OpenCL PP best, OpenCL TG worst.** Same shape as the 4B/7B
+   findings — Adreno's per-token kernel-launch overhead dominates
+   at AR=1 decode. MXFP4_MOE didn't change this.
+
+**Decisions this matrix unblocks**:
+
+- **CPU + Q4_K_M is the new daily-driver default**, not Vulkan + MXFP4.
+  At 35B-A3B-Q4_K_M, CPU wins TG (UX-critical) and only loses PP by
+  10% to OpenCL. Memory pressure at 120k ctx still favors CPU since
+  the host RAM has 48 GB; GPU has Adreno-budget concerns.
+- **Vulkan + MXFP4_MOE needs Phase 3 to be salvageable.** If
+  default-Vulkan-env (no F16-off knob) still doesn't beat CPU,
+  Vulkan is out for this model + quant combo.
+- **Strip KleidiAI from the recipe** — it was added as a paranoid
+  build option in case it won. It doesn't on this MoE.
 
 ### 2026-04-26 — use case clarified: coding agent, 120k ctx, conc=1
 
