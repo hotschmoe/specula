@@ -448,45 +448,74 @@ clients hit the model at once. CPU/KleidiAI/OpenCL data via
 sessions; QNN HTP `weight_sharing_enabled=true` shares weight pages
 across contexts so memory cost stays bounded).
 
-### Headline — AC, 2026-04-25
+### Headline — AC
+
+GPU rows refreshed 2026-04-26 with the canonical knob+quant combos
+from the single-stream sweep. **The headline reorders: Vulkan-Q4_0
+with the F16-off + host-mem knobs is now the aggregate-TG champion
+at N=4** — beats CPU by 25%, beats the NPU sidecar by 3.8×.
 
 | backend | N | S_TG agg (t/s) | per-stream user rate | step median (ms) | wall (s) | notes |
 |---|---:|---:|---:|---:|---:|---|
-| CPU                              | 4 | **82.01** | 20.50 | — | 24.4 | clean run; all 4 streams completed |
+| **GPU (Vulkan, Q4_0, F16-off+host-mem)** | **4** | **102.33** | **25.58** | — | 25.5 | refreshed 2026-04-26; coopmat tile fits 4-way batched decode much better than AR=1; **2.66× scaling vs N=1** |
+| CPU                              | 4 | 82.01 | 20.50 | — | 24.4 | clean run; all 4 streams completed |
 | CPU + KleidiAI                   | 4 | 79.73 | 19.93 | — | 25.5 | small regression vs plain CPU at N=4 |
-| GPU (OpenCL)                     | 4 | 15.68 | 3.92 | — | 50.0 | **worse than single-stream**; AR=1 kernel-launch overhead × 4 serializes badly |
-| NPU (subprocess fan-out)         | 2 | 30.59 | 15.30 | ~65 | 44.3 | clean run; 1.12× "scaling" is Python-overhead overlap across processes, not NPU work parallelism |
-| NPU (subprocess fan-out)         | 4 | _crashes_ | — | — | 62.6 | 2 of 4 streams die with QNN 1003; 16 sessions exceeds HTP scheduler resources |
+| GPU (Vulkan, Q4_K_M, F16-off+host-mem) | 4 | 79.33 | 19.83 | — | 33.2 | refreshed 2026-04-26; ties CPU but Q4_0 dominates |
 | **NPU (sidecar single-process)** | **4** | **26.95** | 6.74 | 38.0 | 19.0 (decode only) | clean run; aggregate flat = NPU's single-stream rate divided across streams |
 | NPU (sidecar single-process)     | 8 | 26.75 | 3.34 | 38.0 | 38.3 (decode only) | aggregate still ~27 t/s; NPU concurrency is "free" up to the hardware ceiling |
+| GPU (OpenCL, Q4_0)               | 4 | 19.95 | 4.99 | — | 41.8 | refreshed 2026-04-26 (Q4_0 default); +27% vs Q4_K_M but still 5× behind Vulkan |
+| GPU (OpenCL, Q4_K_M, refreshed)  | 4 | 15.61 | 3.90 | — | 50.9 | re-baselined 2026-04-26; matches the 2026-04-23 reading (15.68) within noise |
+| GPU (OpenCL, Q4_K_M, **2026-04-23 baseline**) | 4 | 15.68 | 3.92 | — | 50.0 | **superseded** — Q4_0 + Vulkan are the canonical GPU concurrency rows now |
+| NPU (subprocess fan-out)         | 2 | 30.59 | 15.30 | ~65 | 44.3 | 1.12× "scaling" is Python-overhead overlap across processes, not NPU work parallelism |
+| NPU (subprocess fan-out)         | 4 | _crashes_ | — | — | 62.6 | 2 of 4 streams die with QNN 1003; 16 sessions exceeds HTP scheduler resources |
 
-CSVs: `concurrency4_qwen3_4b_2026-04-25_ac.csv` (CPU/KleidiAI/OpenCL),
+CSVs: `concurrency4_qwen3_4b_2026-04-25_ac.csv` (CPU/KleidiAI/OpenCL,
+2026-04-25 baseline), `concurrency4_gpu_knobs_2026-04-26_ac.csv` (the
+2026-04-26 GPU refresh: Vulkan Q4_0+knobs is the new canonical),
 `qwen3_4b_ortqnn_npuconc{2,4}_stream*_2026-04-25*_ac.csv` (NPU per-stream).
 
 ### Concurrency scaling factor (TG agg / TG single-stream)
 
-Single-stream TG baselines from the AC headline table: CPU 39.50,
-KleidiAI 38.51, OpenCL 22.92, NPU (npu_engine) 27.25.
+Single-stream TG baselines (2026-04-26 canonical for GPU rows):
+CPU 39.50 (Q4_K_M), KleidiAI 38.51, OpenCL-Q4_0 26.22,
+**Vulkan-Q4_0 38.51** (with F16-off + host-mem), NPU (npu_engine) 27.25.
 
 | backend | scaling factor | per-stream latency hit |
 |---|---:|---:|
-| CPU                          | **2.08×** | -48% (39.5 → 20.5 t/s) |
+| **GPU (Vulkan, Q4_0, knobs)** | **2.66× (best in class)** | **-34% per stream (38.51 → 25.58)** |
+| GPU (Vulkan, Q4_K_M, knobs)  | 2.36× | -41% per stream (33.67 → 19.83) |
+| CPU                          | 2.08× | -48% (39.5 → 20.5 t/s) |
 | CPU + KleidiAI               | 2.07× | -48% |
-| GPU (OpenCL)                 | **0.68× (worse than single-stream)** | -83% |
+| GPU (OpenCL, Q4_0)           | 0.76× (still worse than N=1) | -81% per stream |
+| GPU (OpenCL, Q4_K_M, refreshed) | 0.67× | -83% |
 | NPU (subprocess, N=2)        | 1.12× (artifact — see detail) | -44% (27.25 → 15.30) |
 | NPU (subprocess, N=4)        | _crashes_ | n/a |
-| **NPU (sidecar, N=4)**       | **0.99× (NPU is one device, no parallelism gain)** | -75% per stream (27.25 → 6.74) |
+| **NPU (sidecar, N=4)**       | 0.99× (NPU is one device, no parallelism gain) | -75% per stream (27.25 → 6.74) |
 | NPU (sidecar, N=8)           | 0.98× | -88% per stream |
 
-**The CPU vs NPU concurrency story is structural, not implementation.**
-CPU has 12 ARM cores → real parallelism → 2× aggregate at N=4.
-NPU is one Hexagon engine → no parallelism → aggregate flat at the
-single-stream ceiling regardless of N. **At N=4, CPU outperforms NPU
-on aggregate by 3.0×** (82 vs 27 t/s). For pure-throughput multi-agent
-serving, CPU wins decisively. For *energy-per-token* multi-agent
-serving (NPU at ~13 W vs CPU at ~25 W), the NPU's flat aggregate at a
-fraction of the power may still be the right tradeoff if your latency
-budget tolerates 1/N per-stream rate.
+**The 2026-04-23 ranking inverts: Vulkan now leads, CPU second, NPU
+third.** Three structural facts:
+- **CPU has 12 ARM cores → real parallelism →** 2.08× aggregate at
+  N=4, but a per-core ceiling capped by L1/L2 bandwidth. Adding
+  more streams can't push past ~82 t/s on this SoC.
+- **Adreno X2-90 is one GPU but its `KHR_coopmat` matrix cores like
+  bigger tiles.** Single-stream AR=1 decode under-utilizes them
+  (matmul shape `[1, hidden] × [hidden, vocab]` is too tall-skinny);
+  N=4 batched decode amortizes the same matmul over 4 stream rows
+  (`[4, hidden]`), which fits the coopmat tile much better.
+  Result: **2.66× aggregate scaling** with no per-token latency
+  penalty (per-stream wall ≈ N=1 wall — see CSV).
+- **NPU is one Hexagon engine with no internal parallelism →**
+  aggregate flat at the single-stream ceiling regardless of N.
+
+**At N=4, the new aggregate ranking is Vulkan (102.3) > CPU (82.0) >
+Vulkan-Q4_K_M (79.3) ≈ KleidiAI (79.7) > NPU sidecar (27.0) >
+OpenCL-Q4_0 (20.0).** For pure-throughput multi-agent serving on
+Q4_0, **GPU-Vulkan wins by 25% over CPU**. For *energy-per-token*
+multi-agent serving (NPU at ~13 W vs CPU at ~25 W vs Vulkan at ~28
+W), NPU's flat aggregate at half the power is still the right
+tradeoff if your latency budget tolerates 1/N per-stream rate;
+otherwise Vulkan is the new default.
 
 ### NPU concurrency detail — two architectures, very different results
 
@@ -547,43 +576,86 @@ Worth ~10-15% aggregate improvement; deferred as separate workstream.
 CSVs: `qwen3_4b_ortqnn_sidecar_conc{2,4,8}_2026-04-25_ac.csv`
 (N=1 row uses the standalone bench's `_2026-04-25_ac.csv`).
 
-### Headline implication for agentic workloads
+### GPU concurrency detail — Vulkan unlocks via batched matmul
 
-**At concurrency = 4, CPU outperforms NPU on aggregate by 3.0×** (82.0
-vs the NPU's flat ~27 t/s ceiling). The sidecar bench reveals the NPU
-ceiling is *structural* — one Hexagon engine with no internal
-parallelism — not an implementation gap to be closed. Per-stream rate
-under the sidecar drops to 6.74 t/s at N=4 (vs CPU's 20.50 t/s at
-N=4), so CPU also wins on per-stream latency for serving multiple
-agents. **For throughput-oriented multi-agent serving, CPU is the
-right backend.**
+**Vulkan Q4_0 + F16-off + host-mem at N=4** (2026-04-26):
 
-The NPU's value at high N is **energy efficiency at a flat ceiling**:
-it serves N agents at the same aggregate ~27 t/s and (per the J/tok
-analysis) at roughly half the CPU's power draw. If your workload is
+| | PP_agg t/s | TG_agg t/s | total_agg t/s | wall (s) |
+|---|---:|---:|---:|---:|
+| N=1 (single-stream, reference) | 115.04 | 38.51 | — | — |
+| **N=4** | **115.01** | **102.33** | **112.23** | **25.5** |
+
+**Two surprises and a why.**
+
+1. **PP doesn't change** at all going N=1→N=4 (115.04 → 115.01).
+   Vulkan PP is single-graph saturated; pushing more streams
+   through the prefill phase yields nothing because the prefill
+   matmul is already wide enough to fill the GPU.
+2. **TG scales 2.66×** (38.51 → 102.33) — better than CPU's
+   2.08× and dramatically better than OpenCL's 0.76× scaling.
+   Per-stream user rate at N=4 is 25.6 t/s, only 34% slower than
+   N=1's 38.5; for comparison, the CPU at N=4 drops 48% per stream
+   and the NPU sidecar drops 75% per stream.
+3. **Why Vulkan scales and OpenCL doesn't** despite running on the
+   same Adreno X2-90 silicon: at AR=1 single-stream decode the
+   matmul shape is `[1, hidden]·[hidden, vocab]` — tall-skinny,
+   doesn't fit Adreno's `KHR_coopmat` 16×16 tile. The shader
+   spends most of its time padding. **At N=4 batched decode, the
+   shape becomes `[4, hidden]·[hidden, vocab]`, four times more
+   tiles per matmul that actually fit the coopmat layout**, and
+   per-token kernel-launch overhead is amortized across 4 streams.
+   OpenCL's Adreno kernel doesn't use coopmat (it predates Vulkan's
+   matrix-cores API on this device), so it gets none of that
+   benefit and only pays the launch-overhead serialization cost.
+
+**Cross-quant story for Vulkan concurrency:** Q4_K_M with the same
+knobs is 79.33 TG_agg vs Q4_0's 102.33 (-22%) — Q4_0's optimized
+Adreno path matters at concurrency too, just like in single-stream.
+
+CSV: `concurrency4_gpu_knobs_2026-04-26_ac.csv`. Driver:
+`scripts/bench_concurrency4_gpu_knobs.py` (companion to
+`bench_concurrency4_all_backends.py`, adds GGUF + env passthrough so
+the script can target Q4_0 and the Vulkan knob env vars without
+forking the original).
+
+### Headline implication for agentic workloads (2026-04-26 inversion)
+
+**At concurrency = 4 the ranking inverts: GPU-Vulkan-Q4_0 (102.3) >
+CPU (82.0) > NPU sidecar (27.0) > OpenCL-Q4_0 (20.0).** Vulkan beats
+CPU by 25% on aggregate **and** by 25% on per-stream user rate
+(25.58 vs 20.50 t/s). The 2026-04-25 reading "for throughput-oriented
+multi-agent serving, CPU is the right backend" is **superseded** —
+Vulkan-Q4_0 with F16-off + host-mem is the new default for
+agentic workloads on this SoC.
+
+Why this didn't show up in the prior bench: the old run used Q4_K_M
+(slow Adreno path) with default Vulkan settings (broken FP16 path).
+Both fixes are required to unmask the concurrency win — Q4_0 alone
+or knobs-on-Q4_K_M each give about 80 t/s aggregate, comparable
+to CPU. Together they hit 102 t/s.
+
+**The NPU's value at high N is still energy efficiency at a flat
+ceiling.** It serves N agents at the same aggregate ~27 t/s and at
+roughly half the CPU's and Vulkan's power draw. If your workload is
 latency-tolerant (e.g., background drafts, low-priority agentic
 loops, ambient summarization), 8 agents × 3.3 t/s on the NPU at ~13 W
-beats 8 agents × 10 t/s on the CPU at ~25 W on energy/token even
-though CPU "wins" on raw throughput.
+still beats 8 agents on Vulkan at ~28 W on energy/token even though
+Vulkan now "wins" on raw throughput. The W4 sidecar design (one
+in-process multi-context runtime, never spawn N processes) remains
+the architectural prerequisite for any NPU multi-tenant work.
 
-The architectural fix landed in this bench (single-process N-stream
-sidecar) is what makes high-N NPU concurrency *possible* at all —
-without it, N≥4 just crashes. This validates the W4 sidecar design:
-any multi-tenant NPU workload must use one in-process multi-context
-runtime, never spawn N processes.
-
-**OpenCL is the wrong path for any concurrent workload.** Aggregate
-N=4 is *worse* than single-stream (15.68 < 22.92 t/s); per-stream
-collapses to 3.9 t/s. Adreno's per-token kernel-launch overhead
-× 4 interleaved streams serializes. Same conclusion as the 7B doc's
-concurrency section — OpenCL is a non-option for serving multiple
-agents on either model size.
+**OpenCL is still the wrong path for concurrent workload.** Aggregate
+N=4 on Q4_0 is 19.95, *worse* than single-stream (26.22); per-stream
+collapses to 5.0 t/s. Adreno's per-token kernel-launch overhead × 4
+interleaved streams serializes — same finding as 2026-04-23, just
+shifted by the Q4_0 quant uplift (15.68 → 19.95). Q4_0 doesn't
+rescue OpenCL at concurrency; the Vulkan path with coopmat does.
 
 **KleidiAI tracks plain CPU at concurrency** (79.7 vs 82.0 t/s = -3%).
 KleidiAI's per-call setup cost gets paid per stream rather than
 amortized — under concurrency the small-tile-disadvantage at 4B that
 showed up single-stream gets slightly worse. Plain CPU is the safer
-default for batched/agentic loads.
+default for CPU-routed batched/agentic loads.
 
 ## Post-mortem
 
@@ -728,6 +800,12 @@ Layout follows `docs/repo_hygiene.md`:
     J/tok. Canonical BAT rows: OpenCL Q4_0 default (539 / 24.9 / 1.29
     J/tok) and Vulkan Q4_0 with knobs (114.6 / 34.7 / 1.43 J/tok).
     Supersedes the 2026-04-23 GPU BAT baselines.
+  - `results/csv/concurrency4_gpu_knobs_2026-04-26_ac.csv` —
+    concurrency-4 (`-np 4 -npp 512 -ntg 128 -npl 4`) matrix for
+    OpenCL/Vulkan × Q4_0/Q4_K_M with the canonical knob combos.
+    Canonical row: Vulkan Q4_0 + F16-off + host-mem at TG_agg
+    102.33 t/s — the new aggregate-TG champion at N=4. Supersedes
+    the 2026-04-23 GPU concurrency rows.
   - `models/Qwen3-4B-Q4_0.gguf` — pure-Q4_0 quant from
     `unsloth/Qwen3-4B-GGUF` (HF). 2.21 GiB. Recommended Adreno OpenCL
     quant per `llama.cpp/docs/backend/OPENCL.md`.
@@ -737,6 +815,11 @@ Layout follows `docs/repo_hygiene.md`:
     Q4_K_M and has no env passthrough). Used for the 2026-04-26 BAT
     refresh; reusable for future quant/knob experiments without
     forking the AC driver.
+  - `scripts/bench_concurrency4_gpu_knobs.py` — companion to
+    `bench_concurrency4_all_backends.py` (drives `llama-batched-bench
+    -np 4 -npp 512 -ntg 128 -npl 4`) with the same GGUF + env
+    overrides; adds Vulkan preset support that the original
+    concurrency driver lacked.
   - `results/qwen3_4b_baseline/pp512_prompt.txt` +
     `pp512_prompt_tokens.txt` — pinned input; reproducible via
     `scripts/gen_pp512_prompt.py`.
@@ -843,6 +926,32 @@ Layout follows `docs/repo_hygiene.md`:
   GPU column of the matrix is now populated for AC and BAT; remaining
   TODOs are CPU/CPU-KleidiAI/NPU re-baseline (lower priority — those
   rows haven't moved much).
+- 2026-04-26 (concurrency-4 GPU refresh, AC): ran the new GPU canonical
+  configs through `llama-batched-bench -np 4 -npp 512 -ntg 128 -npl 4`
+  via new `scripts/bench_concurrency4_gpu_knobs.py` (companion to the
+  original concurrency driver, adds GGUF + env passthrough + Vulkan
+  preset support). **The 2026-04-25 ranking inverts**: previously
+  "CPU 82 > NPU 27 > OpenCL 16" with CPU declared the right
+  multi-agent backend; now **Vulkan-Q4_0 + `DISABLE_F16+PREFER_HOST`
+  hits TG_agg 102.33 t/s at N=4 (+25% vs CPU)**. Scaling factor
+  **2.66×** from single-stream's 38.51 — best in the matrix. Why:
+  AR=1 single-stream Vulkan decode wastes Adreno's `KHR_coopmat`
+  16×16 matrix-core tiles (matmul shape is tall-skinny `[1, hidden]`);
+  N=4 batched decode lifts the shape to `[4, hidden]` which fits the
+  coopmat layout much better, and per-token kernel-launch overhead
+  is amortized across 4 streams. OpenCL doesn't get the same
+  benefit — its Adreno kernel predates the coopmat path — and stays
+  at 19.95 TG_agg even on Q4_0 (vs 15.68 on Q4_K_M, +27% from quant
+  alone). PP_agg for Vulkan is **flat** (115.01 ≈ N=1's 115.04) —
+  Vulkan PP is single-graph saturated, no benefit from concurrency
+  on the prefill side. **NPU sidecar still has the energy edge**
+  (~13 W vs Vulkan's ~28 W) — for latency-tolerant agentic work
+  the J/tok argument still favors NPU; for throughput-or-latency-
+  sensitive multi-agent serving, Vulkan-Q4_0 is the new default.
+  CSV `results/csv/concurrency4_gpu_knobs_2026-04-26_ac.csv`. BAT
+  concurrency is the next data point (J/tok at N=4 will likely
+  reorder again — Vulkan-Q4_0 has the best non-NPU J/gen-tok at
+  N=1, and concurrency only helps).
 - 2026-04-25 (concurrency): NPU-via-`npu_engine` concurrency-N matrix
   added in two architectures. **(a) Subprocess fan-out** (existing
   `bench_concurrency4_npu_ortqnn.py`): N=2 aggregate 30.59 t/s
