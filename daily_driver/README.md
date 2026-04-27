@@ -53,15 +53,24 @@ Active-param count of ~3B keeps per-token decode compute closer to
 a dense 3B than a dense 35B, which is the whole point of the MoE
 pick at this RAM budget.
 
-KV math at 120k context is the binding question. f16 KV on a
-mixed-attn architecture (Qwen3.5-35B-A3B had 10 full-attn / 30
-linear-attn out of 40 layers per the TurboQuant benchmark; Qwen3.6
-may follow the same pattern — verify with `gguf-dump`) lands
-roughly **5-8 GB** for f16 KV at 120k. q8_0 KV halves it. **Plan
-of record: `-ctk q8_0 -ctv q8_0` is the default for daily-driver
-config**, not an optimization knob — at this context length, f16 KV
-is a luxury we can't justify when q8 costs us almost nothing in
-quality.
+**Architecture confirmed** (via `gguf-dump`, 2026-04-27):
+
+- `qwen35moe` arch, 40 transformer blocks
+- **GQA with 2 KV heads** (16 Q heads, 8:1 ratio) — minimal KV cache
+- 256 experts, 8 used per token (top-8 routing, ultra-sparse MoE)
+- Native context: **262144 (256k)** — twice the 131k we initially
+  planned to operate at, so plenty of headroom
+- Per-token f16 KV cost: ~40 KB; at 131k that's **5.2 GB**, at full
+  256k it's 10.5 GB
+
+This means **memory headroom is NOT the binding constraint** —
+even f16 KV at the full native 256k ctx leaves 15+ GB free on this
+48 GB system. The original "q8 KV is mandatory at long ctx" rule
+(based on the wrong assumption of 8 KV heads / pure full-attn) is
+no longer required. q8 KV becomes a pure throughput-vs-quality knob,
+not a memory necessity. See `optimization.md` § Phase 2 for the
+corrected memory math and the Phase 4 plan to disentangle FA cost
+from KV-quant cost.
 
 Backends in scope:
 

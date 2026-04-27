@@ -25,9 +25,13 @@ In priority order:
    loop. With KV reuse, only the delta tokens (tool result + harness
    framing, typically 200-2000 tokens) need prefilling. So **PP t/s
    on a small delta** matters more than PP t/s on a cold 4k prompt.
-3. **Memory headroom at 120k ctx.** Does the chosen config actually
-   fit in 48 GB unified RAM? A config that OOMs at 80k is dead. KV
-   quant (`-ctk q8_0 -ctv q8_0` minimum) is **non-optional** here.
+3. **Memory headroom at 120k ctx.** Does the chosen config fit in
+   48 GB unified RAM? Original concern was that f16 KV would force
+   q8 quant; the GQA-2 architecture (verified Phase 2, 2026-04-27)
+   makes KV ~5 GB at 131k f16 instead of 17 GB I had estimated, so
+   **memory is not the binding constraint** even at the model's
+   native 256k ctx. KV quant becomes a pure throughput-vs-quality
+   knob, not a memory necessity.
 4. **Quality at 120k ctx.** A model that loses coherence past 32k
    isn't a 120k model, no matter what the spec sheet says. Sanity-
    check with a needle-in-haystack probe before declaring a winner.
@@ -419,22 +423,41 @@ Phase 2's TG@4k (FA on, q8 KV) of **29.39** is a **−18% cost** for
 the configuration that actually fits 120k+ KV in memory. That's the
 real "price of being able to use 120k context" on this hardware.
 
-**Memory math** (validates why we have to pay that 18%):
+**Memory math** (corrected with ground-truth architecture from
+`gguf-dump`):
+
+Architecture is `qwen35moe` with **GQA-2** (16 Q heads, **only 2 KV
+heads**), 40 transformer blocks, head_dim=128, native ctx=262144.
+Per-token f16 KV cost = 2 (k+v) × 40 × 2 × 128 × 2 bytes = **40 KB
+per token**. So:
 
 | ctx | f16 KV | q8_0 KV | model + f16 KV | model + q8_0 KV | fits 48 GB? |
 |---:|---:|---:|---:|---:|:-:|
-| 4k    | ~0.5 GB | ~0.25 GB | 22.5 | 22.25 | ✓ |
-| 32k   | ~4 GB   | ~2 GB    | 26   | 24    | ✓ |
-| 131k  | **~17 GB** | **~8.5 GB** | **39** | **30.5** | ✓ q8 only |
+| 4k    | 0.16 GB | 0.08 GB | 22.16 | 22.08 | ✓ ✓ |
+| 32k   | 1.3 GB  | 0.65 GB | 23.3  | 22.7  | ✓ ✓ |
+| 131k  | **5.2 GB** | **2.6 GB** | **27.2** | **24.6** | ✓ ✓ |
+| 262k (native max) | 10.5 GB | 5.2 GB | 32.5 | 27.2 | ✓ ✓ |
 
-(Approximate — assumes mixed-attn arch with ~16 full-attn layers as
-reported for Qwen3.5-35B-A3B's TurboQuant benchmark; actual depends
-on Qwen3.6's split, verifiable via `gguf-dump`.)
+**The KV cache is much smaller than I initially estimated** — GQA-2
+is doing heavy lifting. Even at the model's native 256k context with
+f16 KV, total resident memory is only 32.5 GB on a 48 GB system.
+**Memory headroom is NOT the binding constraint** at any context
+size we care about. q8_0 KV is no longer required for memory; the
+question becomes a pure throughput-vs-quality tradeoff (Phase 4).
 
-f16 KV at d=131k pushes total resident memory to ~39 GB — fits in
-48 GB but tight, especially with OS + harness overhead. q8 gives
-8.5 GB headroom which is the right operational margin. **q8 KV
-remains the right default**.
+This **changes the q8-KV-as-default decision**: the 18% TG drop
+from FA+q8KV vs no-FA-f16-KV is no longer "the price of fitting in
+memory" — it's purely "the cost of FA". Phase 4 needs to test
+**FA on with f16 KV** to disentangle the two.
+
+Other architecture facts worth recording:
+
+- **256 experts, 8 active per token** (top-8 routing). Ultra-sparse
+  MoE. Active params per token ≈ 3B exactly as advertised.
+- **Embedding dim 2048**, expert FFN dim 512 (per expert). Compact
+  per-expert blocks — explains the per-token compute is tiny.
+- **40 transformer blocks** — half what I expected for a 35B model.
+  The expert width is what makes the param count, not the depth.
 
 ### 2026-04-27 — Phase 2 attempt #1+#2: hard limits found
 
