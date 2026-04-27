@@ -48,6 +48,7 @@ from bench_daily_driver import (  # type: ignore
     REPO_ROOT,
     VULKAN_DEFAULT_ENV,
     STALE_TIMEOUT_S,
+    LLAMA_BENCH_TIMEOUT_S,
     gguf_for_preset,
     run_streaming,
     sample_power_online,
@@ -58,15 +59,10 @@ DEFAULT_CTX_DEPTHS = [4096, 32768, 131072]
 TG_TOKENS = 128
 DEFAULT_KV_TYPE = "q8_0"  # see optimization.md § What we're optimizing for
 
-# A single ctx=131072 run on CPU could spend a few minutes prefilling
-# the KV cache (even though prefill is untimed, it still walks 128k
-# tokens through the matmul path). With -r 1 the per-row cost is
-# ~ctx/PP_t/s + (TG_TOKENS/TG_t/s). At PP=135 and TG=34 on CPU:
-#   ctx=4096   →   30 s prefill +  4 s TG ≈ 35 s
-#   ctx=32768  →  240 s prefill +  4 s TG ≈ 4 min
-#   ctx=131072 →  970 s prefill +  4 s TG ≈ 16 min
-# Per-row timeout 30 min covers the worst case with margin.
-LLAMA_BENCH_TIMEOUT_S = 1800
+# LLAMA_BENCH_TIMEOUT_S imported from bench_daily_driver (60 min as
+# of 2026-04-27). On CPU at d=131072 with FA+q8 KV, the silent prefill
+# alone is ~17-20 min; bumped from 30→60 min for headroom after the
+# Phase 2 attempt #3 d=131k row hit the old 30-min cap at 1803s.
 
 
 @dataclass

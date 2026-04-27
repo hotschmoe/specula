@@ -70,18 +70,24 @@ by a wide margin; OpenCL wins PP. Vulkan is broken with the
 DISABLE_F16+PREFER_HOST combo that worked on Q4_0 at 7B — Phase 3
 will A/B that. See § Findings for the full analysis.
 
-**Headline AC table — long-context (the one that actually matters, TODO)**:
+**Headline AC table — long-context (the one that matters, partial Phase 2 data)**:
 
-KV at q8_0 always (per the use-case section). TG measured after the
-context is filled to the listed depth, then 128 more tokens are
-generated.
+KV at q8_0 always (per the use-case section). FA on. TG measured
+with `-d N` pre-fill, then 128 generation tokens timed.
 
-| backend | model | TG@4k | TG@32k | TG@120k | TTFT(delta=512) | mem peak | CSV |
-|---|---|---:|---:|---:|---:|---:|---|
-| CPU         | Q4_K_M    | TODO | TODO | TODO | TODO | TODO | `results/csv/daily_driver_longctx_*.csv` |
-| CPU+KleidiAI| Q4_K_M    | TODO | TODO | TODO | TODO | TODO | same |
-| GPU OpenCL  | MXFP4_MOE | TODO | TODO | TODO | TODO | TODO | same |
-| GPU Vulkan  | MXFP4_MOE | TODO | TODO | TODO | TODO | TODO | same |
+| backend | model | TG@4k | TG@32k | TG@131k | notes |
+|---|---|---:|---:|---:|---|
+| **CPU**     | Q4_K_M    | **29.39** | **13.51** | (retry pending) | -fa 1; -ctk q8_0 -ctv q8_0 |
+| CPU+KleidiAI| Q4_K_M    | (skip)    | (skip)    | (skip)          | lost Phase 1, deprecated |
+| GPU OpenCL  | MXFP4_MOE | (failed)  | (failed)  | (failed)        | SET_ROWS not supported with FA on OpenCL backend |
+| GPU Vulkan  | MXFP4_MOE | (stalls)  | (stalls)  | (stalls)        | Adreno Vulkan ICD livelocks on FA + quant-KV |
+
+**At long ctx, only CPU works** for the (KV-quant + FA) memory-saving
+combination this workload requires. GPU paths need f16 KV + no-FA
+(Phase 1 short-ctx Vulkan numbers stand; long-ctx GPU diagnostic
+TBD).
+
+CSV: `results/csv/daily_driver_longctx_2026-04-27_longctx_cpu_v3.csv`.
 
 ## Variable sweep matrix
 
@@ -387,6 +393,48 @@ PP or TG moves > 5%, re-bench the matrix.
     `z-lab/Qwen3.6-35B-A3B-DFlash`. Needs z-lab's runtime, not
     llama.cpp. Promoted to "first non-trivial spec-decode bet"
     once llama.cpp baseline is locked.
+
+### 2026-04-27 — Phase 2 attempt #3: CPU long-ctx headline numbers
+
+CSV: `results/csv/daily_driver_longctx_2026-04-27_longctx_cpu_v3.csv`.
+CPU + Q4_K_M + KV q8_0 + FA + 8 threads. d=131k row missing because
+the runner had a leftover `LLAMA_BENCH_TIMEOUT_S = 1800` shadowing
+the bumped 3600s constant (now fixed); d=131k retry in flight.
+
+| ctx_depth | TG (t/s) | wall (s) |
+|---:|---:|---:|
+| 4096   | **29.39** | 55 |
+| 32768  | **13.51** | 913 (~15 min) |
+| 131072 | (retry in flight) | — |
+
+**The TG cliff is steep**: −54% from d=4k → d=32k for an 8× KV
+growth. KV reads dominate TG at long context, exactly as predicted.
+Extrapolating linearly with `1/ctx`, TG@131k should land near
+**~6-7 t/s**. That's the borderline-usable floor for an interactive
+coding agent — not unusable, but the user will feel each token at
+that rate.
+
+The drop from Phase 1's TG@4k (no FA, f16 KV) of **36.01** to
+Phase 2's TG@4k (FA on, q8 KV) of **29.39** is a **−18% cost** for
+the configuration that actually fits 120k+ KV in memory. That's the
+real "price of being able to use 120k context" on this hardware.
+
+**Memory math** (validates why we have to pay that 18%):
+
+| ctx | f16 KV | q8_0 KV | model + f16 KV | model + q8_0 KV | fits 48 GB? |
+|---:|---:|---:|---:|---:|:-:|
+| 4k    | ~0.5 GB | ~0.25 GB | 22.5 | 22.25 | ✓ |
+| 32k   | ~4 GB   | ~2 GB    | 26   | 24    | ✓ |
+| 131k  | **~17 GB** | **~8.5 GB** | **39** | **30.5** | ✓ q8 only |
+
+(Approximate — assumes mixed-attn arch with ~16 full-attn layers as
+reported for Qwen3.5-35B-A3B's TurboQuant benchmark; actual depends
+on Qwen3.6's split, verifiable via `gguf-dump`.)
+
+f16 KV at d=131k pushes total resident memory to ~39 GB — fits in
+48 GB but tight, especially with OS + harness overhead. q8 gives
+8.5 GB headroom which is the right operational margin. **q8 KV
+remains the right default**.
 
 ### 2026-04-27 — Phase 2 attempt #1+#2: hard limits found
 

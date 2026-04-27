@@ -1,0 +1,4 @@
+backend,model,ctx_depth,tg_tps,pp_tps,wall_s,ok,notes,power_state,env
+cpu,Qwen3.6-35B-A3B-Q4_K_M.gguf,4096,29.394,,55.0,1,,ac,
+cpu,Qwen3.6-35B-A3B-Q4_K_M.gguf,32768,13.511,,912.9,1,,ac,
+cpu,Qwen3.6-35B-A3B-Q4_K_M.gguf,131072,,,1803.1,0,hard timeout 1800s exceeded,ac,
