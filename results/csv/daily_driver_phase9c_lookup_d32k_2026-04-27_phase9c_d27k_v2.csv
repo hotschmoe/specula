@@ -1,0 +1,5 @@
+config,trial,tg_tps,pp_tps,predicted_n,prompt_n,wall_s,ok,notes
+baseline,0,10.686,14.377,256,27145,1912.1,1,
+baseline,1,10.753,16.920,256,4,24.1,1,
+ngram_mod,0,10.991,14.412,256,27145,1906.8,1,
+ngram_mod,1,11.279,17.221,256,4,23.0,1,

@@ -36,25 +36,29 @@ top are the answer; everything below is the work that produced them.
 7. **d=131k beyond single-shot bench budget on both CPU and Vulkan**
    (>60 min wall). Real measurement needs llama-server slot-cache
    reuse — separate workstream.
-8. **N-gram lookup spec-decode (`--spec-type ngram-mod`) is a real
-   long-ctx lever on CPU, contra thc1006's 3090 finding.** Phase 9b
-   measured median TG at d≈9525 of **30.41 t/s** vs 23.69 baseline
-   (+28%), with the win growing with depth (chat +15%, long +28%).
-   The win is **near-zero on the cold cache and ramps up as the
-   n-gram cache builds from prior generation** — well-suited to a
-   long-running agent loop. **Pending d=32k validation before
-   flipping the canonical config back to CPU at long ctx.**
+8. **N-gram lookup spec-decode (`--spec-type ngram-mod`) is a CPU
+   lever, but the win narrows with depth.** Phase 9b at d≈9525 saw
+   +28%; Phase 9c at d≈27145 saw only **+3.8% median** (+2.8% cold,
+   +4.9% warm). Verification cost grows O(d) per draft step while
+   the savings (skipped decode steps) stay constant — at long ctx
+   the savings dilute. **Canonical config does NOT flip**: at d=32k,
+   CPU+ngram_mod ≈ 16.0 t/s extrapolated still loses to Vulkan 16.89.
+   ngram_mod is worth turning on as a free ~5% at d≤32k but it does
+   not change the daily-driver backend choice.
 
 **Things still open**:
-- d=32k validation of ngram_mod CPU win (gates a canonical-config flip)
-- DFlash spec decoding (z-lab has a draft for our exact target;
-  vLLM/SGLang only — no llama.cpp path)
 - TTFT-after-tool-call / prefix-cache hit-rate measurement
   (the actual UX number for an agent loop; Phase 9b confirmed the
   llama-server prefix cache works — trial-1 of agent_long re-prefilled
   only 4 of 9525 tokens)
 - Quality probe at 120k ctx (needle-in-haystack)
 - d=131k via llama-server slot-cache
+- DFlash spec decoding (z-lab has a draft for our exact target;
+  vLLM/SGLang only — no llama.cpp path; needs cloud GPU)
+- Vulkan-via-server baseline (Phase 8 used llama-bench; the
+  server-vs-bench overhead grew from 14% at d=9.5k to ~30% at d=27k
+  on CPU, so a clean canonical-config decision needs Vulkan-via-server
+  too)
 
 
 
@@ -580,6 +584,79 @@ long ctx. **This is unvalidated at d=32k; Phase 9c needs to run it.**
   `build-vulkan` and `build-opencl` don't include `llama-speculative`
   or the `--spec-type` server flag wiring. **Spec-decode is a
   CPU-only lever** on this rig until that changes upstream.
+
+### 2026-04-27 — Phase 9c: ngram_mod gain narrows hard at long ctx — no canonical-config flip
+
+CSV: `results/csv/daily_driver_phase9c_lookup_d32k_2026-04-27_phase9c_d27k_v2.csv`
+
+The d=32k validation Phase 9b deferred. Real-prompt depth came in
+at 27145 tokens (corpus tokenizes at ~3 chars/token, denser than the
+4-char/token rule-of-thumb the script assumed). 2 trials per config
+(1 cold + 1 warm) since cold prefill at this depth costs ~32 min wall.
+
+| config              | cold tg | warm tg | median  | wall (cold) |
+|---|---:|---:|---:|---:|
+| baseline (CPU+Q4_K_M) | 10.686  | 10.753  | 10.720  | 1912.1 s |
+| **ngram_mod**         | 10.991  | 11.279  | **11.135** | 1906.8 s |
+| **Δ%**                | **+2.8%** | **+4.9%** | **+3.8%** | -0.3% |
+
+**The +28% from Phase 9b at d=9525 collapses to +3.8% at d=27145.**
+
+Why the win narrows with depth (hypothesis):
+
+- Each spec-decode step proposes K draft tokens, then runs ONE
+  verification forward pass at depth d+K.
+- The verification's attention compute scales O(d) per token. At
+  d=27k that's 3× the cost of d=9k.
+- The savings (skipping K-1 separate decode forward passes) are
+  approximately constant in K, regardless of d.
+- So the savings/cost ratio degrades with d. At d≤9k the savings
+  dominate (+28%); at d=27k they're nearly washed out (+4%).
+- This is a different mechanism than thc1006's GPU expert-saturation
+  argument — both effects can coexist; on our CPU only the
+  attention-cost-with-depth one bites.
+
+**Decision: do NOT flip the canonical long-ctx config**. CPU+ngram_mod
+extrapolated to d=32k = ~16.0 t/s; Vulkan d=32k bench = 16.89. Vulkan
+still wins at d≥16k. The agent's actual operating point is d=120k
+where the gain likely shrinks further toward zero.
+
+**Where ngram_mod still wins**:
+- **Short ctx (d≤8k) on CPU**: +11-15% on chat/code per Phase 9b.
+  At the canonical CPU short-ctx config, this is essentially free.
+- **Mid ctx (d=8-16k)**: gain decays from +28% toward +5%; might
+  still be worth ~+15-20% in the middle of that range.
+
+**Recipe.md update**: `--spec-type ngram-mod --draft 8` is added to
+the CPU short-ctx serve invocation as a free lever. **NOT** added to
+Vulkan (no support) or to long-ctx CPU (gain is negligible at d=27k+).
+
+**Server-vs-bench overhead grows with depth** — quietly important:
+
+| measurement                   | d=8k  | d=27-32k |
+|---|---:|---:|
+| llama-bench TG @ d           | 27.29 | 15.27 (Phase 4 @ d=32k) |
+| llama-server TG @ d (real prompt) | 23.69 (Phase 9b @ d=9525) | 10.72 (Phase 9c @ d=27145) |
+| server slowdown               | -14%  | **-30%**  |
+
+The server adds non-trivial per-token overhead that scales with depth.
+For canonical-config decisions across backends we measured Vulkan via
+llama-bench and CPU via llama-server — that's an apples/oranges gap.
+Vulkan-via-server is unmeasured; if Vulkan also pays a 14-30% server
+overhead, the actual CPU-vs-Vulkan picture under llama-server (the
+real serve path) might shift back toward CPU. Worth a future bench;
+not blocking the agent-loop work.
+
+**Caveats on Phase 9c specifically**:
+- Single trial each for cold and warm (n=1) — 9b had n=3. Less
+  variance protection. But baseline cold/warm were tightly within
+  0.07 t/s (range), so noise looks small here.
+- Single depth point (d=27k). The gain might recover slightly between
+  d=16k and d=27k — Phase 9b at d=9.5k = +28%, 9c at d=27k = +5%, no
+  point measured between.
+- Real-prompt content (mix of code+JSON+chat blocks) — a different
+  prompt mix could give different n-gram cache hit rates. Real agent
+  workload at d=27k+ might be different.
 
 ### 2026-04-27 — Phase 6: mmap / direct-io toggle (probably noise)
 

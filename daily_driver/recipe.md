@@ -132,9 +132,13 @@ The daily-driver target is a coding agent at 120k+ context (see
   Without FA, llama.cpp uses the regular attention path which works
   cleanly. FA is only required when KV ≠ f16 (and the FA-on path's
   performance penalty exceeds the KV-bandwidth savings at our depth).
-- `--lookup-cache-dynamic` — n-gram lookup decoding for the
-  repetitive tool-call output (still recommended; see
-  `optimization.md` § N-gram).
+- `--spec-type ngram-mod --draft 8` — n-gram lookup decoding via
+  the post-PR-19493 spec-decode wiring. Free **+11-15% TG at short
+  ctx** (Phase 9b) on CPU; gain narrows to **~+5% at d=27k** (Phase 9c)
+  so the recipe applies it on the short-ctx CPU config only. Note:
+  the older `--lookup-cache-dynamic <file>` flag also exists but
+  requires a pre-existing cache file (no `llama-lookup-create` ships
+  in this build); `--spec-type ngram-mod` is the working path.
 
 **Two canonical configs** (2026-04-27 update from Phase 8):
 
@@ -149,20 +153,24 @@ The daily-driver target is a coding agent at 120k+ context (see
 
 ```bash
 # Vulkan server — daily-driver default for long-ctx agent loops
+# Note: spec-decode flags (--spec-type / --lookup-cache-*) are NOT
+# wired into the Vulkan build at this commit; CPU only.
 GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1 \
     llama.cpp/build-vulkan/bin/llama-server.exe \
         -m models/Qwen3.6-35B-A3B-MXFP4_MOE.gguf \
         -ngl 99 \
         -c 131072 \
-        --lookup-cache-dynamic .cache/llama-lookup-dynamic.bin \
         --host 127.0.0.1 --port 8080
 
 # CPU server — short-ctx fallback / chat use case
+# --spec-type ngram-mod is a free +11-15% TG at d≤8k (Phase 9b).
+# Gain narrows to ~+5% by d=27k (Phase 9c) so it's mostly a short-ctx
+# win. --draft 8 = max draft tokens per spec step.
 llama.cpp/build-cpu/bin/llama-server.exe \
     -m models/Qwen3.6-35B-A3B-Q4_K_M.gguf \
     -t 8 \
     -c 131072 \
-    --lookup-cache-dynamic .cache/llama-lookup-dynamic.bin \
+    --spec-type ngram-mod --draft 8 \
     --host 127.0.0.1 --port 8080
 ```
 
