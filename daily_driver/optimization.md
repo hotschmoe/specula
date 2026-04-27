@@ -5,8 +5,45 @@ Append findings here; don't open a new doc unless the topic is worth
 its own life (per `docs/repo_hygiene.md`). The headline tables at the
 top are the answer; everything below is the work that produced them.
 
-**Phase: kickoff (2026-04-26)**. Models downloading, no rows landed
-yet. The TODO grid below is the test plan.
+## TL;DR (after tonight's session, 2026-04-27)
+
+**Canonical config — pick one based on your operating ctx:**
+
+- **Long-ctx agent loops (d ≥ 16k)**: Vulkan + MXFP4_MOE + ngl=99
+  + `GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1` + f16 KV
+  + no FA. **TG @ d=32k = 16.89 t/s**, +11% vs CPU.
+- **Short-ctx (d ≤ 8k)**: CPU + Q4_K_M + t=8 + f16 KV + no FA.
+  **TG @ d=8k = 27.29 t/s**, +19% vs Vulkan at the same depth.
+
+**Key non-obvious findings tonight**:
+
+1. **MoE delivers** — 35B-A3B CPU TG (36 t/s) beats dense 7B
+   (24 t/s) by +49%. The 3B-active design is the headline win.
+2. **FA is a net loss on this stack.** Phase 4 found f16+no-FA
+   beats q8+FA (15.27 vs 14.16 @ d=32k); FA + f16 KV livelocks on
+   both CPU and Vulkan (multiple llama.cpp bugs at f53577432).
+3. **GQA-2 architecture invalidated the "q8 KV mandatory" plan**
+   from earlier in the session — KV at 131k f16 is only 5.2 GB
+   (vs 17 GB I had estimated). Memory is not the binding constraint.
+4. **Vulkan's TG slope vs ctx is gentler than CPU's** — CPU
+   drops -58% from d=128 to d=32k; Vulkan only drops -26%. The
+   Vulkan advantage at long ctx grows with ctx.
+5. **KleidiAI inverted from the 7B finding**: at 35B-A3B it loses
+   on both PP (-13%) and TG (-7%) vs plain CPU. MoE's irregular
+   GEMM shapes don't fit the i8mm ukernels.
+6. **OpenCL TG penalty stays at MoE scale** — 14 t/s @ d=8k, half
+   of Vulkan. OpenCL is the wrong GPU backend for this model.
+7. **d=131k beyond single-shot bench budget on both CPU and Vulkan**
+   (>60 min wall). Real measurement needs llama-server slot-cache
+   reuse — separate workstream.
+
+**Things still open** (not blocking the canonical-config decision):
+- DFlash spec decoding (z-lab has a draft for our exact target)
+- N-gram lookup decoding (needs a tool-call corpus)
+- Quality probe at 120k ctx (needle-in-haystack)
+- d=131k via llama-server slot-cache
+
+
 
 ## What we're optimizing for
 
@@ -418,6 +455,35 @@ PP or TG moves > 5%, re-bench the matrix.
     `z-lab/Qwen3.6-35B-A3B-DFlash`. Needs z-lab's runtime, not
     llama.cpp. Promoted to "first non-trivial spec-decode bet"
     once llama.cpp baseline is locked.
+
+### 2026-04-27 — Phase 6: mmap / direct-io toggle (probably noise)
+
+CSV: `results/csv/daily_driver_phase6_memflags_2026-04-27_phase6_d8k.csv`.
+CPU + Q4_K_M + f16 KV + no FA + d=8k + t=8.
+
+| config              | mmap | dio | TG (t/s) | wall (s) |
+|---|:-:|:-:|---:|---:|
+| default             | 1 | 0 | 24.98 | 92.1 |
+| no_mmap             | 0 | 0 | 27.47 | 83.0 |
+| direct_io           | 1 | 1 | 27.37 | 82.1 |
+| no_mmap_direct_io   | 0 | 1 | 27.30 | 82.1 |
+
+The "default" config came in 9% slower than the other three — but
+**that's almost certainly a file-cache-warming artifact**:
+
+- Configs ran in CSV order. Default was first, hit cold OS file
+  cache. Configs 2-4 ran back-to-back with the file warm.
+- The other three configs land at 27.3 ± 0.2 t/s, which exactly
+  matches Phase 5's t=8 baseline (27.29). So the warm-cache
+  steady-state on this rig is ~27.3 t/s regardless of
+  mmap/direct-io toggle.
+
+**Decision: leave mmap=1, direct-io=0 (defaults).** The toggle
+produces no measurable steady-state effect with the file warm in
+RAM; Windows ARM64's page cache handles the 22 GB working set
+fine. Re-run with `-r 3 --no-warmup` and shuffled order if anyone
+needs a definitive answer; for tonight's purposes this knob is
+inert.
 
 ### 2026-04-27 — Phase 8: GPU long-context — Vulkan wins at d=32k
 

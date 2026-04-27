@@ -1,0 +1,5 @@
+config,mmap,direct_io,ctx_depth,threads,tg_tps,wall_s,ok,notes
+default,1,0,8192,8,24.980,92.1,1,
+no_mmap,0,0,8192,8,27.467,83.0,1,
+direct_io,1,1,8192,8,27.366,82.1,1,
+no_mmap_direct_io,0,1,8192,8,27.296,82.1,1,
