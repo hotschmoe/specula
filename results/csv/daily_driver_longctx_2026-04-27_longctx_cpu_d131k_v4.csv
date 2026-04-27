@@ -1,0 +1,2 @@
+backend,model,ctx_depth,tg_tps,pp_tps,wall_s,ok,notes,power_state,env
+cpu,Qwen3.6-35B-A3B-Q4_K_M.gguf,131072,,,1813.9,0,stale output timeout (>1800s) — likely GPU livelock,ac,
