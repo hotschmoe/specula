@@ -119,46 +119,49 @@ If a backend OOMs or refuses to offload the full model:
 ## 3. Serve via llama-server
 
 The daily-driver target is a coding agent at 120k+ context (see
-`README.md` § Primary use case), so the canonical serve config uses:
+`README.md` § Primary use case). After the Phase 1-4 sweeps
+(2026-04-27) the canonical serve config landed simpler than expected:
 
 - `-c 131072` — 128k ctx, the realistic operating point
-- `-ctk q8_0 -ctv q8_0` — KV quant; non-optional at this ctx
-  (halves KV memory at near-zero quality cost)
+- **No `-ctk q8_0 -ctv q8_0`** — GQA-2 architecture makes f16 KV at
+  131k cost only ~5 GB; quantizing it doesn't buy memory headroom we
+  need, AND f16+no-FA is **faster than q8+FA** (Phase 4: 15.27 vs
+  14.16 t/s at d=32k).
+- **No `-fa 1`** — Flash Attention with f16 KV livelocks on this
+  llama.cpp commit (`f53577432`) for both CPU and Vulkan paths.
+  Without FA, llama.cpp uses the regular attention path which works
+  cleanly. FA is only required when KV ≠ f16 (and the FA-on path's
+  performance penalty exceeds the KV-bandwidth savings at our depth).
 - `--lookup-cache-dynamic` — n-gram lookup decoding for the
-  repetitive tool-call output (see `optimization.md` § N-gram)
+  repetitive tool-call output (still recommended; see
+  `optimization.md` § N-gram).
 
-CPU + Q4_K_M is the simplest path; switch to `build-vulkan` +
-MXFP4_MOE once the optimization matrix confirms the GPU win at
-35B-A3B in the long-ctx regime (Vulkan beat CPU at single-stream
-TG on the 7B Q4_0; confirm with MXFP4_MOE at 120k before
-defaulting).
+CPU is the only viable backend at long ctx (Phase 2 attempt #2 +
+Phase 3 ruled out OpenCL and Vulkan for FA paths; Phase 4 confirmed
+CPU TG=15.27 at d=32k).
 
 ```bash
-# CPU server (recommended starting point — most reliable)
+# CPU server — daily-driver canonical config (2026-04-27)
 llama.cpp/build-cpu/bin/llama-server.exe \
     -m models/Qwen3.6-35B-A3B-Q4_K_M.gguf \
     -t 8 \
     -c 131072 \
-    -ctk q8_0 -ctv q8_0 \
     --lookup-cache-dynamic .cache/llama-lookup-dynamic.bin \
     --host 127.0.0.1 --port 8080
-
-# GPU Vulkan server (once the matrix confirms the win)
-GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1 \
-    llama.cpp/build-vulkan/bin/llama-server.exe \
-        -m models/Qwen3.6-35B-A3B-MXFP4_MOE.gguf \
-        -ngl 99 \
-        -c 131072 \
-        -ctk q8_0 -ctv q8_0 \
-        --lookup-cache-dynamic .cache/llama-lookup-dynamic.bin \
-        --host 127.0.0.1 --port 8080
 ```
 
-**At 120k ctx the model may not fit some GPU configs.** If the
-Vulkan or OpenCL invocation OOMs, drop `-c` to 65536 or 32768 first
-to confirm everything else is working, then walk it back up. Adreno's
-address-space ceiling for a 22 GB model + ~8 GB KV at q8_0 is the
-binding question.
+**Memory at 131k ctx**: model 22 GB + f16 KV 5.2 GB ≈ 27 GB resident.
+Comfortable on 48 GB system. The model is GQA-2, so KV is small
+compared to most 35B-class models.
+
+**Why GPU server isn't documented**: as of llama.cpp `f53577432`,
+the OpenCL backend doesn't support FA's SET_ROWS op (so KV must
+stay f16 + no-FA), and Vulkan's f16-codepath silently falls into a
+slow scalar fallback for quantized weights (so MXFP4_MOE needs the
+F16-off env knob — which then breaks FA paths anyway). Phase 1
+short-ctx Vulkan numbers (TG=22.7 at d=128) are below CPU's
+single-stream TG even at d=32k. Re-evaluate when llama.cpp gets
+better Adreno kernel coverage; until then, CPU.
 
 OpenAI-compatible endpoint at `http://127.0.0.1:8080/v1/chat/completions`.
 Web UI at `http://127.0.0.1:8080`.

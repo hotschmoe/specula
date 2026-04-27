@@ -1,0 +1,5 @@
+config,kv_type,flash_attn,ctx_depth,tg_tps,wall_s,ok,notes
+baseline_f16_noFA,f16,0,32768,15.267,485.3,1,
+fa_f16,f16,1,32768,,1513.2,0,stale output timeout (>1500s) — likely GPU livelock
+fa_q8,q8_0,1,32768,14.161,888.0,1,
+fa_q4,q4_0,1,32768,14.423,945.1,1,

@@ -115,7 +115,8 @@ def main() -> int:
     print()
     print(f"Phase 4 CPU @ d={args.ctx_depth}:")
     print()
-    print("| config              | KV   | FA  | TG (t/s) | Δ vs baseline |")
+    # ASCII-only table for Windows cp1252 stdout compatibility.
+    print("| config              | KV   | FA  | TG (t/s) | delta vs baseline |")
     print("|---|---|:-:|---:|---:|")
     base_tg = next((float(r["tg_tps"]) for r in rows
                     if r["config"] == "baseline_f16_noFA" and r["tg_tps"]),

@@ -41,7 +41,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--power-state", choices=("ac", "bat"), required=True)
     parser.add_argument("--ctx-depth", type=int, default=8192)
-    parser.add_argument("--kv-type", default="q8_0")
+    # Default config matches Phase 4 winner (f16 KV + no FA).
+    parser.add_argument("--kv-type", default="f16")
     parser.add_argument("--threads-list", default=None,
                         help=f"Comma-separated thread counts. "
                              f"Default: {DEFAULT_THREADS}")

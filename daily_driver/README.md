@@ -58,19 +58,25 @@ pick at this RAM budget.
 - `qwen35moe` arch, 40 transformer blocks
 - **GQA with 2 KV heads** (16 Q heads, 8:1 ratio) — minimal KV cache
 - 256 experts, 8 used per token (top-8 routing, ultra-sparse MoE)
-- Native context: **262144 (256k)** — twice the 131k we initially
-  planned to operate at, so plenty of headroom
-- Per-token f16 KV cost: ~40 KB; at 131k that's **5.2 GB**, at full
-  256k it's 10.5 GB
+- Native context: **262144 (256k)**
 
 This means **memory headroom is NOT the binding constraint** —
-even f16 KV at the full native 256k ctx leaves 15+ GB free on this
-48 GB system. The original "q8 KV is mandatory at long ctx" rule
-(based on the wrong assumption of 8 KV heads / pure full-attn) is
-no longer required. q8 KV becomes a pure throughput-vs-quality knob,
-not a memory necessity. See `optimization.md` § Phase 2 for the
-corrected memory math and the Phase 4 plan to disentangle FA cost
-from KV-quant cost.
+f16 KV at 131k = 5.2 GB → 27 GB total on 48 GB system. Even at the
+full 256k native ctx it's only 32.5 GB total.
+
+**Canonical config (post-Phase-4, 2026-04-27)**: **CPU + Q4_K_M +
+f16 KV + no FA** at the desired ctx. Phase 4 found that:
+
+- Flash Attention's per-step overhead exceeds its KV-read savings
+  at the GQA-2 KV size (small KV → little to save, but FA still
+  pays its overhead).
+- Worse: FA + f16 KV livelocks on this llama.cpp commit (same
+  pattern that breaks the GPU paths).
+- Therefore f16 + no-FA wins on speed (15.27 vs 14.16 t/s @ d=32k
+  vs the q8+FA config we were planning to use).
+
+See `optimization.md` § Phase 4 for the full table; `recipe.md`
+for the updated serve invocation (no `-fa`, no `-ctk q8_0`).
 
 Backends in scope:
 

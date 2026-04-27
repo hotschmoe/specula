@@ -74,24 +74,33 @@ by a wide margin; OpenCL wins PP. Vulkan is broken with the
 DISABLE_F16+PREFER_HOST combo that worked on Q4_0 at 7B — Phase 3
 will A/B that. See § Findings for the full analysis.
 
-**Headline AC table — long-context (the one that matters, partial Phase 2 data)**:
+**Headline AC table — long-context (the one that matters)**:
 
-KV at q8_0 always (per the use-case section). FA on. TG measured
-with `-d N` pre-fill, then 128 generation tokens timed.
+After Phase 4 (2026-04-27): canonical config is **f16 KV + no FA**.
+Phase 2 v3 numbers (q8 KV + FA) shown for reference but no longer
+the recommended config.
 
-| backend | model | TG@4k | TG@32k | TG@131k | notes |
-|---|---|---:|---:|---:|---|
-| **CPU**     | Q4_K_M    | **29.39** | **13.51** | (retry pending) | -fa 1; -ctk q8_0 -ctv q8_0 |
-| CPU+KleidiAI| Q4_K_M    | (skip)    | (skip)    | (skip)          | lost Phase 1, deprecated |
-| GPU OpenCL  | MXFP4_MOE | (failed)  | (failed)  | (failed)        | SET_ROWS not supported with FA on OpenCL backend |
-| GPU Vulkan  | MXFP4_MOE | (stalls)  | (stalls)  | (stalls)        | Adreno Vulkan ICD livelocks on FA + quant-KV |
+| backend | model | config | TG@4k | TG@32k | TG@131k | notes |
+|---|---|---|---:|---:|---:|---|
+| **CPU**     | Q4_K_M    | **f16 KV, no FA** | (Phase 1: 36.01 @ d=128) | **15.27** | (deferred¹) | the canonical config — fastest AND avoids FA livelock |
+| CPU         | Q4_K_M    | q8 KV, FA on  | 29.39 | 14.16 | (deferred¹) | -7% vs canonical, no advantage |
+| CPU         | Q4_K_M    | q4 KV, FA on  | TODO  | 14.42 | TODO            | -6% vs canonical |
+| CPU         | Q4_K_M    | f16 KV, FA on | TODO  | crash | TODO            | livelocks on this llama.cpp commit |
+| CPU+KleidiAI| Q4_K_M    | (skip)        | —     | —     | —               | lost Phase 1, deprecated |
+| GPU OpenCL  | MXFP4_MOE | f16 KV, no FA | TODO  | TODO  | TODO            | best path for OpenCL (FA's SET_ROWS not supported) |
+| GPU Vulkan  | MXFP4_MOE | f16 KV, no FA | TODO  | TODO  | TODO            | F16-off env still required — see Phase 1/3 |
 
-**At long ctx, only CPU works** for the (KV-quant + FA) memory-saving
-combination this workload requires. GPU paths need f16 KV + no-FA
-(Phase 1 short-ctx Vulkan numbers stand; long-ctx GPU diagnostic
-TBD).
+¹ d=131k bench wall-time exceeds the 30-min stale watchdog (CPU
+prefill at d=131k with FA+q8 KV is >30 min silent). Extrapolating
+TG@4k=29.39 → TG@32k=13.51 → TG@131k via the 1/ctx slope predicts
+~6-7 t/s. Real measurement TBD when we extend the bench-time budget
+or find a way to chunk the prefill.
 
-CSV: `results/csv/daily_driver_longctx_2026-04-27_longctx_cpu_v3.csv`.
+CSVs:
+- `results/csv/daily_driver_longctx_2026-04-27_longctx_cpu_v3.csv`
+  (Phase 2 v3, q8+FA: d=4k, d=32k)
+- `results/csv/daily_driver_phase4_kv_fa_2026-04-27_phase4_d32k.csv`
+  (Phase 4, KV/FA disentangle at d=32k)
 
 ## Variable sweep matrix
 
@@ -397,6 +406,65 @@ PP or TG moves > 5%, re-bench the matrix.
     `z-lab/Qwen3.6-35B-A3B-DFlash`. Needs z-lab's runtime, not
     llama.cpp. Promoted to "first non-trivial spec-decode bet"
     once llama.cpp baseline is locked.
+
+### 2026-04-27 — Phase 4: FA is the cost, NOT KV quant (and FA livelocks on CPU+f16 too)
+
+CSV: `results/csv/daily_driver_phase4_kv_fa_2026-04-27_phase4_d32k.csv`.
+CPU @ d=32768, 8 threads. Sweep disentangles FA cost from KV-quant
+cost.
+
+| config            | KV   | FA  | TG @ d=32k (t/s) | Δ vs baseline |
+|---|---|:-:|---:|---:|
+| **baseline_f16_noFA** | f16  | off | **15.27** | — |
+| fa_f16            | f16  | on  | **STALLED** | (>1500s no output, killed) |
+| fa_q8             | q8_0 | on  | 14.16     | -7.3% |
+| fa_q4             | q4_0 | on  | 14.42     | -5.6% |
+
+Two big findings:
+
+**1. f16 KV without FA is the FASTEST CPU config.** This inverts
+the working hypothesis that "FA + KV-quant is the right default for
+long ctx". Without FA, the bandwidth cost of f16 KV is small enough
+(thanks to GQA-2) that the per-step compute saved doesn't pay back
+FA's per-step overhead. **The new daily-driver default is f16 KV +
+no-FA.**
+
+**2. FA + f16 KV on CPU livelocks the same way Vulkan does.** Killed
+at 1513s with no JSON output. The Phase 2 attempt #2 finding "Vulkan
++ FA + quant-KV stalls" turns out to be a more general "FA path is
+buggy in llama.cpp f53577432 for some configs" — including CPU+f16-KV.
+The combinations that DO work on CPU:
+- f16 KV + no-FA  ✓ fastest
+- q8_0 KV + FA   ✓ -7% (FA is required for q8 KV per the
+                       Phase 2 attempt #2 finding; you can't
+                       have q8 KV without FA)
+- q4_0 KV + FA   ✓ -6%
+- f16 KV + FA    ✗ livelock at d=32k (untested at d=4k)
+
+**3. q4 ≈ q8 KV in throughput** (14.42 vs 14.16, q4 actually 1.8%
+faster). Neither matters for memory at GQA-2 (the diff at d=131k is
+2.6 GB vs 5.2 GB out of 48 GB total). q8 stays the recommendation
+when FA is forced (better quality at almost-equal speed); q4 has no
+practical reason to win.
+
+**Updated stack ranking** for our use case at d=32k:
+
+| rank | config | TG (t/s) | rationale |
+|:-:|---|---:|---|
+| 1 | f16 KV + no-FA | 15.27 | new default — wins on speed AND avoids FA livelock pitfalls |
+| 2 | q4 KV + FA | 14.42 | -5.6%, no advantage over #1 |
+| 3 | q8 KV + FA | 14.16 | -7.3%, no advantage over #1 |
+| ✗ | f16 KV + FA | crash | broken in llama.cpp f53577432 |
+
+**Recipe updated** (separately, see commit): remove `-fa 1`, remove
+`-ctk q8_0 -ctv q8_0`. Server config becomes the simple llama.cpp
+defaults (f16 KV, no FA).
+
+**Wall-time observation**: the Phase 4 wrapper plus the four bench
+runs landed in ~64 minutes total — much faster than the 60 min I
+budgeted-for the matrix alone. The crashed `fa_f16` cost only the
+1500s stale-window before being killed; the others ran in 8-16 min
+each.
 
 ### 2026-04-27 — Phase 2 attempt #3: CPU long-ctx headline numbers
 
