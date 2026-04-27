@@ -127,19 +127,26 @@ Battery drain over the BAT matrix: 71170 → 68453 mWh = **2717 mWh**
 
 ## AC vs battery consistency
 
-| backend        | PP AC | PP BAT | Δ    | TG AC | TG BAT | Δ    |
-|---|---:|---:|---:|---:|---:|---:|
-| NPU (Genie)    | 1219.1 | 1189.6 | -2.4% | 22.91 | 22.39 | -2.3% |
-| CPU            |  123.0 |  132.8 | +8.0% | 24.17 | 24.87 | +2.9% |
-| CPU + KleidiAI |  125.6 |  121.0 | -3.7% | 25.42 | 24.35 | -4.2% |
-| GPU (OpenCL)   |  237.0 |  224.1 | -5.5% | 10.72 | 10.74 | +0.2% |
-| GPU (Vulkan)   |    —   |   —    |       |   —   |   —   |       |
+| backend        | model / knobs | PP AC | PP BAT | Δ    | TG AC | TG BAT | Δ    |
+|---|---|---:|---:|---:|---:|---:|---:|
+| NPU (Genie)                  | w8a16 | 1219.1 | 1189.6 | -2.4% | 22.91 | 22.39 | -2.3% |
+| CPU                          | Q4_K_M | 123.0 | 132.8 | +8.0% | 24.17 | 24.87 | +2.9% |
+| CPU + KleidiAI               | Q4_K_M | 125.6 | 121.0 | -3.7% | 25.42 | 24.35 | -4.2% |
+| GPU (OpenCL, 2026-04-25)     | Q4_K_M | 237.0 | 224.1 | -5.5% | 10.72 | 10.74 | +0.2% |
+| **GPU (OpenCL, 2026-04-26)** | **Q4_0** | **367.36** | — (TODO) | — | **13.58** | — (TODO) | — |
+| **GPU (Vulkan, 2026-04-26)** | **Q4_0** + `DISABLE_F16+PREFER_HOST` | **70.38** | — (TODO) | — | **25.80** | — (TODO) | — |
+| GPU (Vulkan, 2026-04-25, broken) | Q4_K_M | — (timeout) | — (timeout) | | — | — | |
 
 Same pattern as 4B: **NPU is the only backend where battery ≈ AC** (±2.4%).
 CPU's +8% PP on battery is noise (single-run variance). The OpenCL TG
 *not* dropping on battery (vs the −19% it dropped at 4B) is interesting
-— Adreno is so poorly utilized at 7B that the AC↔BAT delta is below
-the noise floor.
+on the old Q4_K_M reading — Adreno is so poorly utilized at 7B that the
+AC↔BAT delta is below the noise floor. **The 2026-04-26 GPU rows
+(Q4_0 + Vulkan-fix) only have AC numbers**; BAT refresh for Vulkan-Q4_0
+and OpenCL-Q4_0 at 7B is the open follow-up. Based on the 4B BAT
+refresh (Vulkan-Q4_0 -0.4% PP / -9.9% TG, OpenCL-Q4_0 -5.2% PP / -4.9%
+TG), the 7B BAT GPU numbers should land within similar percentages of
+the AC values.
 
 ## Per-backend detail
 
@@ -460,6 +467,12 @@ than the in-process path."
 
 The headline question this side-quest set out to answer:
 
+All GPU rows below use the **2026-04-26 canonical configs**: OpenCL on
+Q4_0 default, Vulkan on Q4_0 with `GGML_VK_DISABLE_F16=1
+GGML_VK_PREFER_HOST_MEMORY=1`. NPU + CPU rows are 2026-04-25.
+"BAT" rows for the new GPU configs at 7B are TODO — see AC vs battery
+table; numbers below for those rows are AC-only.
+
 | metric | 4B | 7B | Δ | implication |
 |---|---:|---:|---:|---|
 | NPU partition count | 4 | 6 | +50% | spec-decode handoff cost grows; W4 sidecar planning needs to budget 6 ORT dispatches per AR1 step |
@@ -470,17 +483,32 @@ The headline question this side-quest set out to answer:
 | CPU PP | 188 | 123 | -35% | proportional to params (memory-bound) |
 | CPU TG | 39.5 | 24.2 | -39% | same |
 | CPU mean W (BAT) | 25.5 | 18.2 | -29% | cache miss dominance lowers utilization → lower draw |
-| OpenCL PP | 367 | 237 | -35% | proportional to params |
-| OpenCL TG | 22.9 | 10.7 | -53% | catastrophic — kernel-launch overhead cliff |
-| OpenCL mean W (BAT) | 44.6 | 58.3 | +31% | higher absolute draw on a bigger model |
+| **OpenCL-Q4_0 PP (AC)** | **569.12** | **367.36** | **-35%** | proportional to params, same shape as 4B→7B CPU PP |
+| **OpenCL-Q4_0 TG (AC)** | **26.22** | **13.58** | **-48%** | kernel-launch overhead at AR=1 still hurts at bigger weights — Q4_0 helped at both sizes (+14%/+16% vs Q4_K_M) but the underlying cliff stays |
+| OpenCL-Q4_0 mean W (BAT) | 27.52 | TODO | — | 4B refresh dropped from old 44.6→27.52 W; 7B BAT refresh deferred |
+| **Vulkan-Q4_0 + knobs PP (AC)** | **115.04** | **70.38** | **-39%** | proportional to params; Vulkan PP is single-graph saturated, no concurrency boost on prefill |
+| **Vulkan-Q4_0 + knobs TG (AC)** | **38.51** | **25.80** | **-33%** | Vulkan scales **gentler** than CPU (-39%) and far gentler than OpenCL (-48%) — coopmat tile fits 7B's hidden=3584 better than 4B's hidden=2560 |
+| Vulkan-Q4_0 mean W (BAT) | 28.25 | TODO | — | 4B BAT 28.25 W → expect 7B similar; refresh deferred |
+| OpenCL-Q4_K_M PP (BAT, old) | 355.79 | 224.09 | -37% | superseded by Q4_0; kept for reference |
+| OpenCL-Q4_K_M TG (BAT, old) | 18.58 | 10.74 | -42% | superseded by Q4_0 |
+| OpenCL-Q4_K_M mean W (BAT, old) | 44.6 | 58.3 | +31% | superseded; 4B's 44.6 W dropped to 27.52 W on Q4_0 in the 2026-04-26 refresh, partly from upstream kernel improvements between commits |
+| **Vulkan-Q4_0 N=4 TG_agg (AC)** | **102.33** | **77.40** | **-24%** | concurrency scaling gets *better* with model size: 4B 2.66× / 7B **3.00×** vs single-stream — Vulkan-Q4_0 is the agentic-workload backend |
+| CPU N=4 TG_agg (AC) | 82.01 | 62.78 | -23% | scales better at 7B (2.60× vs 4B's 2.08×) but Vulkan still wins |
+| OpenCL-Q4_0 N=4 TG_agg (AC) | 19.95 | 19.45 | -3% | OpenCL N=4 absolute throughput barely changes 4B→7B because launch-overhead-bound; never the right concurrency backend |
 
-**Projection to 8B target (W1.b)**: extrapolating NPU PP linearly from
-1219 t/s @ 7B with another ~14% parameter increase → expect **NPU PP
-≈ 1050-1100 t/s at 8B**. That's **6-7× CPU's projected 8B PP** (~150
-t/s) and **5× OpenCL's projected 200 t/s**. The W1.b roadmap entry
-("if 4B prefills at 1566, 8B should land 700-900 t/s") was *too
-pessimistic* — the actual scaling is gentler than the original 1/param
-guess.
+**Projection to 8B target (W1.b)**: extrapolating linearly from 7B
+with another ~14% parameter increase →
+- NPU PP ≈ **1050-1100 t/s at 8B** (from 1219 @ 7B, sublinear scaling).
+- OpenCL-Q4_0 PP ≈ **315-330 t/s at 8B** (from 367 @ 7B, -10%).
+- Vulkan-Q4_0 PP ≈ **60-65 t/s at 8B** (from 70 @ 7B, -10%).
+- CPU PP ≈ **105-110 t/s at 8B** (from 123 @ 7B, -10%).
+- Vulkan-Q4_0 TG ≈ **22-23 t/s at 8B** (from 25.8 @ 7B, -10%).
+- Vulkan-Q4_0 N=4 TG_agg ≈ **65-70 t/s at 8B**.
+
+That's **NPU PP at 6-7× CPU's projected 8B PP and 3-4× OpenCL-Q4_0's
+projection**. The W1.b roadmap entry ("if 4B prefills at 1566, 8B
+should land 700-900 t/s") was *too pessimistic* — the actual scaling
+is gentler than the original 1/param guess.
 
 ### Which island wins each workload at 7B?
 
@@ -554,8 +582,15 @@ fundamental).
 
 ### What to re-measure in 2-4 weeks
 
+- **Open: BAT refresh for the 2026-04-26 GPU canonical configs at
+  7B.** OpenCL-Q4_0 default + Vulkan-Q4_0 with `DISABLE_F16+PREFER_HOST`
+  AC numbers landed 2026-04-26; BAT not yet measured. Expected to
+  track the 4B BAT deltas (-5% PP, -5/-10% TG) but should be
+  confirmed. Use `scripts/bench_qwen3_4b_gpu_knobs_bat.py` as the
+  template (parameterize for 7B GGUFs).
 - llama.cpp commit advances (faster Q4_K_M kernels, Vulkan PP fix
-  candidates).
+  candidates — note: the 2026-04-26 Vulkan PP fix was runtime config,
+  not upstream).
 - QAIRT minor releases — 2.45.x point updates may improve HTP
   scheduling for multi-context workloads, which would change the
   concurrency picture.
