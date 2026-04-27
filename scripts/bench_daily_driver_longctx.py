@@ -91,6 +91,8 @@ def run_longctx_one(
     extra_env: dict | None,
     kv_type: str,
     ctx_buffer: int,
+    flash_attn: bool = True,
+    stale_timeout_s: int = STALE_TIMEOUT_S,
 ) -> LongCtxRow:
     """One llama-bench invocation, depth=ctx_depth, n=128, p=0.
 
@@ -131,6 +133,13 @@ def run_longctx_one(
                        # progress mid-run (the per-rep prefill on a
                        # 131k-depth run can be 15+ min on CPU).
     ]
+    # Non-f16 KV requires flash-attention enabled in llama.cpp,
+    # otherwise context creation fails with "failed to create context"
+    # (verified empirically with -ctk q8_0 -fa 0). With FA off, KV
+    # MUST stay f16 — the runner enforces this by tying -fa to the
+    # KV type at the call site.
+    if flash_attn:
+        cmd += ["-fa", "1"]
     if threads is not None:
         cmd += ["-t", str(threads)]
     if ngl:
@@ -148,7 +157,7 @@ def run_longctx_one(
     rc, stdout_full, stderr_full, status = run_streaming(
         cmd, log_path, env,
         hard_timeout_s=LLAMA_BENCH_TIMEOUT_S,
-        stale_timeout_s=STALE_TIMEOUT_S,
+        stale_timeout_s=stale_timeout_s,
     )
     row.wall_s = time.perf_counter() - t0
     row.extra["exit_code"] = rc
@@ -156,7 +165,7 @@ def run_longctx_one(
 
     if status == "stale_timeout":
         row.ok = False
-        row.notes = f"stale output timeout (>{STALE_TIMEOUT_S}s) — likely GPU livelock"
+        row.notes = f"stale output timeout (>{stale_timeout_s}s) — likely GPU livelock"
         return row
     if status == "hard_timeout":
         row.ok = False
@@ -263,7 +272,18 @@ def main() -> int:
                         help=f"KV cache quant type (default: {DEFAULT_KV_TYPE})")
     parser.add_argument("--threads", type=int, default=8,
                         help="CPU thread count (default: 8)")
+    parser.add_argument("--no-flash-attn", action="store_true",
+                        help="Disable -fa (flash attention). Note: with KV "
+                             "quantized below f16, llama.cpp REQUIRES -fa "
+                             "or context creation fails. Only meaningful "
+                             "when --kv-type=f16.")
+    parser.add_argument("--stale-timeout-s", type=int, default=STALE_TIMEOUT_S,
+                        help=f"Kill the run if no stdout/stderr for this long. "
+                             f"Default {STALE_TIMEOUT_S}s; raise to ~1500 for "
+                             f"d>=32k or ~2400 for d>=131k (llama-bench is "
+                             f"silent during the un-timed -d prefill phase).")
     args = parser.parse_args()
+    flash_attn = not args.no_flash_attn
 
     tag = args.tag or f"longctx_{args.power_state}_{time.strftime('%Y%m%d_%H%M%S')}"
     CSV_DIR.mkdir(parents=True, exist_ok=True)
@@ -322,6 +342,8 @@ def main() -> int:
                 extra_env=spec["extra_env"],
                 kv_type=args.kv_type,
                 ctx_buffer=ctx_buffer,
+                flash_attn=flash_attn,
+                stale_timeout_s=args.stale_timeout_s,
             )
             rows.append(row)
             status = "OK" if row.ok else "FAIL"

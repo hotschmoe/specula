@@ -163,16 +163,24 @@ class PowerSampler:
 # ─── llama-bench driver ─────────────────────────────────────────────────────
 
 # 35B at Q4 takes ~2-3× as long per pass as 7B, so the per-call timeout
-# needs to grow. 7B used 600 s; 35B with -r 3 on CPU could realistically
-# spend 8-12 minutes on PP+TG combined. 1800 s = 30 min ceiling.
-LLAMA_BENCH_TIMEOUT_S = 1800
+# needs to grow. 7B used 600 s; 35B PP512/TG128 with -r 3 takes ~40s
+# on CPU. Long-context bench (d=131072 prefill) on CPU can take ~16-20
+# min wall, so we set the hard cap well above that for headroom.
+LLAMA_BENCH_TIMEOUT_S = 3600  # 60 min
 
 # Stale-output watchdog: if neither stdout nor stderr emits a byte for
-# this long, kill the process. With `--progress` enabled, llama-bench
-# emits a progress line every test repetition, so even a cold 131k
-# prefill should produce a stderr byte every ~1-2 minutes max. 300 s
-# = 5 min is generous but still catches the "100% GPU, no output"
-# livelock pattern that bit us on Vulkan-Q4 at 7B.
+# this long, kill the process. Catches the "100% GPU, no output"
+# livelock pattern that bit us on Vulkan-Q4 at 7B and on Vulkan-MXFP4
+# at 35B (Phase 3, this doc).
+#
+# Subtle: llama-bench's `-d N` prefill phase emits "depth run 1/1"
+# THEN goes silent until N tokens are processed. At d=131k on CPU,
+# this silent phase is ~16 min. So the watchdog default needs to
+# tolerate that. 300s was too aggressive at long depths and killed
+# legitimate runs in Phase 2 attempt #2. The runner exposes
+# --stale-timeout-s for explicit control; default below is set to
+# 5 min, which is fine for short-ctx (d<=8k); long-ctx callers must
+# raise it explicitly.
 STALE_TIMEOUT_S = 300
 
 

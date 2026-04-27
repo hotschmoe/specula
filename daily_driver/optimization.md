@@ -388,6 +388,74 @@ PP or TG moves > 5%, re-bench the matrix.
     llama.cpp. Promoted to "first non-trivial spec-decode bet"
     once llama.cpp baseline is locked.
 
+### 2026-04-27 — Phase 2 attempt #1+#2: hard limits found
+
+CSV: `results/csv/daily_driver_longctx_2026-04-27_longctx_ac_v2.csv`.
+First long-ctx sweep ran into multiple new constraints in llama.cpp's
+backend matrix. **Documenting the failure modes is the finding** —
+each of these will quietly cost a future user time if not written
+down here.
+
+**Discovery 1: KV quant requires `-fa 1` in llama.cpp.** Setting
+`-ctk q8_0 -ctv q8_0` without `-fa 1` produces `main: error: failed
+to create context with model`. Hard fail at construction. The runner
+now hardcodes `-fa 1` whenever KV is non-f16; `--no-flash-attn` flag
+exists but is only valid with `--kv-type f16`.
+
+**Discovery 2: OpenCL backend doesn't support FA with quantized KV.**
+`build-opencl` fails with
+`pre-allocated tensor (cache_k_l3 (view)) in a buffer (OpenCL) that
+cannot run the operation (SET_ROWS)`. This is a llama.cpp limitation
+at commit `f53577432` — the OpenCL backend lacks a `SET_ROWS` kernel,
+which FA's KV-update path requires. **OpenCL is therefore incompatible
+with q8_0/q4_0 KV in any FA-enabled config.** OpenCL is restricted
+to f16 KV + no-FA; at 120k ctx that's a memory-cost question we
+haven't measured yet.
+
+**Discovery 3: Vulkan + FA + q8_0 KV stalls at any depth, even d=4k.**
+Same slow-scalar-fallback symptom as the F16-on Vulkan run from
+Phase 3 (warmup completes, then silence). Different from Phase 1
+(where Vulkan + MXFP4 + no-FA + f16 KV worked). So **Adreno's Vulkan
+ICD has a separate broken codepath for FA + quant-KV**, in addition
+to the F16+quant-Q4 path. Workaround: run Vulkan with KV f16 and
+no-FA — but we haven't confirmed that path scales to 120k ctx yet.
+
+**Discovery 4: llama-bench is silent during the `-d N` prefill phase.**
+After printing `depth run 1/1`, no further output until the timed
+generation completes. At d=131k on CPU, the silent prefill is ~16 min.
+The 300s default stale-output watchdog killed legitimate runs at
+d>=32k. Fixed: runner now exposes `--stale-timeout-s`; long-depth
+callers must raise it explicitly. Default stays 300s for short-ctx
+runs because shortening the silent window detects real livelocks
+faster.
+
+**Net constraint matrix** at llama.cpp `f53577432` for our model+config:
+
+| backend | FA | KV quant | works? |
+|---|:-:|---|:-:|
+| CPU (build-cpu) | off | f16 | ✓ |
+| CPU (build-cpu) | on  | f16 | ✓ (TG drops modestly with FA) |
+| CPU (build-cpu) | on  | q8_0 / q4_0 | ✓ |
+| CPU (build-cpu) | off | q8_0 / q4_0 | ✗ context-creation fail |
+| OpenCL | off | f16 | ✓ (Phase 1) |
+| OpenCL | off | q8_0 / q4_0 | ✗ context-creation fail |
+| OpenCL | on  | any | ✗ SET_ROWS not supported |
+| Vulkan | off | f16 | ✓ (Phase 1, with DISABLE_F16 env) |
+| Vulkan | on  | f16 | unmeasured |
+| Vulkan | on  | q8_0 / q4_0 | ✗ slow-scalar-fallback / livelock |
+
+**What this means for the daily-driver use case**: on this hardware
++ this llama.cpp commit, **only CPU supports the (KV-quant + FA)
+combination needed to fit 120k+ ctx in memory**. GPU must use f16
+KV which costs ~2× the memory; at 120k that may exceed Adreno's
+practical address-space ceiling. **The provisional Phase 1 conclusion
+(CPU is the right backend for this workload) is reinforced** — GPU
+isn't just losing on TG, it can't even adopt the memory-saving
+config we need at long ctx.
+
+Phase 2 attempt #3 (CPU only, all 3 depths, stale_timeout=1800s)
+is in flight at the time of writing.
+
 ### 2026-04-27 — Phase 3: Vulkan env A/B confirms F16-off mandatory
 
 CSV: `results/csv/daily_driver_2026-04-26_vulkan_no_env.csv` (file

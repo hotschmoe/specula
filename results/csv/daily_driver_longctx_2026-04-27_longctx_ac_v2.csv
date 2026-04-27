@@ -1,0 +1,13 @@
+backend,model,ctx_depth,tg_tps,pp_tps,wall_s,ok,notes,power_state,env
+cpu,Qwen3.6-35B-A3B-Q4_K_M.gguf,4096,29.510,,61.0,1,,ac,
+cpu,Qwen3.6-35B-A3B-Q4_K_M.gguf,32768,,,314.6,0,stale output timeout (>300s) — likely GPU livelock,ac,
+cpu,Qwen3.6-35B-A3B-Q4_K_M.gguf,131072,,,314.6,0,stale output timeout (>300s) — likely GPU livelock,ac,
+gpu-opencl,Qwen3.6-35B-A3B-MXFP4_MOE.gguf,4096,,,26.0,0,"llama-bench exit 3221226505; stderr tail: /1: starting
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/ggml-backend.cpp:898: pre-allocated tensor (cache_k_l3 (view)) in a buffer (OpenCL) that cannot run the operation (SET_ROWS)",ac,
+gpu-opencl,Qwen3.6-35B-A3B-MXFP4_MOE.gguf,32768,,,22.0,0,"llama-bench exit 3221226505; stderr tail: /1: starting
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/ggml-backend.cpp:898: pre-allocated tensor (cache_k_l3 (view)) in a buffer (OpenCL) that cannot run the operation (SET_ROWS)",ac,
+gpu-opencl,Qwen3.6-35B-A3B-MXFP4_MOE.gguf,131072,,,22.0,0,"llama-bench exit 3221226505; stderr tail: /1: starting
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/ggml-backend.cpp:898: pre-allocated tensor (cache_k_l3 (view)) in a buffer (OpenCL) that cannot run the operation (SET_ROWS)",ac,
+gpu-vulkan,Qwen3.6-35B-A3B-MXFP4_MOE.gguf,4096,,,312.3,0,stale output timeout (>300s) — likely GPU livelock,ac,"{""GGML_VK_DISABLE_F16"": ""1"", ""GGML_VK_PREFER_HOST_MEMORY"": ""1""}"
+gpu-vulkan,Qwen3.6-35B-A3B-MXFP4_MOE.gguf,32768,,,312.2,0,stale output timeout (>300s) — likely GPU livelock,ac,"{""GGML_VK_DISABLE_F16"": ""1"", ""GGML_VK_PREFER_HOST_MEMORY"": ""1""}"
+gpu-vulkan,Qwen3.6-35B-A3B-MXFP4_MOE.gguf,131072,,,313.3,0,stale output timeout (>300s) — likely GPU livelock,ac,"{""GGML_VK_DISABLE_F16"": ""1"", ""GGML_VK_PREFER_HOST_MEMORY"": ""1""}"
