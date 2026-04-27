@@ -10,38 +10,73 @@ yet. The TODO grid below is the test plan.
 
 ## What we're optimizing for
 
+The workload (per `README.md` § Primary use case) is a **long-running
+coding agent at 120k+ context, concurrency=1, heavy KV reuse**. That
+reorders the metrics from how the 4B/7B baseline docs framed them.
+
 In priority order:
 
-1. **TG (decode) tokens/sec, single-stream** — the chat-loop UX number.
-   Aspirational floor: **20 t/s** at 35B-A3B (≈ what the 4B baseline
-   delivered in CPU TG). Anything ≥ 15 t/s is usable; <10 t/s isn't.
-2. **PP (prefill) tokens/sec** — code-paste / long-context-loading
-   latency. Below ~150 t/s a 4k-token input takes >25 s, which is
-   noticeable.
-3. **J/tok on battery** — secondary; the `daily_driver` rig is mostly
-   AC-tethered, but battery numbers gate "use this on a flight"
-   workflows. Run BAT only on the canonical wins from AC.
-4. **Time-to-first-token (TTFT)** — derivable from PP, but the
-   server-side framing overhead is its own thing; measure once via
-   `llama-server` curl timing on the canonical config.
+1. **TG t/s at long context (32k / 64k / 120k)**, single-stream.
+   The agent spends almost no time at short context after warm-up.
+   A backend that does 25 t/s at 1k-ctx and 8 t/s at 120k-ctx is
+   *worse* than one doing 18 t/s flat. Floor: ≥ 12 t/s at 120k
+   (slow but usable); aspiration: ≥ 18 t/s at 120k.
+2. **TTFT after a tool call** — the actual UX number for an agentic
+   loop. With KV reuse, only the delta tokens (tool result + harness
+   framing, typically 200-2000 tokens) need prefilling. So **PP t/s
+   on a small delta** matters more than PP t/s on a cold 4k prompt.
+3. **Memory headroom at 120k ctx.** Does the chosen config actually
+   fit in 48 GB unified RAM? A config that OOMs at 80k is dead. KV
+   quant (`-ctk q8_0 -ctv q8_0` minimum) is **non-optional** here.
+4. **Quality at 120k ctx.** A model that loses coherence past 32k
+   isn't a 120k model, no matter what the spec sheet says. Sanity-
+   check with a needle-in-haystack probe before declaring a winner.
+5. **J/tok on battery.** Secondary — the rig is mostly AC-tethered
+   while the agent runs. Run BAT measurements only on the canonical
+   AC winners.
+
+What we are *not* optimizing for:
+
+- **N=4 aggregate throughput.** Concurrency=1 only. The 7B's "Vulkan
+  N=4 hits 3× scaling" finding is irrelevant.
+- **Cold PP at 4k.** Yes we measure it, but a 4k cold-prompt time of
+  10 s only matters once per session start.
+- **Maximum benchmark t/s** at trivial context. Pretty numbers at 1k
+  ctx are misleading for this use case.
 
 ## Backend starting configs (what we measure first)
 
 | backend | build | model | starting flags | source of starting config |
 |---|---|---|---|---|
-| CPU         | `build-cpu`          | Q4_K_M | `-t 8 -p 512 -n 128 -r 3` | matches 4B / 7B baseline |
-| CPU+KleidiAI| `build-cpu-kleidiai` | Q4_K_M | `-t 8 -p 512 -n 128 -r 3` | matches baselines |
-| GPU OpenCL  | `build-opencl`       | Q4_0   | `-ngl 99 -p 512 -n 128 -r 3` | 7B doc: Q4_0 +55% PP / +16% TG over Q4_K_M |
-| GPU Vulkan  | `build-vulkan`       | Q4_0   | `-ngl 99 -p 512 -n 128 -r 3`, env `GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1` | 7B doc: this combo unbroke Vulkan PP and put TG (25.80) above CPU (24.17) |
+| CPU         | `build-cpu`          | Q4_K_M (lmstudio-community)   | `-t 8 -p 512 -n 128 -r 3` | matches 4B / 7B baseline |
+| CPU+KleidiAI| `build-cpu-kleidiai` | Q4_K_M (lmstudio-community)   | `-t 8 -p 512 -n 128 -r 3` | matches baselines |
+| GPU OpenCL  | `build-opencl`       | MXFP4_MOE (Unsloth)           | `-ngl 99 -p 512 -n 128 -r 3` | MXFP4 is on Adreno's fast-path list (`Q4_0/Q8_0/MXFP4`); plain Q4_0 doesn't exist for this model |
+| GPU Vulkan  | `build-vulkan`       | MXFP4_MOE (Unsloth)           | `-ngl 99 -p 512 -n 128 -r 3`, env `GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1` | 7B doc had this combo on Q4_0; whether it carries to MXFP4_MOE is an open question — confirm with knob A/B during matrix sweep |
 
-**Headline AC table (TODO — populated as rows land)**:
+**Headline AC table — short-ctx baseline (TODO)**:
 
-| backend | model | PP t/s | TG t/s | TG / generated tok | wall (s) | CSV |
-|---|---|---:|---:|---:|---:|---|
-| CPU         | Q4_K_M | TODO | TODO | TODO | TODO | `results/csv/daily_driver_2026-04-XX_ac.csv` |
-| CPU+KleidiAI| Q4_K_M | TODO | TODO | TODO | TODO | same |
-| GPU OpenCL  | Q4_0   | TODO | TODO | TODO | TODO | same |
-| GPU Vulkan  | Q4_0   | TODO | TODO | TODO | TODO | same |
+Initial PP512/TG128 sanity sweep at default ctx — comparable to the
+4B/7B baselines, *not* representative of the daily-driver workload.
+
+| backend | model | PP512 t/s | TG128 t/s | wall (s) | CSV |
+|---|---|---:|---:|---:|---|
+| CPU         | Q4_K_M    | TODO | TODO | TODO | `results/csv/daily_driver_2026-04-XX_ac.csv` |
+| CPU+KleidiAI| Q4_K_M    | TODO | TODO | TODO | same |
+| GPU OpenCL  | MXFP4_MOE | TODO | TODO | TODO | same |
+| GPU Vulkan  | MXFP4_MOE | TODO | TODO | TODO | same |
+
+**Headline AC table — long-context (the one that actually matters, TODO)**:
+
+KV at q8_0 always (per the use-case section). TG measured after the
+context is filled to the listed depth, then 128 more tokens are
+generated.
+
+| backend | model | TG@4k | TG@32k | TG@120k | TTFT(delta=512) | mem peak | CSV |
+|---|---|---:|---:|---:|---:|---:|---|
+| CPU         | Q4_K_M    | TODO | TODO | TODO | TODO | TODO | `results/csv/daily_driver_longctx_*.csv` |
+| CPU+KleidiAI| Q4_K_M    | TODO | TODO | TODO | TODO | TODO | same |
+| GPU OpenCL  | MXFP4_MOE | TODO | TODO | TODO | TODO | TODO | same |
+| GPU Vulkan  | MXFP4_MOE | TODO | TODO | TODO | TODO | TODO | same |
 
 ## Variable sweep matrix
 
@@ -51,21 +86,29 @@ so we can stop early if a knob settles the question.
 
 ### Tier-1 sweeps (run on every backend at first opportunity)
 
+Note on context size: every Tier-1 measurement runs at **three context
+points** — 4k (warm-up reference), 32k (mid-agent-session), 120k
+(end-of-agent-session). A knob that helps at 4k and hurts at 120k is
+a regression for our workload. Build the runner to default to a 3-ctx
+sweep, not a single point.
+
 | variable | values | hypothesis | success criterion |
 |---|---|---|---|
-| `-t` (threads) | 4, 6, 8, 10, 12 | X2 has 12 P-cores; saturating may help PP, hurt TG (cache thrash) | find the knee for PP and TG separately |
-| `-c` (context size) | 2048, 4096, 8192, 16384 | KV cache grows linearly; TG t/s drops with longer ctx (KV read per step) | quantify the slope |
-| `-b` (logical batch) | 256, 512, 1024, 2048 | larger PP batch = better matmul utilization on GPU | only if PP improves |
-| `-ub` (physical ubatch) | 128, 256, 512 | smaller ubatch reduces peak memory, may allow more `-ngl` on GPU | only if it unlocks more offload |
-| `--no-mmap` | on / off | mmap can fault under memory pressure; disabling forces full load up-front | TG variance ↓, PP unchanged |
-| `--mlock` | on / off | locks pages, prevents pageout under load | only if --no-mmap shows variance |
-| `-ctk`, `-ctv` (KV quant) | f16 / q8_0 / q4_0 | KV quant cuts KV memory 2-4×, may dent quality | KV memory → headroom for longer ctx; quantify TG drop and quality drift |
+| **`-c` (context size)** | 4096, 32768, 131072 | TG t/s drops with longer ctx (KV read per step grows); want the slope, not just an endpoint | report TG@4k, TG@32k, TG@120k for every backend; the **120k number is the headline** |
+| **`-ctk`, `-ctv` (KV quant)** | q8_0 (default), q4_0, f16 (reference only) | q8_0 KV halves KV memory at near-zero quality cost; q4_0 quarters it but may dent retrieval | confirm q8_0 is essentially free; quantify q4_0's quality cost via needle-in-haystack at 64k |
+| `-t` (threads) | 4, 6, 8, 10, 12 | X2 has 12 P-cores; TG sweet spot may be lower than PP sweet spot, especially at long ctx where KV-read bandwidth dominates | find the knee for PP and TG@120k separately |
+| `-b` (logical batch) | 256, 512, 1024, 2048 | larger PP batch = better matmul utilization on GPU; matters most for the *initial* cold prefill | only if PP@120k improves |
+| `-ub` (physical ubatch) | 128, 256, 512 | smaller ubatch reduces peak memory, may unlock more `-ngl` at long ctx | check at 120k where headroom is tight |
+| `--no-mmap` | on / off | mmap can fault under memory pressure at high resident set (model + 120k KV); disabling forces full load up-front | TG variance ↓ at 120k, PP unchanged |
+| `--mlock` | on / off | locks pages; combined with Windows large pages may cut TLB miss rate on a ~30 GB working set | only if --no-mmap shows variance |
+| **`--lookup` / `--lookup-cache-dynamic`** | off / on | n-gram lookup decoding: free win on the repetitive JSON tool-call output our use case generates | acceptance > 0.3 on a tool-call-heavy bench prompt = real win |
+| **prefix cache** (server-side) | hit-rate measurement, not on/off | every tool-call turn extends prior KV; quantify the cost of a delta-only prefill vs cold | TTFT(delta) << TTFT(cold) — this is the whole agentic-loop UX |
 
 ### Tier-2 sweeps (after Tier-1 picks a winning backend)
 
 | variable | values | applies to | hypothesis |
 |---|---|---|---|
-| Quant variant | Q4_K_M, Q4_0, Q5_K_M, Q6_K, Q8_0, IQ4_NL/IQ4_XS | all | quality vs throughput trade; Q4 is the comparable-to-others starting point per user direction |
+| Quant variant | Q4_K_M (lmstudio), MXFP4_MOE (unsloth), UD-Q4_K_M, UD-IQ4_XS, Q5_K_M, Q6_K, Q8_0 | all | quality vs throughput trade. Plain Q4_0 doesn't exist for this model — MXFP4_MOE substitutes on the Adreno fast-path. Unsloth's UD- variants are dynamic-quant — measure separately to know if "UD" pays off here |
 | `GGML_VK_DISABLE_F16` | 0 / 1 | Vulkan | already known win at 7B; re-confirm at 35B |
 | `GGML_VK_PREFER_HOST_MEMORY` | 0 / 1 | Vulkan | already known win at 7B |
 | `GGML_OPENCL_USE_ADRENO_KERNELS` | ON / OFF | OpenCL | ON should win on Q4_0; verify |
@@ -79,9 +122,9 @@ so we can stop early if a knob settles the question.
 
 | variable | values | applies to | notes |
 |---|---|---|---|
-| Concurrent streams (`-np N`) | 1, 2, 4 | all | 7B doc shows Vulkan scales 3.0× at N=4; expect MoE to scale differently because expert routing serializes |
 | `-sm row` vs `-sm layer` | row / layer | GPU | layer split is default; row may help if expert weights aren't contiguous in VRAM |
-| Rope scaling / context extension | YaRN / linear | all | only if we want >native ctx; not a priority for daily-driver |
+| Rope scaling / context extension | YaRN / linear | all | only if we want >native ctx (i.e., model native is <120k and we need to push past) |
+| Concurrent streams (`-np N`) | 1, 2 | all | **Demoted from Tier-1.** Use case is concurrency=1, but a tiny N=2 may matter if we ever drive two agents at once. Skip until that's a real ask. |
 
 ## Research questions / advanced speed paths
 
@@ -121,23 +164,43 @@ the 0.6B Qwen3 draft). **Start by measuring acceptance rate on a
 if AR < 0.5, the dense-draft path is dead and DFlash becomes the
 only way forward.**
 
-### N-gram lookup decoding (`--lookup`, `--lookup-cache-*`)
+### N-gram lookup decoding (`--lookup`, `--lookup-cache-*`) — promoted to Tier-1
 
+**This is the highest-EV cheap knob for our specific use case.**
 llama.cpp has a draft-free spec mode: build an n-gram cache from the
-prompt + generated text, propose continuations, verify. **Free win
-on repetitive workloads** (code completion, structured-output JSON,
-boilerplate generation). Hurts nothing on novel prose because
-acceptance just stays at zero.
+prompt + generated text, propose continuations, verify. The agent
+workload is **dominated by repetitive structured output** — JSON
+tool-call envelopes, file paths, error message templates, code
+patterns, the harness's own framing tokens. All recur across turns.
+N-gram lookup turns this redundancy into free throughput.
 
 To try:
 
 ```bash
-llama-server -m model.gguf --lookup-cache-dynamic <path> --draft 8
+llama-server -m model.gguf \
+    --lookup-cache-dynamic <path> \
+    --draft 8 \
+    -c 131072 -ctk q8_0 -ctv q8_0
 ```
 
-Measure: with `--lookup` on/off, on (a) a "write a unit test"
-prompt and (b) a "continue this story" prompt. The repetitive-code
-case should win; the prose case should tie.
+Bench plan (do this *early*, before the broader matrix is filled —
+if the win is large, the rest of the matrix should be measured with
+lookup on):
+
+1. Capture a real opencode/Hermes session log (5-10 turns of tool
+   calls + responses). Save the prompts + model outputs.
+2. Replay deterministically (seed=0, temp=0) with `--lookup` on/off.
+3. Measure: aggregate t/s, per-turn TTFT, acceptance rate.
+
+Expected outcome: **acceptance rate 0.3-0.5 on tool-call turns** is
+realistic; that maps to ~1.4-2× effective t/s for those turns. Novel
+prose turns tie at AR ≈ 0. Net win across a session = function of
+the tool-call/prose ratio, which for an agentic loop is heavily
+tool-call-weighted.
+
+Risk: lookup-cache can blow up RAM if `--lookup-cache-dynamic` is
+unbounded across a long session. Cap with `--lookup-cache-static`
+sized to ~100 MB and let the dynamic cache evict.
 
 ### TurboQuant — KV cache compression
 
@@ -294,11 +357,20 @@ PP or TG moves > 5%, re-bench the matrix.
 
 ### 2026-04-26 — kickoff
 
-- Directory created. Recipe drafted. Model downloads not yet run.
-- Starting configs locked from the 7B side-quest's canonical wins
-  (Q4_0 for GPU, `DISABLE_F16+PREFER_HOST` for Vulkan).
-- GGUF source confirmed: **`unsloth/Qwen3.6-35B-A3B-GGUF`** (not
-  bartowski; Unsloth is the canonical community quant for this model).
+- Directory created. Recipe drafted. Downloads kicked off:
+  `Qwen3.6-35B-A3B-Q4_K_M.gguf` (lmstudio-community, 21.17 GB) and
+  `Qwen3.6-35B-A3B-MXFP4_MOE.gguf` (Unsloth, 21.71 GB).
+- **GPU quant changed: Q4_0 → MXFP4_MOE.** Verified across Unsloth,
+  lmstudio-community, mradermacher, bartowski — **no plain Q4_0
+  exists for this model in 2026.** The community moved past Q4_0;
+  K-quants and MXFP4 dominate. Adreno OpenCL's documented fast-path
+  list is `{Q4_0, Q8_0, MXFP4}` so MXFP4 is the natural substitute,
+  and Unsloth's `MXFP4_MOE` is even MoE-tuned (per-expert MXFP4).
+  Open question: do the 7B Vulkan knobs (`DISABLE_F16+PREFER_HOST`)
+  still help on MXFP4_MOE? Will A/B during matrix sweep.
+- **CPU GGUF from `lmstudio-community`**, not Unsloth. Their plain
+  Q4_K_M is the "comparable to most users" baseline; Unsloth's
+  `UD-Q4_K_M` is dynamic-quant variant — measure as a Tier-2 sweep.
 - Research-paths clarified:
   - **TurboQuant** = KV-cache 3-bit-key / 2-bit-value compression
     (ICLR 2026, arXiv:2504.19874, ref impl `0xSero/turboquant`).
@@ -310,6 +382,35 @@ PP or TG moves > 5%, re-bench the matrix.
     `z-lab/Qwen3.6-35B-A3B-DFlash`. Needs z-lab's runtime, not
     llama.cpp. Promoted to "first non-trivial spec-decode bet"
     once llama.cpp baseline is locked.
+
+### 2026-04-26 — use case clarified: coding agent, 120k ctx, conc=1
+
+User confirmed the daily-driver target is a **long-running coding
+agent in a harness** (opencode, Hermes, Pi). That reordered the
+optimization priorities significantly:
+
+- **Concurrency=1 only.** Drops the entire N=4 matrix from scope.
+  The 4B/7B doc N=4 wins (Vulkan-Q4_0 hitting 3× scaling) are
+  irrelevant here. Single-stream TG is the metric.
+- **120k+ ctx is the canonical operating point.** The headline
+  measurement is TG@120k, not TG@1k. Added a 3-context-point sweep
+  (4k / 32k / 120k) to Tier-1.
+- **KV quant `q8_0` made default-on**, not a sweep variable. At
+  120k ctx, f16 KV is unjustifiable (5-8 GB at f16 with mixed-attn
+  arch, more if pure full-attn) when q8_0 halves it for ~zero
+  quality cost.
+- **N-gram lookup decoding promoted to Tier-1** as the cheapest
+  potential win — agentic tool-call output is highly repetitive
+  (JSON envelopes, file paths, error templates), which is exactly
+  the workload n-gram lookup wins on.
+- **TTFT-after-tool-call** added as a primary metric. The agent
+  loop's UX is gated by how fast the model responds after a tool
+  result lands, which is dominated by PP on the *delta* tokens
+  with the rest of the context already in KV cache. Prefix-cache
+  hit-rate on llama-server matters here.
+- **Quality at long context** added as gate #4. A model that loses
+  coherence past 32k isn't a 120k model. Run a needle-in-haystack
+  probe before declaring a winner.
 
 (Add new dated subsections below as runs land. Mirror the
 `docs/qwen2_5_7b_baseline_all_backends.md` § "Update log" pattern

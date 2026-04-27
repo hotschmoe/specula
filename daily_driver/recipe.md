@@ -25,31 +25,40 @@ Two files, two backend paths. Repo `models/` is gitignored, so push
 straight there.
 
 ```bash
-# CPU / CPU+KleidiAI path (Q4_K_M — K-quant, best ~Q4 quality on CPU)
+# CPU / CPU+KleidiAI path — vanilla Q4_K_M (lmstudio-community)
+# This is also the "comparable to most users" baseline.
 .venv/Scripts/hf.exe download \
-    unsloth/Qwen3.6-35B-A3B-GGUF \
+    lmstudio-community/Qwen3.6-35B-A3B-GGUF \
     Qwen3.6-35B-A3B-Q4_K_M.gguf \
     --local-dir models/
 
-# GPU OpenCL / Vulkan path (Q4_0 — Adreno fast-path quant)
+# GPU OpenCL / Vulkan path — MXFP4_MOE (Unsloth)
+# Replaces the Q4_0 plan: nobody ships plain Q4_0 for this model in 2026.
+# MXFP4 is on Adreno's OpenCL fast-path list (alongside Q4_0 / Q8_0)
+# AND this build is MoE-tuned (per-expert MXFP4).
 .venv/Scripts/hf.exe download \
     unsloth/Qwen3.6-35B-A3B-GGUF \
-    Qwen3.6-35B-A3B-Q4_0.gguf \
+    Qwen3.6-35B-A3B-MXFP4_MOE.gguf \
     --local-dir models/
 ```
 
-Notes:
+Notes — sources, naming, the missing Q4_0:
 
-- **Source: Unsloth.** `unsloth/Qwen3.6-35B-A3B-GGUF` is the canonical
-  community quant for this model — Unsloth has become the default
-  publisher for fresh Qwen GGUFs. Bartowski may also ship one later;
-  prefer Unsloth for now.
-- Expected sizes: **Q4_K_M ≈ 21 GB**, **Q4_0 ≈ 19-20 GB**. If
-  downloads land smaller, the file is probably the placeholder
-  `.gguf` symlink — re-run with `--local-dir-use-symlinks False`.
-- For multi-part GGUFs (some 35B+ quants ship as `*.gguf-00001-of-N`,
-  `*.gguf-00002-of-N`), download the whole shard set instead:
-  `hf download unsloth/Qwen3.6-35B-A3B-GGUF --include "*Q4_K_M*" --local-dir models/`.
+- **No plain Q4_0 exists for this model.** Verified 2026-04-26 across
+  Unsloth, lmstudio-community, mradermacher, and bartowski (latter
+  hasn't published yet). The community has moved past Q4_0 to
+  K-quants / Unsloth-Dynamic-quants / MXFP4 by 2026. The 7B doc's
+  "use Q4_0 on Adreno OpenCL" rule still applies in spirit — the
+  fast-path quants are `{Q4_0, Q8_0, MXFP4}`, and **MXFP4 is the
+  one that exists**, so MXFP4_MOE substitutes.
+- **CPU GGUF is from `lmstudio-community`** (not Unsloth) on purpose:
+  it's a vanilla Q4_K_M, which is what we want for the
+  "comparable to most users" Q4 baseline the matrix opens with.
+  Unsloth ships `UD-Q4_K_M` (their dynamic-quant variant) — also
+  worth measuring later, but it's an apples-to-pears comparison
+  for the baseline.
+- **Expected sizes**: Q4_K_M ≈ **21.17 GB**, MXFP4_MOE ≈ **21.71 GB**.
+  Confirmed via the HF tree API on 2026-04-26.
 - **Optional — DFlash draft model.** z-lab has trained a DFlash
   speculative-decoding draft specifically for this target:
   `z-lab/Qwen3.6-35B-A3B-DFlash`. Pull it now if you want to bench
@@ -57,6 +66,9 @@ Notes:
   `hf download z-lab/Qwen3.6-35B-A3B-DFlash --local-dir models/dflash-draft/`.
   Note: DFlash drafts run on z-lab's own runtime, not llama.cpp —
   benching it means standing up that runtime separately.
+- **Future quant sweeps** (per `optimization.md` § Tier-2): Unsloth's
+  UD-IQ4_XS (17.7 GB), lmstudio-community's Q6_K (28.5 GB), Q8_0
+  (36.9 GB) are all options when we widen the quant axis.
 
 ## 2. Sanity load (1-shot llama-bench)
 
@@ -77,15 +89,18 @@ llama.cpp/build-cpu-kleidiai/bin/llama-bench.exe \
     -m models/Qwen3.6-35B-A3B-Q4_K_M.gguf \
     -p 128 -n 32 -t 8 -r 1
 
-# GPU OpenCL (Q4_0 model)
+# GPU OpenCL (MXFP4_MOE — on Adreno's fast-path list)
 llama.cpp/build-opencl/bin/llama-bench.exe \
-    -m models/Qwen3.6-35B-A3B-Q4_0.gguf \
+    -m models/Qwen3.6-35B-A3B-MXFP4_MOE.gguf \
     -p 128 -n 32 -ngl 99 -r 1
 
-# GPU Vulkan (Q4_0 model + the F16-off knobs known to fix Adreno PP)
+# GPU Vulkan (MXFP4_MOE + the F16-off knobs known to fix Adreno PP)
+# Note: F16-off was confirmed for Q4_0 on the 7B. Whether it's still
+# a win on MXFP4_MOE is an open question — measure with and without
+# during the matrix sweep.
 GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1 \
     llama.cpp/build-vulkan/bin/llama-bench.exe \
-        -m models/Qwen3.6-35B-A3B-Q4_0.gguf \
+        -m models/Qwen3.6-35B-A3B-MXFP4_MOE.gguf \
         -p 128 -n 32 -ngl 99 -r 1
 ```
 
@@ -103,23 +118,47 @@ If a backend OOMs or refuses to offload the full model:
 
 ## 3. Serve via llama-server
 
-Once a backend passes sanity, you can serve it. CPU + Q4_K_M is the
-simplest path; switch to `build-vulkan` + Q4_0 once the optimization
-matrix confirms the GPU win at 35B (the 7B doc says Vulkan-Q4_0
-beats CPU on TG single-stream; confirm at 35B before defaulting).
+The daily-driver target is a coding agent at 120k+ context (see
+`README.md` § Primary use case), so the canonical serve config uses:
+
+- `-c 131072` — 128k ctx, the realistic operating point
+- `-ctk q8_0 -ctv q8_0` — KV quant; non-optional at this ctx
+  (halves KV memory at near-zero quality cost)
+- `--lookup-cache-dynamic` — n-gram lookup decoding for the
+  repetitive tool-call output (see `optimization.md` § N-gram)
+
+CPU + Q4_K_M is the simplest path; switch to `build-vulkan` +
+MXFP4_MOE once the optimization matrix confirms the GPU win at
+35B-A3B in the long-ctx regime (Vulkan beat CPU at single-stream
+TG on the 7B Q4_0; confirm with MXFP4_MOE at 120k before
+defaulting).
 
 ```bash
-# CPU server, default port 8080
+# CPU server (recommended starting point — most reliable)
 llama.cpp/build-cpu/bin/llama-server.exe \
     -m models/Qwen3.6-35B-A3B-Q4_K_M.gguf \
-    -t 8 -c 8192 --host 127.0.0.1 --port 8080
+    -t 8 \
+    -c 131072 \
+    -ctk q8_0 -ctv q8_0 \
+    --lookup-cache-dynamic .cache/llama-lookup-dynamic.bin \
+    --host 127.0.0.1 --port 8080
 
-# GPU Vulkan server (once confirmed)
+# GPU Vulkan server (once the matrix confirms the win)
 GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1 \
     llama.cpp/build-vulkan/bin/llama-server.exe \
-        -m models/Qwen3.6-35B-A3B-Q4_0.gguf \
-        -ngl 99 -c 8192 --host 127.0.0.1 --port 8080
+        -m models/Qwen3.6-35B-A3B-MXFP4_MOE.gguf \
+        -ngl 99 \
+        -c 131072 \
+        -ctk q8_0 -ctv q8_0 \
+        --lookup-cache-dynamic .cache/llama-lookup-dynamic.bin \
+        --host 127.0.0.1 --port 8080
 ```
+
+**At 120k ctx the model may not fit some GPU configs.** If the
+Vulkan or OpenCL invocation OOMs, drop `-c` to 65536 or 32768 first
+to confirm everything else is working, then walk it back up. Adreno's
+address-space ceiling for a 22 GB model + ~8 GB KV at q8_0 is the
+binding question.
 
 OpenAI-compatible endpoint at `http://127.0.0.1:8080/v1/chat/completions`.
 Web UI at `http://127.0.0.1:8080`.
