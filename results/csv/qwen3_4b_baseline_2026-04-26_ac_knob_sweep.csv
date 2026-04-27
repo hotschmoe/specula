@@ -1,0 +1,13 @@
+date,backend,build_commit,model,quant,knobs,test,t_per_s,stddev,wall_s_total,reps,notes
+2026-04-26,opencl,f53577432,Qwen3-4B-Q4_K_M.gguf,Q4_K_M,default,pp512,378.31,1.61,,3,
+2026-04-26,opencl,f53577432,Qwen3-4B-Q4_K_M.gguf,Q4_K_M,default,tg128,23.43,0.02,,3,
+2026-04-26,opencl,f53577432,Qwen3-4B-Q4_K_M.gguf,Q4_K_M,GGML_OPENCL_ADRENO_USE_LARGE_BUFFER=1,pp512,367.51,0.93,,3,small regression at PP=512 with r=3 (was +2.8% at PP=128 r=1 i.e. within noise)
+2026-04-26,opencl,f53577432,Qwen3-4B-Q4_K_M.gguf,Q4_K_M,GGML_OPENCL_ADRENO_USE_LARGE_BUFFER=1,tg128,23.05,0.03,,3,
+2026-04-26,opencl,f53577432,Qwen3-4B-Q4_0.gguf,Q4_0,default,pp512,569.12,1.89,,3,recommended Adreno path (--pure Q4_0)
+2026-04-26,opencl,f53577432,Qwen3-4B-Q4_0.gguf,Q4_0,default,tg128,26.22,0.04,,3,
+2026-04-26,opencl,f53577432,Qwen3-4B-Q4_0.gguf,Q4_0,GGML_OPENCL_ADRENO_USE_LARGE_BUFFER=1,pp512,528.14,1.63,,3,regression
+2026-04-26,opencl,f53577432,Qwen3-4B-Q4_0.gguf,Q4_0,GGML_OPENCL_ADRENO_USE_LARGE_BUFFER=1,tg128,25.85,0.11,,3,
+2026-04-26,vulkan,f53577432,Qwen3-4B-Q4_K_M.gguf,Q4_K_M,GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1,pp512,84.19,0.22,,3,was 3.91 broken with default; F16 path on Adreno Vulkan falls into slow scalar fallback for Q4_K
+2026-04-26,vulkan,f53577432,Qwen3-4B-Q4_K_M.gguf,Q4_K_M,GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1,tg128,33.67,0.03,,3,
+2026-04-26,vulkan,f53577432,Qwen3-4B-Q4_0.gguf,Q4_0,GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1,pp512,115.04,0.12,,3,best Vulkan config; +29x vs old broken default
+2026-04-26,vulkan,f53577432,Qwen3-4B-Q4_0.gguf,Q4_0,GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1,tg128,38.51,0.11,,3,competitive with CPU TG (39.5)

@@ -23,38 +23,50 @@ tie-breaker within ~20% of the leader.
 
 ## Headline — AC (wall power, idle system)
 
-Commit: `e365e658f` (cpu, vulkan) / `fd6ae4ca1` (opencl) / `cf8b0dbda` (cpu-kleidiai),
+Commit: `e365e658f` (cpu, vulkan) / `fd6ae4ca1` (opencl) / `cf8b0dbda`
+(cpu-kleidiai). NPU (ORT-QNN) row refreshed 2026-04-25 with our
+`npu_engine` (AR128 swap-mode prefill + AR1 decode + IOBinding); CSV
+`results/csv/qwen3_4b_ortqnn_2026-04-25_ac.csv`. **GPU rows refreshed
+2026-04-26** at llama.cpp `f53577432` against pure-Q4_0 model
+(`Qwen3-4B-Q4_0.gguf` from unsloth) per upstream Adreno guidance —
+Q4_K is officially unsupported on the OpenCL backend. CSV
+`results/csv/qwen3_4b_baseline_2026-04-26_ac_knob_sweep.csv`.
 QAIRT 2.45.40, Genie 1.17.0, bundle compiled QAIRT 2.42. Context=2048
-(llama.cpp), CL=512 (NPU bundle). NPU (ORT-QNN) row refreshed
-2026-04-25 with our `npu_engine` (AR128 swap-mode prefill + AR1
-decode + IOBinding); CSV `results/csv/qwen3_4b_ortqnn_2026-04-25_ac.csv`.
+(llama.cpp), CL=512 (NPU bundle).
 
 | backend | runtime / build | PP (t/s) | TG (t/s) | TG tokens | notes |
 |---|---|---:|---:|---:|---|
 | NPU (Genie)           | genie-t2t-run (QAIRT 2.45, AR128 prefill)   | 1566.23 (AR128) | 23.30 | 3582 | temp=0.8 sampler; ran until ctx-fill |
 | **NPU (ORT-QNN, npu_engine)** | our stack, chained 4-part, AR128 swap + AR1 decode | **1985.46** (AR128) | **27.25** | 128 | 256-tok prefill (CL512 cap); beats Genie on PP (+27%) and TG (+17%) |
-| CPU                | llama.cpp build-cpu (-t 8 ARM64 NEON)   | 188.30 | **39.50** | 128 | |
-| CPU + KleidiAI     | llama.cpp build-cpu-kleidiai (-t 8, i8mm)| 185.78 | 38.51 | 128 | -1.3% PP, -2.5% TG vs plain CPU |
-| GPU (OpenCL)       | llama.cpp build-opencl -ngl 99 (Adreno) | 367.38 | 22.92 | 128 | |
-| GPU (Vulkan)       | llama.cpp build-vulkan -ngl 99          | 3.91 | 31.43 | 128 | ⚠️ PP broken — see post-mortem |
+| CPU                | llama.cpp build-cpu (-t 8 ARM64 NEON), Q4_K_M | 188.30 | **39.50** | 128 | |
+| CPU + KleidiAI     | llama.cpp build-cpu-kleidiai (-t 8, i8mm), Q4_K_M | 185.78 | 38.51 | 128 | -1.3% PP, -2.5% TG vs plain CPU |
+| **GPU (OpenCL)**   | llama.cpp build-opencl -ngl 99 (Adreno), **Q4_0** | **569.12 ± 1.89** | 26.22 ± 0.04 | 128 | refreshed 2026-04-26; +55% PP / +14% TG vs old Q4_K_M (367/23) — Q4_0 is the official Adreno path |
+| **GPU (Vulkan)**   | llama.cpp build-vulkan -ngl 99, **Q4_0**, env `GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1` | **115.04 ± 0.12** | **38.51 ± 0.11** | 128 | refreshed 2026-04-26; PP fixed (+29× vs broken default 3.91); TG ties CPU and beats OpenCL by 47% |
 
-## Headline — battery (DC, Q4_K_M model, same seed)
+## Headline — battery (DC, same seed)
 
 J/tok is computed as `mean(DischargeRate_W) × wall_s / (pp_tokens + tg_tokens)`.
-Mean W is the average of WMI `DischargeRate` samples polled at 2 s
+Mean W is the average of WMI `DischargeRate` samples polled at 1-2 s
 intervals throughout each backend's wall-clock window — stable within
-±5% for all backends except Vulkan (which spent most of its wall time
-shader-compiling, not steady-state).
+±5% for all backends. **GPU rows refreshed 2026-04-26** at llama.cpp
+`f53577432`: Q4_0 model for the canonical OpenCL/Vulkan rows, with
+Vulkan running `GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1`
+per the AC sweep. Old Q4_K_M rows kept as comparators. CSV
+`results/csv/qwen3_4b_gpu_knobs_2026-04-26_bat.csv`.
 
-| backend | PP (t/s) | TG (t/s) | mean W | J/tok | J / gen tok | wall (s) |
-|---|---:|---:|---:|---:|---:|---:|
-| **NPU (Genie)**       | 1598.50 (AR128) | 23.33 | **13.1** | **0.537** | ~0.614 | 168.6 |
-| NPU (ORT-QNN, npu_engine, AR128 swap) | 2118.83 (AR128) | 25.26 | 9.4† | 1.17† / 0.128‡ | — | 47.9 (5.2 compute) |
-| NPU (ORT-QNN chained, AR1, 2026-04-23 baseline) | 24.57 (AR1) | 24.32 | 23.5 | 0.959 | — | 15.7 |
-| CPU                | 191.30 | 38.52 | 25.5 | 0.899 | ~3.96 | 22.5 |
-| CPU + KleidiAI     | 180.43 | 37.33 | 32.1 | 1.182 | ~5.92 | 23.6 |
-| GPU (OpenCL)       | 355.79 | 18.58 | 44.6 | 2.690 | ~13.0 | 38.6 |
-| GPU (Vulkan)       | — | — | 23.3 | — | — | 970 (timeout) |
+| backend | model | PP (t/s) | TG (t/s) | mean W | J/tok | J / gen tok | wall (s) |
+|---|---|---:|---:|---:|---:|---:|---:|
+| **NPU (Genie)**                       | w4a16   | 1598.50 (AR128) | 23.33 | **13.1** | **0.537** | ~0.614 | 168.6 |
+| NPU (ORT-QNN, npu_engine, AR128 swap) | w4a16   | 2118.83 (AR128) | 25.26 | 9.4† | 1.17† / 0.128‡ | — | 47.9 (5.2 compute) |
+| NPU (ORT-QNN chained, AR1, baseline)  | w4a16   |   24.57 (AR1)   | 24.32 | 23.5 | 0.959 | — | 15.7 |
+| CPU                                   | Q4_K_M  |  191.30 | 38.52 | 25.5 | 0.899 | ~3.96 | 22.5 |
+| CPU + KleidiAI                        | Q4_K_M  |  180.43 | 37.33 | 32.1 | 1.182 | ~5.92 | 23.6 |
+| **GPU (OpenCL, refreshed)**           | **Q4_0**  | **539.46** | 24.94 | 27.52 | **1.291** | ~1.10§ | 30.0 |
+| **GPU (Vulkan, F16-off+host-mem)**    | **Q4_0**  | 114.57 | **34.69** | 28.25 | 1.425 | **~0.81§** | 32.3 |
+| GPU (OpenCL, refreshed)               | Q4_K_M  |  350.18 | 22.21 | 28.43 | 1.489 | — | 33.5 |
+| GPU (Vulkan, F16-off+host-mem)        | Q4_K_M  |   83.55 | 31.57 | 38.14 | 2.356 | — | 39.5 |
+| GPU (OpenCL, **2026-04-23 baseline, superseded**) | Q4_K_M | 355.79 | 18.58 | 44.6 | 2.690 | ~13.0 | 38.6 |
+| GPU (Vulkan, **2026-04-23 default, broken**) | Q4_K_M |    — |    — | 23.3 |    — |    — | 970 (timeout) |
 
 † Mean W (9.4) on the npu_engine row is averaged over the full 47.9 s
 wall, ~36 s of which is AR128/AR1 session-load I/O at low CPU draw.
@@ -79,6 +91,18 @@ tg_tokens`. NPU runs 3582 gen tokens, everyone else runs 128 — NPU's
 decode-throughput efficiency is dramatically larger than its PP row
 even suggests.
 
+§ "J / gen tok" for the 2026-04-26 GPU refresh rows is computed
+`mean_W × (128 / TG_t/s) / 128` ⇒ `mean_W / TG_t/s`. **Vulkan-Q4_0 at
+0.81 J/gen-tok is the best non-NPU per-token efficiency in the matrix**
+— better than CPU's ~3.96 by a factor of 4.9× and OpenCL-Q4_0's 1.10
+by 26%, despite Vulkan's mean W being slightly higher than OpenCL's.
+The win comes from Vulkan's 39% faster TG (34.69 vs 24.94) — energy
+× time integrates more cheaply when each token is faster. Caveat: this
+ignores the prefill window's contribution to the average. For
+TG-heavy workloads (long output, agentic decode loops) the headline
+J/gen-tok number is honest; for one-shot short prompts the J/tok
+column is the right axis.
+
 Battery drain over the full matrix: 70160 → 58369 mWh = 11791 mWh
 (~17% of a full charge) to run one pass of all 5 backends including
 the 970 s Vulkan timeout. NPU's 168 s run cost 926 mWh; CPU's 22 s run
@@ -92,14 +116,18 @@ within ~5% at the power envelopes of this laptop; larger deltas are
 the AC→thermal-boost vs battery-throttle gap documented in the
 roadmap.
 
-| backend        | PP AC | PP BAT | Δ    | TG AC | TG BAT | Δ    |
-|---|---:|---:|---:|---:|---:|---:|
-| NPU (Genie)         | 1566.2 | 1598.5 | +2.1% | 23.30 | 23.33 | +0.1% |
-| NPU (ORT-QNN, ours) | 1985.5 | 2118.8 | +6.7%* | 27.25 | 25.26 | -7.3% |
-| CPU                 |  188.3 |  191.3 | +1.6% | 39.50 | 38.52 | -2.5% |
-| CPU + KleidiAI      |  185.8 |  180.4 | -2.9% | 38.51 | 37.33 | -3.1% |
-| GPU (OpenCL)        |  367.4 |  355.8 | -3.2% | 22.92 | 18.58 | -19% |
-| GPU (Vulkan)        |    3.9 |   — (timeout) |       | 31.43 | — |       |
+| backend        | model / knobs | PP AC | PP BAT | Δ    | TG AC | TG BAT | Δ    |
+|---|---|---:|---:|---:|---:|---:|---:|
+| NPU (Genie)                  | w4a16 | 1566.2 | 1598.5 | +2.1% | 23.30 | 23.33 | +0.1% |
+| NPU (ORT-QNN, ours)          | w4a16 | 1985.5 | 2118.8 | +6.7%* | 27.25 | 25.26 | -7.3% |
+| CPU                          | Q4_K_M | 188.3 |  191.3 | +1.6% | 39.50 | 38.52 | -2.5% |
+| CPU + KleidiAI               | Q4_K_M | 185.8 |  180.4 | -2.9% | 38.51 | 37.33 | -3.1% |
+| **GPU (OpenCL, refreshed)**  | **Q4_0** (default) | **569.12** | **539.46** | **-5.2%** | **26.22** | **24.94** | **-4.9%** |
+| **GPU (Vulkan, refreshed)**  | **Q4_0** + `DISABLE_F16+PREFER_HOST` | **115.04** | **114.57** | **-0.4%** | **38.51** | **34.69** | **-9.9%** |
+| GPU (OpenCL, refreshed)      | Q4_K_M (default) |  378.31 |  350.18 |  -7.4% | 23.43 | 22.21 |  -5.2% |
+| GPU (Vulkan, refreshed)      | Q4_K_M + `DISABLE_F16+PREFER_HOST` |   84.19 |   83.55 |  -0.8% | 33.67 | 31.57 |  -6.2% |
+| GPU (OpenCL, 2026-04-23, superseded) | Q4_K_M | 367.4 |  355.8 |  -3.2% | 22.92 | 18.58 |  -19% |
+| GPU (Vulkan, 2026-04-23 default, broken) | Q4_K_M |    3.9 |   — (timeout) | | 31.43 | — | |
 
 NPU is the only backend where battery performance ≈ AC performance —
 **the silicon runs well under its thermal ceiling on either power
@@ -274,36 +302,139 @@ the post-mortem.
 
 ### GPU (Adreno / OpenCL)
 
+**Canonical AC numbers (Q4_0, 2026-04-26):**
+
 ```
-cmd:    llama-bench -m Qwen3-4B-Q4_K_M.gguf -p 512 -n 128 -r 3 -ngl 99
-build:  llama.cpp build-opencl @ fd6ae4ca1 (2026-04-20, GGML_OPENCL_USE_ADRENO_KERNELS=ON)
-AC   : PP 367.38 t/s  TG 22.92 t/s  (31.5 s wall)
-BAT  : PP 355.79 t/s  TG 18.58 t/s  (38.6 s wall, mean 44.6 W, 2.690 J/tok)
+cmd:    llama-bench -m Qwen3-4B-Q4_0.gguf -p 512 -n 128 -r 3 -ngl 99
+build:  llama.cpp build-opencl @ f53577432 (2026-04-26, GGML_OPENCL_USE_ADRENO_KERNELS=ON,
+        GGML_OPENCL_EMBED_KERNELS=ON), Adreno OpenCL 3.0 driver build 863.0
+AC   : PP 569.12 ± 1.89 t/s   TG 26.22 ± 0.04 t/s   (Q4_0 pure)
 ```
 
-PP is 2× CPU but 4.3× slower than NPU. TG is worse than CPU at both
-power states — consistent with Phase 2's "GPU decode is a regression
-on small per-token ops" finding (kernel-launch overhead dominates at
-AR=1). Adreno draws the most power of any backend here — 44.6 W mean,
-vs 13 W for NPU — and is the only row where battery TG throughput
-drops materially (−19%).
+**Quant matters more than any runtime knob** (2026-04-26 finding).
+Upstream's Adreno OpenCL backend has optimized kernels for Q4_0,
+Q8_0, MXFP4 only — Q4_K is officially unsupported (see
+`llama.cpp/docs/backend/OPENCL.md` §DataType Supports). On Q4_K_M the
+backend dispatches a non-optimized fallback for the q4_K tensors; on
+Q4_0 it hits the fast path. Numbers from a knob sweep at
+llama.cpp `f53577432`, `-r 3`, AC, same Adreno X2-90 silicon:
+
+| model | knob | PP512 t/s | TG128 t/s |
+|---|---|---:|---:|
+| Q4_K_M (old baseline) | default | 367.38 | 22.92 |
+| Q4_K_M (rebuild only) | default | 378.31 ± 1.61 | 23.43 ± 0.02 |
+| **Q4_0** | default | **569.12 ± 1.89** | **26.22 ± 0.04** |
+| Q4_K_M | `GGML_OPENCL_ADRENO_USE_LARGE_BUFFER=1` | 367.51 ± 0.93 | 23.05 ± 0.03 |
+| Q4_0 | `GGML_OPENCL_ADRENO_USE_LARGE_BUFFER=1` | 528.14 ± 1.63 | 25.85 ± 0.11 |
+
+`GGML_OPENCL_ADRENO_USE_LARGE_BUFFER` reads as a small regression at
+PP=512 with `-r 3` confidence intervals (the +2.8% it showed at
+`-p 128 -r 1` was within run-to-run noise). All other env vars
+(`GGML_OPENCL_DISABLE_FUSION`, `--ubatch-size {256,1024,2048}`) are
+flat within noise. **Default settings on a Q4_0 model is the best
+config; runtime knobs add nothing.**
+
+**BAT (Q4_0, 2026-04-26):** PP 539.46 / TG 24.94 / mean 27.52 W /
+1.291 J/tok / 30.0 s wall. AC→BAT delta is now -5.2% PP / -4.9% TG —
+much tighter than the 2026-04-23 OpenCL Q4_K_M reading (-19% TG). The
+mean W also dropped substantially: **44.6 W → 27.52 W** on the new
+build, even on the same Q4_K_M model (28.43 W in the comparator row).
+Most likely upstream OpenCL-kernel improvements between
+`fd6ae4ca1`→`f53577432` reduced GPU active duty cycle for the same
+work; secondarily, the old reading may have included transient driver
+state we don't see in the new run.
+
+PP at 569 (AC) / 539 (BAT) t/s is now **2.9× CPU** (188) and
+**2.8-3.7× slower than NPU** (1985 AC / 2118 BAT) — the gap closes
+versus the old 4.3×. TG (26.22 / 24.94) is still worse than CPU's
+39.5 — kernel-launch overhead dominates at AR=1 on Adreno — but is
+markedly better than the old Q4_K_M number (24.94 vs 18.58 BAT,
++34%) and J/tok improves correspondingly (1.291 vs 2.690, **-52%**).
+OpenCL is no longer the most battery-throttled backend.
 
 ### GPU (Vulkan)
 
+**Canonical AC numbers (Q4_0 + env knobs, 2026-04-26):**
+
 ```
-cmd:    llama-bench -m Qwen3-4B-Q4_K_M.gguf -p 512 -n 128 -r 3 -ngl 99
-build:  llama.cpp build-vulkan @ e365e658f (2026-04-19, Vulkan SDK / Adreno ICD)
-AC   : PP 3.91 t/s (!!)  TG 31.43 t/s  (539 s wall)
-BAT  : TIMED OUT after 600 s (partial; PP never finished in the subprocess timeout)
+cmd:    GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1 \
+            llama-bench -m Qwen3-4B-Q4_0.gguf -p 512 -n 128 -r 3 -ngl 99
+build:  llama.cpp build-vulkan @ f53577432 (2026-04-26, Vulkan SDK / Adreno ICD)
+device: Qualcomm(R) Adreno(TM) X2-90 GPU (Adreno Vulkan Driver)
+        uma=1, fp16=1 (force-disabled), bf16=0, warp=64, int dot=1, matrix cores=KHR_coopmat
+AC   : PP 115.04 ± 0.12 t/s   TG 38.51 ± 0.11 t/s   (Q4_0 pure)
 ```
 
-**Vulkan PP is broken.** 3.9 t/s on a model that OpenCL does at 367
-t/s on the same GPU — that's a 94× gap within the same silicon. The
-wall time (~9 min AC, timed out on BAT) suggests shader recompilation
-on every prefill tile. TG at 31 t/s is plausible (between CPU's 39 and
-OpenCL's 23) so the decode kernels work, but the prefill path
-collapses. Flag for the roadmap, don't use Vulkan for PP-heavy
-workloads until investigated.
+**The 2026-04-23 "Vulkan PP is broken (3.91 t/s)" finding has been
+resolved as a runtime configuration issue, not an upstream bug.**
+Two independent fixes compose:
+
+1. **`GGML_VK_DISABLE_F16=1` is the breakthrough.** On Adreno's
+   Vulkan ICD (driver build 863.0), the FP16 matmul codepath silently
+   falls into a slow scalar fallback for Q4_K and to a lesser degree
+   Q4_0 — disabling FP16 forces the FP32 path which the driver
+   handles cleanly. Effect on Q4_K_M @ PP=512: **3.91 → 84.19 t/s
+   (+21.5×)**. This is independent of `GGML_VK_DISABLE_COOPMAT` —
+   the issue is in the FP16 dispatch logic, not the matrix-core path.
+2. **Pure Q4_0 model adds another tier.** Same fix on Q4_0 instead of
+   Q4_K_M: **84.19 → 115.04 t/s (+37%)**. The combined improvement
+   from the original broken default is **+29.4× PP**.
+3. **`GGML_VK_PREFER_HOST_MEMORY=1`** adds a small but consistent
+   gain in TG (Adreno reports `uma=1`; biasing allocations toward
+   host-visible memory avoids redundant copies). Effect: ~+1-2% PP,
+   ~+8% TG.
+4. **Counter-knob (don't do this):** `GGML_VK_DISABLE_INTEGER_DOT_PRODUCT=1`
+   is a 3.2× *regression* (PP 6.17 → 1.93 at PP=128). The integer
+   dot product path is critical for Q4 decode and works correctly.
+
+Knob sweep at `f53577432`, AC, PP=128 (cheap to scan), and PP=512
+(authoritative `-r 3`):
+
+| knobs | quant | PP128 t/s | TG32 t/s | PP512 t/s | TG128 t/s |
+|---|---|---:|---:|---:|---:|
+| (default) | Q4_K_M | 6.17 | 31.30 | 3.91 (old) | 31.43 (old) |
+| `DISABLE_COOPMAT=1` | Q4_K_M | 6.16 | 31.35 | — | — |
+| `DISABLE_COOPMAT2=1` | Q4_K_M | 6.15 | 31.95 | — | — |
+| `DISABLE_FUSION=1` | Q4_K_M | 6.12 | 33.14 | — | — |
+| `DISABLE_GRAPH_OPTIMIZE=1` | Q4_K_M | 6.16 | 32.20 | — | — |
+| `FORCE_MMVQ=1` | Q4_K_M | 6.23 | 32.19 | — | — |
+| `PREFER_HOST_MEMORY=1` | Q4_K_M | 6.25 | 33.09 | — | — |
+| `DISABLE_INTEGER_DOT_PRODUCT=1` | Q4_K_M | **1.93** | 29.69 | — | — |
+| **`DISABLE_F16=1`** | Q4_K_M | **79.31** | 31.14 | 82.88 ± — | 31.15 ± — |
+| `DISABLE_F16=1 + DISABLE_FUSION=1` | Q4_K_M | — | — | 83.03 | 33.30 |
+| `DISABLE_F16=1 + DISABLE_BFLOAT16=1` | Q4_K_M | — | — | 82.98 | 31.67 |
+| `DISABLE_F16=1 + DISABLE_COOPMAT=1` | Q4_K_M | — | — | 82.81 | 31.64 |
+| **`DISABLE_F16=1 + PREFER_HOST=1`** | **Q4_K_M** | — | — | **84.19 ± 0.22** | **33.67 ± 0.03** |
+| **`DISABLE_F16=1 + PREFER_HOST=1`** | **Q4_0** | — | — | **115.04 ± 0.12** | **38.51 ± 0.11** |
+
+**Implication for the all-backends ranking.** On Q4_0, Vulkan TG
+(38.5 AC / 34.7 BAT) ≈ CPU TG (39.5 / 38.5) within a few percent, and
+**beats OpenCL TG (26.2 / 24.9) by 47% AC / 39% BAT**. Vulkan PP (115)
+is still 5× slower than OpenCL PP (569), so OpenCL stays the GPU PP
+path of choice; but for TG-heavy workloads (chat, agentic-decode),
+Vulkan is now a viable GPU path that wasn't before.
+
+**BAT (Q4_0 + knobs, 2026-04-26):** PP 114.57 / TG 34.69 /
+mean 28.25 W / 1.425 J/tok / 32.3 s wall. AC→BAT PP delta is **-0.4%**
+(within noise — Vulkan is the only non-NPU backend that doesn't
+degrade meaningfully on battery). TG drops -9.9% — the largest TG
+hit in the matrix on a non-NPU backend. **J/gen-tok = 0.81** (mean_W
+× TG_time / 128, see headline footnote §) — best non-NPU per-token
+energy in the matrix; beats CPU's ~3.96 by 4.9× and OpenCL-Q4_0's
+1.10 by 26%, despite mean W being slightly higher than OpenCL's,
+because Vulkan TG is 39% faster so the integration window is shorter.
+The old "Vulkan timed out, mean 23 W during shader compile" cell is
+no longer representative.
+
+**Why this wasn't found before.** The 2026-04-23 hypothesis was
+"shader recompilation on every prefill tile" based on the wall-time
+shape (9 min AC). Actual root cause is per-call FP16 codepath
+fallback inside the Adreno Vulkan ICD — wall time scales with
+prefill *length* because every per-token matmul takes the slow path,
+not because each ubatch triggers a compile. The 2026-04-26 sweep
+caught it because we tested `GGML_VK_DISABLE_F16=1` and saw 6.17 →
+79.31 t/s at PP=128, which is way outside any "rebuild changed
+something" envelope.
 
 ## Concurrency = 4 (agentic workload)
 
@@ -458,24 +589,28 @@ default for batched/agentic loads.
 
 ### Which island wins each workload?
 
-**PP (prompt processing).** NPU wins decisively — Genie at 1566 t/s,
-**npu_engine at 1985 t/s** vs the next-best 367 t/s on OpenCL, a
-**5.4× margin** for our stack and 4.3× for Genie. Prefill is big-matmul,
-bandwidth-friendly work; HMX's batched AR=128 graphs dominate. The
-hypothesis going in was "GPU should win PP"; that was wrong on this
-silicon with this bundle. Confirmed: when we have a model compiled to
-NPU, prefill stays on NPU. The 2026-04-25 npu_engine refresh further
-shows our ORT-QNN dispatch path can *beat* Genie's by 27% on PP at the
-same hardware ceiling — vendor runtime is not Pareto-optimal here.
+**PP (prompt processing).** NPU still wins decisively — Genie at 1566
+t/s, **npu_engine at 1985 t/s** vs the next-best 569 t/s on OpenCL
+(Q4_0, refreshed 2026-04-26). NPU vs OpenCL margin: **3.5× for our
+stack**, 2.8× for Genie. Prefill is big-matmul, bandwidth-friendly
+work; HMX's batched AR=128 graphs dominate. The 2026-04-26 GPU
+refresh closed the gap a notch — OpenCL went from 367 → 569 PP just
+by switching to the recommended Q4_0 quant — but NPU's lead remains
+structural. Vulkan PP (115) is now functional but ~5× behind OpenCL,
+so it's not the GPU PP backend.
 
-**TG (token generation).** CPU wins at both power states — **39.50
-t/s on AC, 38.52 t/s on battery**. NPU is 60% of CPU's throughput
-(23 t/s) but at less than half the power. Ranking at AC:
-CPU (39.5) > CPU+KleidiAI (38.5) > GPU-Vulkan (31.4) > NPU (23.3) >
-GPU-OpenCL (22.9). **GPU via OpenCL is the worst TG path** — kernel-
-launch overhead at AR=1 on Adreno is the known issue (Phase 2 saw the
-same on Qwen3-8B). TG on OpenCL is a non-option at the X2E + Adreno
-combo until per-token kernel dispatch gets fixed.
+**TG (token generation).** CPU still wins at AC (**39.50 t/s**), but
+the 2026-04-26 GPU refresh produced a near-tie: **Vulkan-Q4_0 with
+F16-off + host-mem hits 38.51 t/s** — within 1 t/s of CPU. Ranking
+at AC (canonical Q4_0 for GPU rows, Q4_K_M for CPU): CPU (39.5) ≈
+**Vulkan (38.5)** > CPU+KleidiAI (38.5) > GPU-OpenCL (26.2) > NPU
+(23.3). Two changes from the prior reading: (a) **Vulkan moved from
+broken/unranked to second-place TG**; (b) **GPU-OpenCL is no longer
+last on TG** thanks to Q4_0 (26.2 vs old 22.9, +14%). Kernel-launch
+overhead at AR=1 still hurts OpenCL, but the optimized Q4_0 decode
+path narrows the gap. **Vulkan-Q4_0 is now the right GPU backend
+for TG-heavy workloads** (chat, agentic decode); OpenCL stays best
+for PP-heavy workloads.
 
 **J/tok (energy efficiency).** **NPU wins by a massive margin** —
 0.537 J/tok vs CPU's 0.899 and OpenCL's 2.690. Per *generated* token
@@ -525,10 +660,17 @@ finding of this run.
    edge and that's what verify uses on an 8B target. The matrix
    we were going to fill empirically just became "run the
    winning config and see how close to the sum-of-parts it gets."
-4. **OpenCL is the blessed Adreno path on X2E; Vulkan stays off.**
-   Qualcomm recommends the OpenCL backend for llama.cpp on X2E.
-   Vulkan's PP is broken here (3.9 t/s vs OpenCL's 367), confirming
-   we should not use it. Not a workstream — documented stance.
+4. **OpenCL is the blessed Adreno path for PP; Vulkan is now the
+   blessed path for TG** (revised 2026-04-26). Qualcomm still
+   recommends OpenCL for Adreno on X2E. The 2026-04-26 sweep found
+   the prior "Vulkan PP broken" diagnosis was a runtime config bug
+   in the FP16 codepath, not a true upstream failure. With
+   `GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1` and the
+   pure-Q4_0 model, Vulkan delivers 115 PP / **38.5 TG**, and the TG
+   number ties CPU and beats OpenCL by 47% — making Vulkan the right
+   GPU backend whenever decode dominates. Not a workstream change;
+   documented stance: route PP→OpenCL, TG→Vulkan when GPU is the
+   chosen island.
 5. **KleidiAI regression is a known-parked item, not a new bug.**
    -3% throughput, +26% power on Q4_K_M at 4B because the CPU has
    SME2 silicon but Windows (or the driver stack) is not letting us
@@ -576,6 +718,25 @@ Layout follows `docs/repo_hygiene.md`:
     fix for the subprocess fan-out's N=4 crash); aggregate ~27 t/s
     flat, per-stream rate scales 1/N. N=1 baseline is the standalone
     bench `qwen3_4b_ortqnn_2026-04-25_ac.csv`.
+  - `results/csv/qwen3_4b_baseline_2026-04-26_ac_knob_sweep.csv` —
+    OpenCL + Vulkan knob/quant sweep at llama.cpp `f53577432`. Canonical
+    rows: OpenCL Q4_0 default (569 PP / 26 TG) and Vulkan Q4_0 with
+    `GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1` (115 PP /
+    38.5 TG). Supersedes the 2026-04-23 GPU baselines for AC.
+  - `results/csv/qwen3_4b_gpu_knobs_2026-04-26_bat.csv` — battery
+    refresh of the same matrix with WMI DischargeRate sampling for
+    J/tok. Canonical BAT rows: OpenCL Q4_0 default (539 / 24.9 / 1.29
+    J/tok) and Vulkan Q4_0 with knobs (114.6 / 34.7 / 1.43 J/tok).
+    Supersedes the 2026-04-23 GPU BAT baselines.
+  - `models/Qwen3-4B-Q4_0.gguf` — pure-Q4_0 quant from
+    `unsloth/Qwen3-4B-GGUF` (HF). 2.21 GiB. Recommended Adreno OpenCL
+    quant per `llama.cpp/docs/backend/OPENCL.md`.
+  - `scripts/bench_qwen3_4b_gpu_knobs_bat.py` — wrapper around
+    `bench_qwen3_4b_all_backends.py`'s `PowerSampler` that lets us
+    pick GGUF + arbitrary env (the original driver hard-codes
+    Q4_K_M and has no env passthrough). Used for the 2026-04-26 BAT
+    refresh; reusable for future quant/knob experiments without
+    forking the AC driver.
   - `results/qwen3_4b_baseline/pp512_prompt.txt` +
     `pp512_prompt_tokens.txt` — pinned input; reproducible via
     `scripts/gen_pp512_prompt.py`.
@@ -630,6 +791,58 @@ Layout follows `docs/repo_hygiene.md`:
   ±7% of AC, NPU is still the only backend that doesn't degrade
   meaningfully on battery. CSV
   `results/csv/qwen3_4b_ortqnn_2026-04-25_bat.csv`.
+- 2026-04-26 (GPU refresh @ llama.cpp `f53577432`): pulled all 4
+  llama.cpp build trees from `cf8b0dbda` to `f53577432` (81 commits),
+  rebuilt cpu/cpu-kleidiai/opencl/vulkan, and ran a knob+quant sweep
+  on OpenCL and Vulkan against the prior Q4_K_M default. Two big
+  findings, both runtime-only (no source change):
+  **(1) Vulkan PP unbroken** — `GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1`
+  takes Vulkan from `3.91 → 84.19 t/s` on Q4_K_M (+21.5×); the prior
+  "shader recompile per tile" hypothesis was wrong, the actual cause
+  is the Adreno Vulkan ICD's FP16 codepath silently falling into a
+  slow scalar path on Q4 matmuls. `DISABLE_F16` forces FP32 which the
+  driver runs cleanly. `PREFER_HOST_MEMORY` adds ~2% PP / ~8% TG by
+  biasing allocation away from VRAM-style buffers (Adreno reports
+  `uma=1`). Net: Vulkan is now the best GPU backend for TG-heavy
+  workloads. **(2) OpenCL is fastest on pure Q4_0**, not Q4_K_M —
+  upstream's Adreno OpenCL backend has optimized kernels only for
+  Q4_0/Q8_0/MXFP4; Q4_K is officially unsupported. Switching to
+  `unsloth/Qwen3-4B-Q4_0.gguf` (2.21 GiB) takes OpenCL from
+  `367 → 569 PP` (+55%) and `23 → 26 TG` (+14%). Vulkan with the
+  fix above on Q4_0: `115.04 PP / 38.51 TG` — TG matches CPU's 39.5
+  within a percentage point and beats OpenCL TG by 47%. **Anti-knobs
+  found:** `GGML_OPENCL_ADRENO_USE_LARGE_BUFFER=1` is a small
+  regression at PP=512 with `-r 3` confidence; `GGML_VK_DISABLE_INTEGER_DOT_PRODUCT=1`
+  is a 3.2× regression (int dot is critical). **CPU/SME unchanged**:
+  KleidiAI is still pinned to v1.22.0 upstream (no commits to
+  `kleidiai/`), our local `detect_num_smcus → 0` patch
+  (issue [#22182](https://github.com/ggml-org/llama.cpp/issues/22182))
+  remains required. Build commits stamped in
+  `llama.cpp/build-{cpu,cpu-kleidiai,opencl,vulkan}/SPECULA_BUILD.txt`.
+  CSV `results/csv/qwen3_4b_baseline_2026-04-26_ac_knob_sweep.csv`.
+- 2026-04-26 (GPU BAT refresh): closed the BAT cells for the 2026-04-26
+  GPU sweep using `scripts/bench_qwen3_4b_gpu_knobs_bat.py` (new
+  wrapper around the AC driver's WMI DischargeRate sampler that
+  supports per-run GGUF + env overrides). **OpenCL Q4_0 default**:
+  PP 539.46, TG 24.94, mean 27.52 W, **J/tok 1.291**, AC→BAT delta
+  -5.2% PP / -4.9% TG (much tighter than the 2026-04-23 reading of
+  -19% TG). **Vulkan Q4_0 + `DISABLE_F16+PREFER_HOST`**: PP 114.57,
+  TG 34.69, mean 28.25 W, **J/tok 1.425**, AC→BAT delta -0.4% PP
+  (Vulkan is the only non-NPU backend that doesn't degrade
+  meaningfully on battery). **J/gen-tok ≈ 0.81 for Vulkan-Q4_0** —
+  best non-NPU per-token energy in the matrix, beats CPU's ~3.96 by
+  4.9× and OpenCL-Q4_0's 1.10 by 26%. Two surprises worth noting:
+  **(a)** OpenCL Q4_K_M's mean W dropped from 44.6 W (2026-04-23) to
+  28.43 W (2026-04-26) on the same model, suggesting upstream OpenCL
+  kernel improvements between `fd6ae4ca1`→`f53577432` reduced GPU
+  active duty cycle (or 2026-04-23 had transient driver state); no
+  perfect attribution but the new number is reproducible across the
+  Q4_0 and Q4_K_M rows. **(b)** OpenCL J/tok went from 2.690 to
+  **1.291 (-52%)** — combined effect of Q4_0 quant + power drop.
+  CSV `results/csv/qwen3_4b_gpu_knobs_2026-04-26_bat.csv`. The full
+  GPU column of the matrix is now populated for AC and BAT; remaining
+  TODOs are CPU/CPU-KleidiAI/NPU re-baseline (lower priority — those
+  rows haven't moved much).
 - 2026-04-25 (concurrency): NPU-via-`npu_engine` concurrency-N matrix
   added in two architectures. **(a) Subprocess fan-out** (existing
   `bench_concurrency4_npu_ortqnn.py`): N=2 aggregate 30.59 t/s

@@ -1,0 +1,5 @@
+label,preset,gguf,knobs,pp_tps,tg_tps,mean_w,j_per_tok,wall_s,mwh_drop,n_samples,pp_tokens,tg_tokens,mwh_before,mwh_after,exit_code,ok
+gpu-opencl-q40,opencl,Qwen3-4B-Q4_0.gguf,(none),539.460321,24.943979,27.52,1.291,30.0,0,25,512,128,71170,71170,0,True
+gpu-vulkan-q40-fix,vulkan,Qwen3-4B-Q4_0.gguf,GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1,114.567931,34.689201,28.25,1.425,32.3,0,26,512,128,71170,71170,0,True
+gpu-opencl-q4km,opencl,Qwen3-4B-Q4_K_M.gguf,(none),350.175725,22.207582,28.43,1.489,33.5,0,28,512,128,71170,71170,0,True
+gpu-vulkan-q4km-fix,vulkan,Qwen3-4B-Q4_K_M.gguf,GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1,83.548596,31.5722,38.14,2.356,39.5,0,32,512,128,71170,71170,0,True
