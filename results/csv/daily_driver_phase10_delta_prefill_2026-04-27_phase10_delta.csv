@@ -1,0 +1,12 @@
+config,turn,tg_tps,pp_tps,predicted_n,prompt_n,delta_chars,wall_s,ok,notes
+cpu_baseline,0,15.866,22.178,200,16306,0,748.2,1,
+cpu_baseline,1,15.669,11.396,200,124,1173,23.7,1,
+cpu_baseline,2,15.552,7.940,200,86,2081,23.7,1,
+cpu_baseline,3,15.331,26.973,200,62,3130,15.4,1,
+cpu_baseline,4,15.213,7.831,200,88,4242,24.4,1,
+cpu_ngram_mod,0,16.197,22.459,200,16306,0,738.4,1,
+cpu_ngram_mod,1,21.231,11.172,200,124,1173,20.6,1,
+cpu_ngram_mod,2,24.372,8.899,200,284,2076,40.2,1,
+cpu_ngram_mod,3,22.996,11.828,200,260,3106,30.7,1,
+cpu_ngram_mod,4,18.610,7.636,200,289,4206,48.7,1,
+vulkan_baseline,-1,,,0,0,0,0.0,0,server health timeout

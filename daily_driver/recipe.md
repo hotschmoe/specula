@@ -132,13 +132,12 @@ The daily-driver target is a coding agent at 120k+ context (see
   Without FA, llama.cpp uses the regular attention path which works
   cleanly. FA is only required when KV ≠ f16 (and the FA-on path's
   performance penalty exceeds the KV-bandwidth savings at our depth).
-- `--spec-type ngram-mod --draft 8` — n-gram lookup decoding via
-  the post-PR-19493 spec-decode wiring. Free **+11-15% TG at short
-  ctx** (Phase 9b) on CPU; gain narrows to **~+5% at d=27k** (Phase 9c)
-  so the recipe applies it on the short-ctx CPU config only. Note:
-  the older `--lookup-cache-dynamic <file>` flag also exists but
-  requires a pre-existing cache file (no `llama-lookup-create` ships
-  in this build); `--spec-type ngram-mod` is the working path.
+- **`--spec-type ngram-mod` is intentionally NOT recommended** here.
+  Phase 9b made it look like a +11-15% short-ctx win, but Phase 10's
+  multi-turn delta-prefill bench found ngram_mod adds ~200 tokens of
+  spurious re-prefill per turn when `cache_prompt=true` (the agent-
+  loop default) — net **−60% UX per turn at d=16k+**. Avoid until
+  that interaction is fixed upstream. See `optimization.md` § Phase 10.
 
 **Two canonical configs** (2026-04-27 update from Phase 8):
 
@@ -163,14 +162,16 @@ GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1 \
         --host 127.0.0.1 --port 8080
 
 # CPU server — short-ctx fallback / chat use case
-# --spec-type ngram-mod is a free +11-15% TG at d≤8k (Phase 9b).
-# Gain narrows to ~+5% by d=27k (Phase 9c) so it's mostly a short-ctx
-# win. --draft 8 = max draft tokens per spec step.
+# Note on ngram-mod: Phase 9b showed +11-15% TG at short ctx in
+# single-turn benches, but Phase 10 found a slot-cache +
+# cache_prompt + spec-decode interaction that forces ~200 extra
+# tokens of re-prefill per turn in multi-turn workflows, making
+# ngram_mod NET NEGATIVE (−60% UX) for any client that uses
+# cache_prompt across turns. Until that's understood, leave it OFF.
 llama.cpp/build-cpu/bin/llama-server.exe \
     -m models/Qwen3.6-35B-A3B-Q4_K_M.gguf \
     -t 8 \
     -c 131072 \
-    --spec-type ngram-mod --draft 8 \
     --host 127.0.0.1 --port 8080
 ```
 

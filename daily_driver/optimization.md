@@ -36,29 +36,34 @@ top are the answer; everything below is the work that produced them.
 7. **d=131k beyond single-shot bench budget on both CPU and Vulkan**
    (>60 min wall). Real measurement needs llama-server slot-cache
    reuse — separate workstream.
-8. **N-gram lookup spec-decode (`--spec-type ngram-mod`) is a CPU
-   lever, but the win narrows with depth.** Phase 9b at d≈9525 saw
-   +28%; Phase 9c at d≈27145 saw only **+3.8% median** (+2.8% cold,
-   +4.9% warm). Verification cost grows O(d) per draft step while
-   the savings (skipped decode steps) stay constant — at long ctx
-   the savings dilute. **Canonical config does NOT flip**: at d=32k,
-   CPU+ngram_mod ≈ 16.0 t/s extrapolated still loses to Vulkan 16.89.
-   ngram_mod is worth turning on as a free ~5% at d≤32k but it does
-   not change the daily-driver backend choice.
+8. **N-gram lookup spec-decode (`--spec-type ngram-mod`) looked like
+   a CPU lever, but Phase 10 killed it for the agent workload.** The
+   isolated TG gain is real (+22 to +57% per warm turn, Phase 10),
+   but llama-server has a **slot-cache + `cache_prompt=true` +
+   spec-decode interaction** that systematically forces ~200 tokens
+   of extra re-prefill per turn. The penalty exceeds the TG savings:
+   ngram_mod multi-turn at d=16k+ averages **35.0 s/turn vs baseline
+   21.8 s/turn = −60% UX**. The agent loop uses `cache_prompt=true`
+   by definition (every prefix-cache hit depends on it), so ngram_mod
+   is **NET NEGATIVE in the actual workload** despite the headline
+   TG number. Recipe.md leaves it OFF until upstream fixes the
+   interaction (or until Phase 11 measures `--cache-reuse N>0` as a
+   workaround).
 
 **Things still open**:
-- TTFT-after-tool-call / prefix-cache hit-rate measurement
-  (the actual UX number for an agent loop; Phase 9b confirmed the
-  llama-server prefix cache works — trial-1 of agent_long re-prefilled
-  only 4 of 9525 tokens)
+- **Vulkan delta-prefill numbers (Phase 10b retry)** — Vulkan
+  warmup at ngl=99 took >240s health timeout in Phase 10; needs
+  longer timeout. Decides the canonical-config call for the
+  multi-turn agent loop.
+- `--cache-reuse N>0` test as workaround for ngram_mod's
+  multi-turn slot-cache penalty (Phase 11 candidate)
 - Quality probe at 120k ctx (needle-in-haystack)
 - d=131k via llama-server slot-cache
 - DFlash spec decoding (z-lab has a draft for our exact target;
   vLLM/SGLang only — no llama.cpp path; needs cloud GPU)
-- Vulkan-via-server baseline (Phase 8 used llama-bench; the
-  server-vs-bench overhead grew from 14% at d=9.5k to ~30% at d=27k
-  on CPU, so a clean canonical-config decision needs Vulkan-via-server
-  too)
+- Vulkan-via-server vs llama-bench overhead measurement (CPU
+  showed −14% at d=9.5k → −30% at d=27k under server; Vulkan's
+  curve unknown)
 
 
 
@@ -584,6 +589,90 @@ long ctx. **This is unvalidated at d=32k; Phase 9c needs to run it.**
   `build-vulkan` and `build-opencl` don't include `llama-speculative`
   or the `--spec-type` server flag wiring. **Spec-decode is a
   CPU-only lever** on this rig until that changes upstream.
+
+### 2026-04-27 — Phase 10: delta-prefill bench kills ngram_mod for agent loops
+
+CSV: `results/csv/daily_driver_phase10_delta_prefill_2026-04-27_phase10_delta.csv`
+
+The actual agent-UX bench (lever B per the optimization priorities):
+simulate a 5-turn agent loop and measure the per-turn wall-clock cost
+with `cache_prompt=true` (the default that makes prefix-caching work).
+
+Workload: 16k-token "session start" prompt → 4 follow-up turns each
+appending a ~500-1000 char tool-call delta + 200-token assistant
+response. Configs: cpu_baseline, cpu_ngram_mod, vulkan_baseline.
+
+**Headline (CPU side; Vulkan health-timed-out at 240s, separate retry needed)**:
+
+| config         | cold turn 0 | turn 1 | turn 2 | turn 3 | turn 4 | per-turn avg (1-4) |
+|---|---:|---:|---:|---:|---:|---:|
+| cpu_baseline   | 748 s       | 24 s   | 24 s   | 15 s   | 24 s   | **21.8 s**         |
+| cpu_ngram_mod  | 738 s       | 21 s   | 40 s   | 31 s   | 49 s   | **35.0 s (+60%)**  |
+
+**Two cleanly separable findings**:
+
+1. **Prefix cache works perfectly without spec-decode**. cpu_baseline
+   re-prefilled only 124 / 86 / 62 / 88 tokens on turns 1-4 (vs the
+   16306-token cold-session prefill). Each warm turn costs ~10 s of
+   delta prefill + ~13 s of generation = ~22 s per turn at d=16k+.
+   That's the actual UX number for an agent loop on CPU.
+
+2. **ngram_mod regresses the multi-turn UX by 60%** despite winning
+   per-turn TG by +22-57%. cpu_ngram_mod re-prefills 124 / 284 / 260
+   / 289 tokens — a **systematic ~+200 token penalty** vs baseline
+   on every turn after turn 1. At d=16k+ PP that costs ~25 s extra
+   per turn, which exceeds the ~10 s saved on the 200-token
+   generation by ngram_mod's higher TG.
+
+**Hypothesis on the +200-token penalty**: spec-decode + `cache_prompt=true`
+have a slot-cache invalidation interaction in llama-server. When
+ngram_mod runs a draft+verify step, the slot's KV state at the end
+of generation may include drafted-but-then-rolled-back tokens, OR
+the bookkeeping treats the just-generated 200 tokens as "dirty" on
+the next prefix-cache lookup. Either way, the next turn's prefix
+match falls short of the actual generated content by ~200 tokens
+(=n_predict). This is a llama-server bug, not a fundamental cost
+of n-gram lookup. Worth filing upstream; worth testing
+`--cache-reuse N > 0` as a workaround.
+
+**Why this overturns Phases 9 and 9b/c's framing**:
+
+- Phase 9b/c measured ngram_mod in **isolated single-prompt benches**
+  with cache_prompt=true but no multi-turn extension. The slot-cache
+  penalty doesn't fire when there's no second turn to expose it.
+- Phase 10 is the **realistic agent workload**: same slot, multiple
+  related turns, prefix-cache reuse. That's where the penalty bites.
+- Phase 9b's +28% headline at d=9.5k was real for the bench, but the
+  bench wasn't measuring the actual UX cost. Apologies to past-me
+  for being optimistic.
+
+**Decisions made now**:
+
+- **`--spec-type ngram-mod` removed from recipe.md's CPU server
+  command** (was added in Phase 9c commit `bd9025d`; reverted now).
+  The recipe.md commentary explains why and points here.
+- **Vulkan delta-prefill numbers are still missing** — Vulkan's
+  warmup at ngl=99 + d=32k allocation took longer than 240 s health
+  timeout. Phase 10 retry needed with `--health-timeout-s 600` to
+  capture vulkan_baseline cold + 4 warm turns. **This is the data
+  that decides the canonical config for the agent loop**, per user's
+  hunch that GPU PP would matter on real workloads.
+- **Cold session prefill is the unavoidable per-session cost**.
+  CPU at d=16k = 12.5 min wall (PP=22.2 t/s aggregate; the per-token
+  cost grows with depth). Vulkan unmeasured. At d=120k the cold cost
+  could plausibly be 1+ hour on either backend. Realistic agent
+  startup needs slot-save / -load to amortize.
+
+**Open**:
+
+- Vulkan-via-server delta-prefill (Phase 10b: re-run with longer
+  health timeout)
+- `--cache-reuse 64` or `256` test as workaround for ngram_mod's
+  slot-cache penalty (would pull ngram_mod back as a real lever
+  if it works)
+- Single-turn / long-generation workloads where spec-decode's
+  TG win could pay off without exposing the multi-turn penalty
+- The llama.cpp upstream issue / fix tracking
 
 ### 2026-04-27 — Phase 9c: ngram_mod gain narrows hard at long ctx — no canonical-config flip
 
