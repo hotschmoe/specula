@@ -1,0 +1,5 @@
+config,ctx_depth,tg_tps,wall_s,ok,notes
+vulkan_f16_noFA,8192,22.988,199.2,1,
+vulkan_f16_noFA,32768,,912.3,0,stale output timeout (>900s) — likely GPU livelock
+opencl_f16_noFA,8192,14.130,78.1,1,
+opencl_f16_noFA,32768,8.576,302.2,1,

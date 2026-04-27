@@ -64,19 +64,27 @@ This means **memory headroom is NOT the binding constraint** —
 f16 KV at 131k = 5.2 GB → 27 GB total on 48 GB system. Even at the
 full 256k native ctx it's only 32.5 GB total.
 
-**Canonical config (post-Phase-4, 2026-04-27)**: **CPU + Q4_K_M +
-f16 KV + no FA** at the desired ctx. Phase 4 found that:
+**Canonical config (post-Phase-8, 2026-04-27)**: **two configs**
+depending on workload:
 
-- Flash Attention's per-step overhead exceeds its KV-read savings
-  at the GQA-2 KV size (small KV → little to save, but FA still
-  pays its overhead).
-- Worse: FA + f16 KV livelocks on this llama.cpp commit (same
-  pattern that breaks the GPU paths).
-- Therefore f16 + no-FA wins on speed (15.27 vs 14.16 t/s @ d=32k
-  vs the q8+FA config we were planning to use).
+- **Vulkan + MXFP4_MOE** (with `GGML_VK_DISABLE_F16=1
+  GGML_VK_PREFER_HOST_MEMORY=1`, `-ngl 99`, f16 KV, no FA) —
+  wins for long-ctx agent loops. TG@d=32k = 16.89 t/s, +10.6% vs
+  CPU. Vulkan's TG slope vs ctx is gentler than CPU's so the gap
+  grows at longer ctx.
+- **CPU + Q4_K_M** (-t 8, f16 KV, no FA) — wins for short-ctx
+  work (d ≤ 8k) and is the fallback when Vulkan is unavailable.
+  TG@d=8k = 27.29 t/s vs Vulkan's 22.99.
 
-See `optimization.md` § Phase 4 for the full table; `recipe.md`
-for the updated serve invocation (no `-fa`, no `-ctk q8_0`).
+Both use **f16 KV + no FA**. Phase 4 found FA's per-step overhead
+exceeds its KV-read savings at GQA-2; and FA + f16 KV livelocks
+on this llama.cpp commit (same bug that breaks the GPU FA paths).
+The crossover between CPU and Vulkan sits between d=8k and d=32k,
+so the agent's actual ctx determines the right pick.
+
+See `optimization.md` § Phase 8 for the full long-ctx matrix and
+the wall-time / TG slope analysis; `recipe.md` for both serve
+invocations.
 
 Backends in scope:
 

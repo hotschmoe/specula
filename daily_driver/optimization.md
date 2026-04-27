@@ -74,33 +74,37 @@ by a wide margin; OpenCL wins PP. Vulkan is broken with the
 DISABLE_F16+PREFER_HOST combo that worked on Q4_0 at 7B — Phase 3
 will A/B that. See § Findings for the full analysis.
 
-**Headline AC table — long-context (the one that matters)**:
+**Headline AC table — long-context (Phase 8 done 2026-04-27)**:
 
-After Phase 4 (2026-04-27): canonical config is **f16 KV + no FA**.
-Phase 2 v3 numbers (q8 KV + FA) shown for reference but no longer
-the recommended config.
+Canonical config is **f16 KV + no FA**. The winner depends on ctx:
 
-| backend | model | config | TG@4k | TG@32k | TG@131k | notes |
-|---|---|---|---:|---:|---:|---|
-| **CPU**     | Q4_K_M    | **f16 KV, no FA** | (Phase 1: 36.01 @ d=128) | **15.27** | (deferred¹) | the canonical config — fastest AND avoids FA livelock |
-| CPU         | Q4_K_M    | q8 KV, FA on  | 29.39 | 14.16 | (deferred¹) | -7% vs canonical, no advantage |
-| CPU         | Q4_K_M    | q4 KV, FA on  | TODO  | 14.42 | TODO            | -6% vs canonical |
-| CPU         | Q4_K_M    | f16 KV, FA on | TODO  | crash | TODO            | livelocks on this llama.cpp commit |
-| CPU+KleidiAI| Q4_K_M    | (skip)        | —     | —     | —               | lost Phase 1, deprecated |
-| GPU OpenCL  | MXFP4_MOE | f16 KV, no FA | TODO  | TODO  | TODO            | best path for OpenCL (FA's SET_ROWS not supported) |
-| GPU Vulkan  | MXFP4_MOE | f16 KV, no FA | TODO  | TODO  | TODO            | F16-off env still required — see Phase 1/3 |
+| backend                       | model     | TG@~0 | TG@8k | TG@32k | TG@131k |
+|---|---|---:|---:|---:|---:|
+| **CPU** (-t 8)                | Q4_K_M    | 36.01 | **27.29** | 15.27  | (~6-7¹) |
+| **Vulkan** (knobs, ngl=99)    | MXFP4_MOE | 22.73 | 22.99     | **16.89** | (untested²) |
+| OpenCL (ngl=99)               | MXFP4_MOE | 17.43 | 14.13     | 8.58   | (~5-6¹) |
+| CPU+KleidiAI                  | Q4_K_M    | (Phase 1: 33.6 @ d=128) | — | — | — (lost Phase 1, deprecated) |
 
-¹ d=131k bench wall-time exceeds the 30-min stale watchdog (CPU
-prefill at d=131k with FA+q8 KV is >30 min silent). Extrapolating
-TG@4k=29.39 → TG@32k=13.51 → TG@131k via the 1/ctx slope predicts
-~6-7 t/s. Real measurement TBD when we extend the bench-time budget
-or find a way to chunk the prefill.
+**Crossover ~ d=10-16k**: CPU wins below, Vulkan wins above. Use
+case-driven pick — see § Decisions below.
+
+¹ d=131k extrapolated by 1/ctx slope. Actual measurement deferred
+because CPU d=131k prefill exceeded our 30-min stale watchdog.
+
+² Vulkan d=131k untested. Wall-time budget would be ~50 min
+(prefill at PP=46 t/s for 131k tokens). Worth running once if we
+care about the exact number.
 
 CSVs:
-- `results/csv/daily_driver_longctx_2026-04-27_longctx_cpu_v3.csv`
-  (Phase 2 v3, q8+FA: d=4k, d=32k)
-- `results/csv/daily_driver_phase4_kv_fa_2026-04-27_phase4_d32k.csv`
-  (Phase 4, KV/FA disentangle at d=32k)
+- Phase 2 v3 (q8+FA, deprecated config):
+  `results/csv/daily_driver_longctx_2026-04-27_longctx_cpu_v3.csv`
+- Phase 4 (KV/FA disentangle on CPU at d=32k):
+  `results/csv/daily_driver_phase4_kv_fa_2026-04-27_phase4_d32k.csv`
+- Phase 5 (thread sweep on CPU at d=8k):
+  `results/csv/daily_driver_phase5_threads_2026-04-27_phase5_d8k.csv`
+- Phase 8 (GPU long-ctx with f16+no-FA):
+  `results/csv/daily_driver_phase8_gpu_longctx_2026-04-27_phase8_gpu_longctx.csv`
+  + `..._phase8_vulkan_d32k_retry.csv`
 
 ## Variable sweep matrix
 
@@ -406,6 +410,69 @@ PP or TG moves > 5%, re-bench the matrix.
     `z-lab/Qwen3.6-35B-A3B-DFlash`. Needs z-lab's runtime, not
     llama.cpp. Promoted to "first non-trivial spec-decode bet"
     once llama.cpp baseline is locked.
+
+### 2026-04-27 — Phase 8: GPU long-context — Vulkan wins at d=32k
+
+CSVs:
+- `results/csv/daily_driver_phase8_gpu_longctx_2026-04-27_phase8_gpu_longctx.csv`
+  (initial sweep, d=8k+d=32k for both Vulkan and OpenCL)
+- `results/csv/daily_driver_phase8_gpu_longctx_2026-04-27_phase8_vulkan_d32k_retry.csv`
+  (Vulkan d=32k retry with 1800s stale window — first attempt timed
+  out at 900s because Vulkan PP at 46 t/s makes d=32k prefill take
+  ~12 min silent)
+
+GPU paths run with **f16 KV + no FA** (sidesteps both the OpenCL
+SET_ROWS issue and the Vulkan FA livelock). Vulkan with the
+canonical knobs (`GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1`).
+
+| backend                   | TG@8k | TG@32k | wall@32k |
+|---|---:|---:|---:|
+| CPU (f16, no FA, t=8)     | 27.29 | 15.27  | 485 s |
+| **Vulkan + MXFP4_MOE + knobs**    | 22.99 | **16.89** | **987 s** |
+| OpenCL + MXFP4_MOE        | 14.13 | 8.58   | 302 s |
+
+**Vulkan beats CPU at d=32k by +10.6%** (16.89 vs 15.27). At d=8k
+the picture flips — CPU wins (27.29 vs 22.99, +19%). So **the
+crossover is somewhere between d=8k and d=32k**. For the daily-
+driver use case (agent loop at 120k+ ctx), we're operating well
+past the crossover; **Vulkan is the right backend**.
+
+**Why Vulkan's slope is gentler than CPU's at long ctx**:
+
+| backend | TG@~0 | TG@8k | TG@32k | drop 0→32k |
+|---|---:|---:|---:|---:|
+| CPU     | 36.01 (Phase 1, d=128)   | 27.29 | 15.27 | -58% |
+| Vulkan  | 22.73 (Phase 1, d=128)   | 22.99 | 16.89 | -26% |
+
+CPU's TG is bandwidth-bound and degrades sharply as KV grows
+(more KV reads per step, contending for the same DRAM bandwidth).
+Vulkan's TG goes through Adreno's parallel compute units, which
+have less per-step bandwidth pressure (the KV is small at GQA-2
+and parallel access amortizes well). The gentler slope means
+**the Vulkan advantage grows with ctx**: at d=131k the predicted
+gap should be larger than +10.6%.
+
+**Wall-time trade-off**: Vulkan's lower PP throughput (46 t/s vs
+CPU's 161 t/s) means cold-prompt prefill is **~3.5× slower on
+Vulkan** for the same prefix. But for a long-running agent, cold
+prefill is paid once at session start; every subsequent turn only
+prefills delta tokens (tool result + harness framing, typically
+200-2000 tokens, which is ~5-40s on Vulkan). The agent's UX is
+dominated by TG, which Vulkan wins.
+
+**OpenCL's role narrows**: at d=32k, OpenCL TG is 8.58 — about half
+of Vulkan and CPU. OpenCL's per-token kernel-launch overhead
+dominates at AR=1 decode regardless of ctx. **Vulkan beats OpenCL
+on TG at every measured ctx point.** OpenCL retains the cold-PP
+advantage from Phase 1 (180.28 vs Vulkan's 46) but for the agent
+workload that matters less than steady-state TG.
+
+**Decision flip**: the canonical daily-driver config moves from
+**CPU + Q4_K_M** (Phase 4 conclusion) to **Vulkan + MXFP4_MOE +
+DISABLE_F16+PREFER_HOST + f16 KV + no FA + ngl=99** for the
+long-ctx agent use case. CPU stays the recommendation for short-
+ctx work (chat, single-shot Q&A) and as the fallback when Vulkan
+is unavailable.
 
 ### 2026-04-27 — Phase 5: thread sweep on canonical config
 

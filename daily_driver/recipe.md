@@ -136,12 +136,28 @@ The daily-driver target is a coding agent at 120k+ context (see
   repetitive tool-call output (still recommended; see
   `optimization.md` § N-gram).
 
-CPU is the only viable backend at long ctx (Phase 2 attempt #2 +
-Phase 3 ruled out OpenCL and Vulkan for FA paths; Phase 4 confirmed
-CPU TG=15.27 at d=32k).
+**Two canonical configs** (2026-04-27 update from Phase 8):
+
+- **Vulkan + MXFP4_MOE** for long-ctx agent loops (d ≥ 16k or so).
+  Wins TG by +10.6% over CPU at d=32k and the gap should grow at
+  longer ctx (Vulkan's TG slope vs ctx is gentler than CPU's).
+  Pays a cold-prefill cost (~3.5× slower than CPU) which the agent
+  loop only experiences once per session.
+- **CPU + Q4_K_M** for short-ctx work (chat, single-shot, d ≤ 8k)
+  and as the fallback when Vulkan is unavailable. Wins TG at d=8k
+  by +19% over Vulkan.
 
 ```bash
-# CPU server — daily-driver canonical config (2026-04-27)
+# Vulkan server — daily-driver default for long-ctx agent loops
+GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1 \
+    llama.cpp/build-vulkan/bin/llama-server.exe \
+        -m models/Qwen3.6-35B-A3B-MXFP4_MOE.gguf \
+        -ngl 99 \
+        -c 131072 \
+        --lookup-cache-dynamic .cache/llama-lookup-dynamic.bin \
+        --host 127.0.0.1 --port 8080
+
+# CPU server — short-ctx fallback / chat use case
 llama.cpp/build-cpu/bin/llama-server.exe \
     -m models/Qwen3.6-35B-A3B-Q4_K_M.gguf \
     -t 8 \
@@ -150,18 +166,22 @@ llama.cpp/build-cpu/bin/llama-server.exe \
     --host 127.0.0.1 --port 8080
 ```
 
-**Memory at 131k ctx**: model 22 GB + f16 KV 5.2 GB ≈ 27 GB resident.
-Comfortable on 48 GB system. The model is GQA-2, so KV is small
-compared to most 35B-class models.
+Both run with default KV (f16) and no `-fa`. KV stays f16 because:
 
-**Why GPU server isn't documented**: as of llama.cpp `f53577432`,
-the OpenCL backend doesn't support FA's SET_ROWS op (so KV must
-stay f16 + no-FA), and Vulkan's f16-codepath silently falls into a
-slow scalar fallback for quantized weights (so MXFP4_MOE needs the
-F16-off env knob — which then breaks FA paths anyway). Phase 1
-short-ctx Vulkan numbers (TG=22.7 at d=128) are below CPU's
-single-stream TG even at d=32k. Re-evaluate when llama.cpp gets
-better Adreno kernel coverage; until then, CPU.
+- GQA-2 architecture makes the KV small (5.2 GB at 131k) — no
+  memory pressure to quantize.
+- Phase 4 found f16 + no-FA is faster than q8 + FA on CPU.
+- FA + f16 KV livelocks on this llama.cpp commit on both CPU and
+  Vulkan.
+
+**Memory at 131k ctx**: model 22 GB + f16 KV 5.2 GB ≈ 27 GB resident.
+Comfortable on 48 GB system.
+
+**OpenCL is not the recommended GPU path** despite winning Phase 1
+PP (180 t/s). At long ctx its TG drops to half of Vulkan's
+(8.58 vs 16.89 at d=32k) — Adreno OpenCL's per-token kernel-launch
+overhead dominates AR=1 decode. Use OpenCL only if Vulkan's
+~3.5× slower cold-prefill is unacceptable for your workload.
 
 OpenAI-compatible endpoint at `http://127.0.0.1:8080/v1/chat/completions`.
 Web UI at `http://127.0.0.1:8080`.
