@@ -77,6 +77,7 @@ if (-not (Test-Path $model)) { throw "Model not found: $model -- fetch via daily
 $serverArgs = @(
     '-m', $model,
     '-c', $Ctx,
+    '--alias', 'daily-driver',
     '--host', '127.0.0.1',
     '--port', $Port
 ) + $extra
