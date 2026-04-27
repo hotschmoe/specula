@@ -36,10 +36,23 @@ top are the answer; everything below is the work that produced them.
 7. **d=131k beyond single-shot bench budget on both CPU and Vulkan**
    (>60 min wall). Real measurement needs llama-server slot-cache
    reuse — separate workstream.
+8. **N-gram lookup spec-decode (`--spec-type ngram-mod`) is a real
+   long-ctx lever on CPU, contra thc1006's 3090 finding.** Phase 9b
+   measured median TG at d≈9525 of **30.41 t/s** vs 23.69 baseline
+   (+28%), with the win growing with depth (chat +15%, long +28%).
+   The win is **near-zero on the cold cache and ramps up as the
+   n-gram cache builds from prior generation** — well-suited to a
+   long-running agent loop. **Pending d=32k validation before
+   flipping the canonical config back to CPU at long ctx.**
 
-**Things still open** (not blocking the canonical-config decision):
-- DFlash spec decoding (z-lab has a draft for our exact target)
-- N-gram lookup decoding (needs a tool-call corpus)
+**Things still open**:
+- d=32k validation of ngram_mod CPU win (gates a canonical-config flip)
+- DFlash spec decoding (z-lab has a draft for our exact target;
+  vLLM/SGLang only — no llama.cpp path)
+- TTFT-after-tool-call / prefix-cache hit-rate measurement
+  (the actual UX number for an agent loop; Phase 9b confirmed the
+  llama-server prefix cache works — trial-1 of agent_long re-prefilled
+  only 4 of 9525 tokens)
 - Quality probe at 120k ctx (needle-in-haystack)
 - d=131k via llama-server slot-cache
 
@@ -455,6 +468,118 @@ PP or TG moves > 5%, re-bench the matrix.
     `z-lab/Qwen3.6-35B-A3B-DFlash`. Needs z-lab's runtime, not
     llama.cpp. Promoted to "first non-trivial spec-decode bet"
     once llama.cpp baseline is locked.
+
+### 2026-04-27 — Phase 9 + 9b: n-gram lookup spec-decode is a real CPU lever (contra thc1006)
+
+CSVs:
+- `results/csv/daily_driver_phase9_lookup_2026-04-27_phase9_lookup.csv`
+  (initial, single-trial; surfaced the surprise but had a cache-warming
+  confound)
+- `results/csv/daily_driver_phase9b_lookup_tight_2026-04-27_phase9b_tight.csv`
+  (warmup pass + 3 trials per cell + d≈9.5k probe; the headline numbers
+  below are from this)
+
+**Why this got benched**: published prior art at `thc1006/qwen3.6-speculative-decoding-rtx3090`
+(2026-04-19, post-PR-19493) ran 19 spec-decode configs against
+Qwen3.6-35B-A3B on a single RTX 3090 and found NO net speedup —
+ngram-cache and ngram-mod showed bimodal collapse on code/structured
+prompts, attributed to MoE expert saturation (8/256 sparsity, ρ≈0.031,
+~94-token coverage threshold). I had argued the architectural argument
+would generalize to our laptop and queued spec-decode for closure. The
+sanity-bench was meant to confirm-then-close. It did not confirm.
+
+**Headline (Phase 9b, median of 3 trials, post-warmup, CPU + Q4_K_M
++ f16 KV + no FA + t=8, llama.cpp f53577432)**:
+
+| prompt              | depth   | baseline | ngram_mod | Δ%      | trial-0 cold | trial-1+ warm |
+|---|---:|---:|---:|---:|---:|---:|
+| chat_short          | ~283    | 35.63    | 41.09     | **+15%** | 35.43 (~tied) | 41-42 |
+| code_short          | ~128    | 35.30    | 39.13     | **+11%** | 35.84 (~tied) | 39-62 |
+| **agent_long_8k**   | ~9525   | 23.69    | **30.41** | **+28%** | 24.13 (~+2%) | 30-33 |
+
+`ngram_mod` = `--spec-type ngram-mod --draft 8` on llama-server. Server
+log confirms 100% draft AR (`draft acceptance rate = 1.00000`, e.g.
+49/49 on Phase 9 chat). The win is **near-zero on the cold cache**
+and ramps as the dynamic n-gram cache builds from prior generation.
+
+**Why our result diverges from thc1006's** (hypothesis):
+
+- thc1006's expert-saturation argument is **per-token GPU expert
+  kernel-launch + VRAM expert-weight loads**. Each drafted token
+  on a 3090 triggers a fresh expert slice load over PCIe; verification's
+  union exceeds savings.
+- On our **unified-LPDDR5X CPU path**, all 256 experts share the
+  same 228 GB/s bandwidth pool. Expert weights are addressable
+  without PCIe; the "verification union loads" cost is the same
+  bandwidth-bound matmul we'd do anyway. Spec-decode then gets to
+  amortize attention compute across drafted tokens at near-zero
+  marginal expert cost.
+- Net: the architectural argument is **GPU-specific**, not
+  hardware-agnostic.
+
+**The win grows with context depth**:
+
+| backend / config                       | TG @ ~0   | TG @ 8k   | TG @ 32k  |
+|---|---:|---:|---:|
+| CPU baseline (Phase 1/4/5)             | 36.01     | 27.29     | 15.27     |
+| CPU + ngram_mod (Phase 9b, d≈9.5k)     | 35.6 (cold) | **30.41** | **(untested)** |
+| Vulkan (Phase 8)                       | 22.73     | 22.99     | 16.89     |
+
+At d=8-9k, **CPU + ngram_mod (30.4) leapfrogs Vulkan (23.0) by +32%**.
+At d=32k, IF the +28% relative gain holds, ngram_mod CPU = ~19.5 t/s
+vs Vulkan 16.89 — would flip the canonical config back to CPU at
+long ctx. **This is unvalidated at d=32k; Phase 9c needs to run it.**
+
+**Caveats / honest framing**:
+
+1. **Trials 1+2 inflate the win** because cache_prompt=true means
+   the slot KV is re-used across trials, the model regenerates ~the
+   same content (despite varying n_pred from 87 vs 91 vs 256
+   suggesting subtle determinism breakage), and the n-gram cache
+   trivially catches that repetition. Trial 0 is the cold-cache
+   number and shows ~0% gain.
+2. **Real agent loops have NEW content per turn** (different tool
+   results, different user messages). The cache's hit-rate on truly
+   diverse turns is < what we measured. But agent output IS highly
+   repetitive in structure (JSON envelopes, file paths, error
+   templates, code patterns) — so SOME of the win is robust to
+   turn-diversity.
+3. **Realistic operating point** is somewhere between trial-0
+   (cold, ~+0%) and trial-2 (fully self-similar regen, +28-76%).
+   A real-agent-transcript replay would give the true number;
+   that's a future bench item.
+4. **Variance is non-trivial**: code_short trial 2 jumped to 62 t/s
+   (+76%) — suggests a single hot pattern dominated. Median-of-3
+   smooths this, but real-world will have outliers.
+
+**Phase 9 (the cruder predecessor) — what changed in 9b**:
+- Phase 9 ran 1 trial per cell with no warmup, baseline first then
+  ngram_mod. The +14% chat gain was mostly cache-warming artifact
+  (Phase 6 showed +9% from cold-vs-warm OS file cache).
+- Phase 9b adds (a) untimed warmup before each config, (b) 3 trials
+  per cell, (c) `cache_prompt=true` so trial-1+ skip prefill, (d)
+  the agent_long_8k probe. The warmup confound vanishes but a
+  bigger win emerges at long ctx.
+- Phase 9 also tried `--spec-type ngram-cache --lookup-cache-dynamic
+  <path>` — server crashed at startup because the lookup file must
+  pre-exist (no `llama-lookup-create` ships in this build). Skipped
+  in 9b; tangential to the headline.
+
+**Decisions deferred until Phase 9c (d=32k validation, untested)**:
+- Whether to flip canonical long-ctx config from Vulkan back to
+  CPU + ngram_mod
+- Whether to bench a real-agent-transcript replay vs synthetic regen
+- ngram-mod n-size sweep (currently default n=12, server warns
+  "too small - poor quality is possible" per PR #19164)
+
+**Decisions made now**:
+- `--spec-type ngram-mod` is the cheapest knob with a measurable
+  upside on this rig. Add it to the recommended serve config in
+  `recipe.md` once 9c validates at d=32k.
+- Spec-decode binaries only ship in `build-cpu` for this commit;
+  `build-vulkan` and `build-opencl` don't include `llama-speculative`
+  or the `--spec-type` server flag wiring. **Spec-decode is a
+  CPU-only lever** on this rig until that changes upstream.
 
 ### 2026-04-27 — Phase 6: mmap / direct-io toggle (probably noise)
 

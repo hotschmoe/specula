@@ -1,0 +1,7 @@
+config,prompt_kind,tg_tps,pp_tps,predicted_n,prompt_n,draft_n,accept_n,accept_pct,wall_s,ok,notes
+baseline,chat,34.725,110.380,256,27,,,,7.6,1,
+baseline,code,36.114,125.524,91,37,,,,2.8,1,
+ngram_mod,chat,39.582,107.830,256,27,,,,6.7,1,
+ngram_mod,code,35.508,136.922,91,37,,,,2.9,1,
+ngram_cache,chat,,,0,0,,,,0.0,0,server health timeout
+ngram_cache,code,,,0,0,,,,0.0,0,server health timeout
