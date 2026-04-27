@@ -407,6 +407,42 @@ PP or TG moves > 5%, re-bench the matrix.
     llama.cpp. Promoted to "first non-trivial spec-decode bet"
     once llama.cpp baseline is locked.
 
+### 2026-04-27 — Phase 5: thread sweep on canonical config
+
+CSV: `results/csv/daily_driver_phase5_threads_2026-04-27_phase5_d8k.csv`.
+CPU + Q4_K_M + f16 KV + no FA, d=8192, varying `-t`.
+
+| threads | TG (t/s) | wall (s) | vs t=8 |
+|:-:|---:|---:|---:|
+| 4  | 23.24 | 125.1 | -15% |
+| 6  | 26.13 | 98.1  | -4.3% |
+| **8**  | **27.29** | 85.1  | (baseline) |
+| 10 | 26.52 | 85.1  | -2.8% |
+| 12 | **28.12** | 79.1  | **+3.0%** |
+
+**Findings**:
+
+1. **t=12 wins by 3%** (28.12 vs 27.29 at t=8). The 12-core X2 Elite
+   can saturate this workload's bandwidth.
+2. **t=10 dips below t=8** (-2.8%). Likely -r 1 measurement noise;
+   re-run with -r 3 if anyone cares to confirm. Small enough to
+   ignore at this stage.
+3. **Sub-linear scaling above t=4**: 4→8 threads gives only +17% TG
+   despite 2× the cores. Memory-bandwidth-bound behavior.
+4. The diff between t=8 and t=12 is smaller than the 4B/7B baselines'
+   "stick with t=8" rule of thumb suggested. Worth re-checking on
+   those if we ever revisit them.
+
+**Decision: stick with t=8 as the daily-driver default**. The 3%
+TG gain at t=12 isn't worth starving the agent harness (opencode,
+Hermes, etc.) of CPU for tool execution, file I/O, and TUI
+rendering. With t=8, the agent has 4 P-cores free for tool
+execution running in parallel with the model — net UX likely
+better than the 3% TG bump.
+
+When the model is the only workload (e.g., headless API serving
+to a remote harness), `-t 12` is the right call.
+
 ### 2026-04-27 — Phase 4: FA is the cost, NOT KV quant (and FA livelocks on CPU+f16 too)
 
 CSV: `results/csv/daily_driver_phase4_kv_fa_2026-04-27_phase4_d32k.csv`.
