@@ -220,6 +220,14 @@ session, with $ and VRAM target nailed:
 Slot the table into `docs/one_pipeline_cloud_gpu.md` §Budget and
 update its "first conversion" recommended path.
 
+**Model roster for the cloud session(s):**
+
+| candidate | size | arch | risk profile |
+|---|---|---|---|
+| **Qwen3-30B-A3B** (or Qwen3.5/3.6 MoE) | 30B / 3B act | dense-attn + Qwen3MoE | low — AIMET 2.29 ships qwen3_moe adapter; pure transformer MoE |
+| **Granite-3B-A800M** (cloud retry) | 3B / 800M act | dense-attn + GraniteMoeParallelExperts | very low — locally validated at 1B; just confirms cloud pipeline matches local results |
+| **NVIDIA Nemotron 3 Nano Omni** (`nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B`) | 30B / 3B act | **hybrid: 23 Mamba SSM + 23 MoE (128 experts top-6) + 6 GQA** | **HIGH** — Mamba SSM has never (afaik) been deployed on Hexagon HTP; multimodal vision+audio adds graph complexity; 128 experts top-6 is denser routing than what we've handled. Plan for 3+ sessions, not 1. Native FP8/NVFP4 checkpoints exist — investigate whether we can skip the AIMET PTQ step entirely and convert FP8 directly via QAIRT |
+
 **Cost.** 0.25 session writeup once SQ2 + SQ3 land.
 
 **Workspace.** Edits the existing `docs/one_pipeline_cloud_gpu.md`;
