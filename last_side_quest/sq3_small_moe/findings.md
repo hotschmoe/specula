@@ -218,13 +218,63 @@ unwieldy. For deployment we'd want per-expert (scale shape
 per-row-block compression via `qairt-quantizer`'s row-grouping.
 Untested in this session.
 
+## Follow-up B — SEQ_MSE on the same 1.3 B-MoE (4-prompt calibration)
+
+**Counter-intuitive result: cos 0.712 → 0.640.** SEQ_MSE made the
+model **worse**, not better. 362 s wall-time for the SEQ_MSE search,
++15.4 s for activation `compute_encodings` afterward, total ~377 s.
+Driver: `probe_granite_1b_a400m_seqmse.py`.
+
+| run | technique | calib data | calib time | cos | argmax |
+|---|---|---|---:|---:|---|
+| A0 | basic PTQ, per-tensor experts | 4 × 64-tok | 99.8 s | 0.656 | `<\|end_of_text\|>` |
+| A1 | basic PTQ, per-(exp, out) experts | 4 × 64-tok | 70.2 s | 0.712 | ` ` |
+| **B** | **SEQ_MSE + per-(exp, out) experts** | **4 × 64-tok** | **377 s** | **0.640** | ` ` |
+
+SEQ_MSE was applied to the 121 `nn.Linear`-class modules (attn proj
+× 24 layers × 4 + router-gate × 24 + lm_head). The 48
+`GraniteMoeParallelExperts` were *not* SEQ_MSE-optimized — SEQ_MSE
+only handles `nn.Linear`-class modules; the fused 3D-weight experts
+fell through to `compute_encodings` for their weight encodings.
+
+**Why did SEQ_MSE regress.** The most likely explanation is
+**calibration overfitting**:
+
+- SEQ_MSE evaluates 20 candidate weight-clip values per channel and
+  picks the one minimizing per-layer MSE *on the calibration set*.
+- With only 4 prompts × 64 tokens (256 tokens of context total),
+  per-layer MSE estimates are noisy. Picking the lowest-MSE candidate
+  can overfit to that noise.
+- Per-layer optimization doesn't account for cross-layer error
+  compounding. A weight scale that's locally optimal can be globally
+  worse if it amplifies a downstream-sensitive error mode.
+- Basic PTQ uses a coarser TF-enhanced histogram approach that's
+  more robust to small calibration sets. SEQ_MSE's iterative search
+  needs more data to be reliable.
+
+This **directly contradicts the SQ2 prior** for the Qwen3-0.6B case:
+> "SEQ_MSE on Qwen3-0.6B, locally, to see if it closes the cos
+> -0.065 catastrophic divergence into ≥ 0.95."
+
+With 4 prompts, SEQ_MSE may not close it — and may make it worse
+through overfitting. The technique needs **calibration breadth**,
+not just the technique name.
+
+**Wall-time per module:** 121 modules × 20 candidates × 4 batches ≈
+9680 layer-forwards. 362 s / 9680 ≈ **37 ms per layer-forward**.
+Linear in num_candidates × num_batches. For 32-prompt × 64-token
+calibration: ~50 minutes. For 128-prompt × 64-token: ~3 hours.
+
+**Encodings.json:** 503 MB (same shape as A1 since per-channel
+overrides on experts dominate the file size).
+
 ## Open follow-ups (not done in this session)
 
-1. **SEQ_MSE on this 1.3 B-MoE.** SQ2 left this open for Qwen3-0.6B
-   "to see if cos -0.065 closes to ≥ 0.95"; the Granite case starts
-   from cos +0.712 with per-channel weights and would likely close
-   even faster. Estimated wall-time ~30-90 minutes on Prism CPU.
-   Likely the real lever for closing to 0.95+.
+1. **SEQ_MSE with 32+ calibration prompts.** Test the
+   "calibration overfitting" hypothesis. If cos returns to or
+   exceeds A1's 0.712 with more data, the regression is overfitting
+   (recoverable). If it stays below A1, the per-layer optimization
+   is fundamentally not the right lever for this model.
 2. **AdaScale on this same model.** Imports work; behavior on
    GraniteMoe attention head untested.
 3. **The same AIMET adapter approach applied to Granite-3.0-3B-A800M
@@ -284,3 +334,9 @@ Everything in this writeup is reproducible from:
   sim-build). Cos 0.656 → 0.712 (+0.056). Confirms per-axis weights
   help but aren't the dominant quality lever — activation a16 outliers
   + calibration breadth are likely bigger. SEQ_MSE next.
+- **2026-04-28** — Follow-up B landed: SEQ_MSE with 4-prompt
+  calibration *regressed* cos 0.712 → 0.640. Refutes the SQ2 prior
+  that "SEQ_MSE on a small cal set closes catastrophic divergence."
+  Hypothesis: per-layer MSE overfits a 4-prompt noise pattern. Need
+  to retest with 32+ prompts to confirm before believing SEQ_MSE
+  works at all on this hardware budget.
