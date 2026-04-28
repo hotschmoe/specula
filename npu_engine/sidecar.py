@@ -388,6 +388,70 @@ def serve_request(state, prompt_ids, tg_tokens, ar128_min_tokens, force_ar128):
     }
 
 
+def serve_draft_request(state, prompt_ids, n_draft, ar128_min_tokens, force_ar128):
+    """Prefill the supplied prompt_ids and draft `n_draft` tokens; return
+    the actual token IDs produced.
+
+    Differs from `serve_request` in two ways:
+      1. Caller supplies prompt_ids (driver controls tokenization).
+      2. Returns `draft_ids` — the K decoded tokens, not just throughput.
+
+    Used by SQ1's heterogeneous demo driver (NPU draft, CPU target verify).
+    Composes prefill_only + decode_only so the existing Stream-based
+    machinery does the work.
+    """
+    if not isinstance(prompt_ids, list) or not prompt_ids:
+        return {"ok": False, "error": "prompt_ids must be a non-empty list[int]"}
+    if len(prompt_ids) + n_draft > state.past_len:
+        return {"ok": False, "error":
+                f"pp+draft = {len(prompt_ids) + n_draft} exceeds CL-{state.ctx_len} cap {state.past_len}"}
+
+    # Pre-mode-swap snapshot so the timing reflects the work this request
+    # actually did (independent of which mode the engine was in before).
+    pre_mode = state.mode
+    swap_total_s = 0.0
+
+    t_pp = time.perf_counter()
+    # Capture mode after prefill_only so we can attribute its swap cost.
+    if pre_mode != ("ar128" if (force_ar128 or
+                                (len(prompt_ids) >= AR128_BATCH and
+                                 len(prompt_ids) >= ar128_min_tokens)) else "ar1"):
+        # Will swap; track via state.ensure_mode return values inside prefill_only.
+        # (prefill_only itself doesn't return swap_s — we approximate via wall.)
+        pass
+    stream = prefill_only(
+        state, stream_id="sq1-draft",
+        prompt_ids=list(prompt_ids),
+        ar128_min_tokens=ar128_min_tokens,
+        force_ar128=force_ar128,
+    )
+    pp_wall_s = time.perf_counter() - t_pp
+
+    t_tg = time.perf_counter()
+    decode_only(state, stream, n_draft)
+    tg_wall_s = time.perf_counter() - t_tg
+
+    # The first decoded token is the prefill-predicted one (Stream
+    # constructor stores next_token = argmax(last_logits)). Each decode
+    # step appends to stream.decoded BEFORE refreshing next_token, so
+    # stream.decoded[0:n_draft] is exactly the draft. Per the existing
+    # decode_only contract.
+    draft_ids = list(stream.decoded[-n_draft:])
+
+    return {
+        "ok": True,
+        "draft_ids": draft_ids,
+        "n_draft": n_draft,
+        "prompt_tokens": len(prompt_ids),
+        "pp_wall_s": pp_wall_s,
+        "tg_wall_s": tg_wall_s,
+        "swap_pre_mode": pre_mode,
+        "swap_post_mode": state.mode,
+        # NB: "swap" wall is folded into pp_wall_s when prefill_only triggered
+        # ensure_mode("ar128") or ensure_mode("ar1") inside this call.
+    }
+
+
 def emit(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
     sys.stdout.flush()
@@ -439,16 +503,27 @@ def cmd_serve(args):
         if op == "shutdown":
             emit({"event": "shutdown"})
             break
-        if op != "infer":
+        if op == "infer":
+            prompt_ids = synth_prompt(base_tokens, int(req["pp_tokens"]))
+            result = serve_request(
+                state, prompt_ids,
+                tg_tokens=int(req["tg_tokens"]),
+                ar128_min_tokens=int(req.get("ar128_min_tokens", args.ar128_min_tokens)),
+                force_ar128=bool(req.get("force_ar128", False)),
+            )
+        elif op == "draft":
+            # Driver-supplied prompt; returns the actual K drafted tokens
+            # so the caller can verify them against a target model.
+            prompt_ids = list(req["prompt_ids"])
+            result = serve_draft_request(
+                state, prompt_ids,
+                n_draft=int(req["n_draft"]),
+                ar128_min_tokens=int(req.get("ar128_min_tokens", args.ar128_min_tokens)),
+                force_ar128=bool(req.get("force_ar128", False)),
+            )
+        else:
             emit({"id": req.get("id"), "ok": False, "error": f"unknown op: {op}"})
             continue
-        prompt_ids = synth_prompt(base_tokens, int(req["pp_tokens"]))
-        result = serve_request(
-            state, prompt_ids,
-            tg_tokens=int(req["tg_tokens"]),
-            ar128_min_tokens=int(req.get("ar128_min_tokens", args.ar128_min_tokens)),
-            force_ar128=bool(req.get("force_ar128", False)),
-        )
         result["id"] = req.get("id")
         emit(result)
     state.shutdown()
