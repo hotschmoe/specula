@@ -385,9 +385,9 @@ Suggested sequence (each ≤ 1 session unless noted):
 |---|---|---|
 | **SQ1.a** | ✅ **Path A landed 2026-04-27** | NPU 4B + CPU 14B exchange tokens; JSON 100% accept, Python K=8 6/8 accept, Qwen3.6 incompat (sep memory) |
 | SQ1.b/c | ⏳ pending | Path B (real loop w/ rewind) or Path C (batched verify via prompt_logprobs) |
-| SQ2 | ⏳ pending | independent of NPU work |
-| SQ3 | ⏳ pending | downstream of SQ2 |
-| SQ4 | ⏳ blocked by SQ2+SQ3 | sizing verdict |
+| **SQ2** | ✅ **closed POSITIVE 2026-04-28** | aimet_torch v2 + SEQ_MSE/AdaScale work locally on Prism + WSL2 ARM64; aimet_onnx + qai_hub_models wrapper still cloud-only; basic-PTQ Qwen3-0.6B end-to-end demo lands negative-but-expected (cos -0.065 = V/O collapse repro) |
+| SQ3 | ⏳ pending | downstream of SQ2 — **UNBLOCKED** (AIMET 2.29 ships qwen3_moe quantsim hooks, smallest target Qwen3-30B-A3B 30 GB FP32 fits 48 GB DRAM) |
+| SQ4 | ⏳ partially fed by SQ2 | new prior: rent on demand, not by default — local AIMET unblocks design iteration on ≤4B; cloud only for production blessed bundles |
 | **SQ5** | ✅ **closed POSITIVE 2026-04-27** | engine generalized cl=512..4096; coding-asst contexts viable up through 4K at 20 t/s |
 | SQ6 | ⏳ pending | independent, anytime |
 
@@ -404,6 +404,13 @@ Suggested sequence (each ≤ 1 session unless noted):
 - **JSON / structured output is the SQ1 sweet spot**: 100% accept
   on the demo's JSON prompt (16/16 byte-identical) means tool-call
   workloads see full benefit if Path B/C lands.
+- **AIMET PyTorch is locally usable** (SQ2): `aimet_torch` 2.29 v2
+  surface (basic PTQ + SEQ_MSE + AdaScale + AdaRound + CLE +
+  experimental quant) runs on Prism CPU and WSL2 aarch64 — no CUDA,
+  no cloud. Only `aimet_onnx` + Qualcomm's `qai_hub_models` wrapper
+  remain cloud-only. AIMET 2.29 ships first-class Qwen3-MoE
+  quantsim hooks. This collapses SQ4's expected rental footprint
+  from "every iteration" to "production blessed bundles only."
 
 ## Where this fits in the bigger picture
 
@@ -426,3 +433,9 @@ Qwen3.5/3.6.
 - **2026-04-27** — Doc created. SQ1–SQ6 scoped, no execution yet.
   User to confirm SQ1 target model + SQ2 first model + execution
   order before starting.
+- **2026-04-28** — SQ2 closes positive. `aimet_torch` v2 surface +
+  SEQ_MSE + AdaScale + Qwen3-MoE quantsim hooks all work on Prism
+  Windows x86_64 and WSL2 aarch64. `aimet_onnx` remains
+  manylinux-only. Qwen3-0.6B basic PTQ ran end-to-end (254 s cal),
+  reproduced V/O collapse (cos -0.065). Deliverable:
+  `last_side_quest/sq2_aimet_local/aimet_local_survey.md`.
