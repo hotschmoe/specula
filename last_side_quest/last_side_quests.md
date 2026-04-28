@@ -383,12 +383,27 @@ Suggested sequence (each ≤ 1 session unless noted):
 
 | SQ | status | one-line outcome |
 |---|---|---|
-| SQ1 | ⏳ pending | needs Qwen3-14B-Q4_K_M download (~9 GB, use `curl.exe -C -`) |
+| **SQ1.a** | ✅ **Path A landed 2026-04-27** | NPU 4B + CPU 14B exchange tokens; JSON 100% accept, Python K=8 6/8 accept, Qwen3.6 incompat (sep memory) |
+| SQ1.b/c | ⏳ pending | Path B (real loop w/ rewind) or Path C (batched verify via prompt_logprobs) |
 | SQ2 | ⏳ pending | independent of NPU work |
 | SQ3 | ⏳ pending | downstream of SQ2 |
 | SQ4 | ⏳ blocked by SQ2+SQ3 | sizing verdict |
 | **SQ5** | ✅ **closed POSITIVE 2026-04-27** | engine generalized cl=512..4096; coding-asst contexts viable up through 4K at 20 t/s |
 | SQ6 | ⏳ pending | independent, anytime |
+
+## Cross-cutting findings landed this session
+
+- **Qwen3 ↔ Qwen3.6 tokenizer INCOMPATIBLE** (memory:
+  `reference_qwen_tokenizer_generations.md`). Heterogeneous-decode
+  pairings cannot cross Qwen generations without a vocab translator.
+  Constrains SQ1 stretch targets to Qwen3 family until a translator
+  exists or NPU bundles are recompiled for new vocabs.
+- **NPU long-context viability**: 20 t/s decode at cl=4096 (sublinear
+  scaling from cl=512's 27 t/s). Coding-assistant context lengths
+  through 4K are usable today; >4K routes to the cloud pipeline.
+- **JSON / structured output is the SQ1 sweet spot**: 100% accept
+  on the demo's JSON prompt (16/16 byte-identical) means tool-call
+  workloads see full benefit if Path B/C lands.
 
 ## Where this fits in the bigger picture
 
