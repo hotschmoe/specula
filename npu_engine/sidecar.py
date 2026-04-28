@@ -64,15 +64,17 @@ sys.path.insert(0, str(_HERE))
 from qualcomm_qwen3_4b_oracle import (  # noqa: E402
     AR128_BATCH,
     BUNDLE_DIR,
+    CTX_LEN,
     NUM_LAYERS,
-    PAST_LEN,
     KVStore,
     build_part_cfg,
     build_wrapper,
     dequant_uint16,
     load_session,
+    wrapper_path,
 )
 from bench_qwen3_4b_ortqnn import (  # noqa: E402
+    CTX_TIERS,
     _step,
     _step_ar128,
     make_bound_chain,
@@ -98,13 +100,19 @@ def _scales_tuple(part_cfg):
 class EngineState:
     """Holds the currently-loaded ORT-QNN chain and IO bindings.
     `mode` is one of ("ar1", "ar128", None). Swap by calling
-    `ensure_mode(target)` — returns the swap wall time (0 if hit)."""
+    `ensure_mode(target)` — returns the swap wall time (0 if hit).
 
-    def __init__(self, parts_cfg_ar1, parts_cfg_ar128):
+    `ctx_len` (default 512) selects the bundle's context-tier graphs
+    that this engine will load. The two parts_cfg dicts must be built
+    against the same ctx_len so AR1 ⇄ AR128 swaps share KV layout."""
+
+    def __init__(self, parts_cfg_ar1, parts_cfg_ar128, ctx_len: int = CTX_LEN):
         self.parts_cfg_ar1 = parts_cfg_ar1
         self.parts_cfg_ar128 = parts_cfg_ar128
         self.scales_ar1 = _scales_tuple(parts_cfg_ar1)
         self.scales_ar128 = _scales_tuple(parts_cfg_ar128)
+        self.ctx_len = ctx_len
+        self.past_len = ctx_len - 1
         self.mode = None
         self.sessions = None
         self.bindings = None
@@ -119,7 +127,7 @@ class EngineState:
         sessions = {}
         per_part_s = []
         for part_idx in (1, 2, 3, 4):
-            wrapper = BUNDLE_DIR / f"oracle_part{part_idx}{suffix}.wrapper.onnx"
+            wrapper = wrapper_path(BUNDLE_DIR, part_idx, suffix, self.ctx_len)
             if not wrapper.exists():
                 build_wrapper(parts_cfg[part_idx], wrapper)
             t = time.perf_counter()
@@ -163,7 +171,11 @@ def _maybe_warmup(state, prompt_ids):
     ~1 s context-init cost we don't want hitting the measured run."""
     if state.warmup_done:
         return
-    kv_w = KVStore(NUM_LAYERS, with_ar128_input=(state.mode == "ar128"))
+    kv_w = KVStore(
+        NUM_LAYERS,
+        with_ar128_input=(state.mode == "ar128"),
+        ctx_len=state.ctx_len,
+    )
     if state.mode == "ar128":
         warmup_batch = list(prompt_ids[:AR128_BATCH])
         if len(warmup_batch) < AR128_BATCH:
@@ -210,9 +222,9 @@ def prefill_only(state, stream_id, prompt_ids, ar128_min_tokens, force_ar128):
     breaking the batch. To stay in AR128 across N batched prefills,
     use multiple-of-128 prompt sizes.
     """
-    if len(prompt_ids) > PAST_LEN:
+    if len(prompt_ids) > state.past_len:
         raise ValueError(
-            f"prompt {len(prompt_ids)} exceeds CL-512 cap {PAST_LEN}"
+            f"prompt {len(prompt_ids)} exceeds CL-{state.ctx_len} cap {state.past_len}"
         )
     use_ar128 = force_ar128 or (
         len(prompt_ids) >= AR128_BATCH
@@ -221,14 +233,14 @@ def prefill_only(state, stream_id, prompt_ids, ar128_min_tokens, force_ar128):
     n_ar128_calls = (len(prompt_ids) // AR128_BATCH) if use_ar128 else 0
     n_ar1_tail = len(prompt_ids) - n_ar128_calls * AR128_BATCH
 
-    kv = KVStore(NUM_LAYERS, with_ar128_input=use_ar128)
+    kv = KVStore(NUM_LAYERS, with_ar128_input=use_ar128, ctx_len=state.ctx_len)
     last_logits = None
 
     if use_ar128:
         state.ensure_mode("ar128")
         _maybe_warmup(state, prompt_ids)
         # Re-init kv after warmup mutated it
-        kv = KVStore(NUM_LAYERS, with_ar128_input=True)
+        kv = KVStore(NUM_LAYERS, with_ar128_input=True, ctx_len=state.ctx_len)
         p = 0
         for _ in range(n_ar128_calls):
             batch = list(prompt_ids[p:p + AR128_BATCH])
@@ -242,7 +254,7 @@ def prefill_only(state, stream_id, prompt_ids, ar128_min_tokens, force_ar128):
         state.ensure_mode("ar1")
         _maybe_warmup(state, prompt_ids)
         if not use_ar128:
-            kv = KVStore(NUM_LAYERS)
+            kv = KVStore(NUM_LAYERS, ctx_len=state.ctx_len)
         p = n_ar128_calls * AR128_BATCH if use_ar128 else 0
         while p < len(prompt_ids):
             last_logits, _ = _step(
@@ -259,10 +271,10 @@ def decode_only(state, stream, n_tokens):
     in place. Requires AR1 mode; ensure_mode is idempotent so calling
     decode_only across multiple streams in a row pays only ONE swap
     when transitioning from AR128 prefill mode."""
-    if stream.position + n_tokens > PAST_LEN:
+    if stream.position + n_tokens > state.past_len:
         raise ValueError(
             f"stream {stream.id}: decode would overrun KV ({stream.position} + "
-            f"{n_tokens} > {PAST_LEN})"
+            f"{n_tokens} > {state.past_len})"
         )
     state.ensure_mode("ar1")
     _maybe_warmup(state, stream.prompt_ids)
@@ -283,9 +295,9 @@ def serve_request(state, prompt_ids, tg_tokens, ar128_min_tokens, force_ar128):
     Returns dict with route, swap_s, pp_compute_s, tg_compute_s,
     pp_tps, tg_tps, ar128_per_part_s, ar1_per_part_s.
     """
-    if len(prompt_ids) + tg_tokens > PAST_LEN:
+    if len(prompt_ids) + tg_tokens > state.past_len:
         return {"ok": False, "error":
-                f"pp+tg = {len(prompt_ids) + tg_tokens} exceeds CL-512 cap {PAST_LEN}"}
+                f"pp+tg = {len(prompt_ids) + tg_tokens} exceeds CL-{state.ctx_len} cap {state.past_len}"}
 
     use_ar128 = (
         force_ar128 or (
@@ -303,7 +315,7 @@ def serve_request(state, prompt_ids, tg_tokens, ar128_min_tokens, force_ar128):
     pp_ar128_compute_s = 0.0
     pp_ar1_compute_s = 0.0
     last_logits = None
-    kv = KVStore(NUM_LAYERS, with_ar128_input=use_ar128)
+    kv = KVStore(NUM_LAYERS, with_ar128_input=use_ar128, ctx_len=state.ctx_len)
 
     # ----- AR128 prefill phase (if used) -----
     if use_ar128:
@@ -312,7 +324,7 @@ def serve_request(state, prompt_ids, tg_tokens, ar128_min_tokens, force_ar128):
         if per_part:
             ar128_per_part_s = per_part
         _maybe_warmup(state, prompt_ids)
-        kv = KVStore(NUM_LAYERS, with_ar128_input=True)
+        kv = KVStore(NUM_LAYERS, with_ar128_input=True, ctx_len=state.ctx_len)
         t = time.perf_counter()
         p = 0
         for _ in range(n_ar128_calls):
@@ -384,10 +396,11 @@ def emit(obj):
 def _load_engine(args):
     """Build EngineState and warm to the args.start_mode. Returns
     (state, base_tokens, startup_s, per_part_s)."""
+    ctx_tier = getattr(args, "ctx_tier", CTX_LEN)
     metadata = yaml.safe_load((BUNDLE_DIR / "metadata.yaml").read_text())
-    parts_cfg_ar1 = build_part_cfg(metadata, ar=1)
-    parts_cfg_ar128 = build_part_cfg(metadata, ar=AR128_BATCH)
-    state = EngineState(parts_cfg_ar1, parts_cfg_ar128)
+    parts_cfg_ar1 = build_part_cfg(metadata, ar=1, ctx=ctx_tier)
+    parts_cfg_ar128 = build_part_cfg(metadata, ar=AR128_BATCH, ctx=ctx_tier)
+    state = EngineState(parts_cfg_ar1, parts_cfg_ar128, ctx_len=ctx_tier)
 
     tokenizer = Tokenizer.from_file(str(BUNDLE_DIR / "tokenizer.json"))
     base_tokens = tokenizer.encode(PROMPT_PATH.read_text(encoding="utf-8")).ids
@@ -652,6 +665,11 @@ def main():
     p.add_argument("--ar128-min-tokens", type=int, default=512,
                    help="prompt-token threshold above which inference uses "
                         "AR128 prefill (and pays a swap if needed).")
+    p.add_argument("--ctx-tier", type=int, default=CTX_LEN, choices=CTX_TIERS,
+                   help="bundle context-tier graphs to load. Bundle ships {512,"
+                        " 1024, 2048, 3072, 4096}. KV memory grows linearly per"
+                        " session; the HTP simultaneous-session ceiling shrinks"
+                        " as ctx grows.")
     args = p.parse_args()
     if args.mode == "demo":
         cmd_demo(args)

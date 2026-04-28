@@ -79,7 +79,12 @@ from qualcomm_qwen3_4b_oracle import (  # noqa: E402
     half_dim_rope_quantized,
     half_dim_rope_quantized_ar128,
     load_session,
+    wrapper_path,
 )
+
+# Bundle ships these context tiers; verified by metadata.yaml grep
+# for `ar1_cl{N}_*_of_4` keys.
+CTX_TIERS = (512, 1024, 2048, 3072, 4096)
 
 # Battery helpers live in the cross-backend driver under scripts/.
 # Add scripts/ to sys.path so this import resolves.
@@ -208,7 +213,7 @@ def _step(sessions, bindings, out_bufs, kv, position, token_in, scales):
     """
     cos_scale, cos_offset, mask_scale, mask_offset, logits_scale, logits_offset = scales
     cos_q, sin_q = half_dim_rope_quantized(position, cos_scale, cos_offset)
-    mask_q = attention_mask_quantized(position, mask_scale, mask_offset)
+    mask_q = attention_mask_quantized(position, mask_scale, mask_offset, ctx_len=kv.ctx_len)
 
     t0 = time.perf_counter()
 
@@ -257,7 +262,7 @@ def _step_ar128(sessions, bindings, out_bufs, kv, p_base, token_batch, scales):
         raise RuntimeError("_step_ar128 requires KVStore(with_ar128_input=True)")
     cos_scale, cos_offset, mask_scale, mask_offset, logits_scale, logits_offset = scales
     cos_q, sin_q = half_dim_rope_quantized_ar128(p_base, cos_scale, cos_offset)
-    mask_q = attention_mask_quantized_ar128(p_base, mask_scale, mask_offset)
+    mask_q = attention_mask_quantized_ar128(p_base, mask_scale, mask_offset, ctx_len=kv.ctx_len)
 
     t0 = time.perf_counter()
 
@@ -299,8 +304,15 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--power-state", choices=("ac", "bat"), required=True)
     p.add_argument("--tag", default=None)
+    p.add_argument("--ctx-tier", type=int, default=512, choices=CTX_TIERS,
+                   help="bundle context-length tier. Bundle ships {512, 1024, "
+                        "2048, 3072, 4096}; per-tier KV memory grows linearly "
+                        "(~2.3 GB/session at cl=4096) so the simultaneous-"
+                        "session HTP ceiling shrinks as ctx grows.")
     p.add_argument("--pp-tokens", type=int, default=256,
-                   help="# of prompt tokens for PP measurement (CL=512 caps prefill+decode at 511 KV slots total, so 256+128 fits)")
+                   help="# of prompt tokens for PP measurement. The CL-tier "
+                        "cap is `--ctx-tier - 1` total KV slots (prefill + "
+                        "decode); default fits cl=512 with tg=128.")
     p.add_argument("--tg-tokens", type=int, default=128)
     p.add_argument("--skip-power-check", action="store_true")
     p.add_argument("--no-ar128", action="store_true",
@@ -315,6 +327,8 @@ def main() -> int:
                         "where AR128-with-swap starts winning end-to-end on "
                         "Qwen3-4B + this hardware.")
     args = p.parse_args()
+    ctx_tier = args.ctx_tier
+    cap = ctx_tier - 1
 
     online = sample_power_online()
     if online is None:
@@ -332,22 +346,23 @@ def main() -> int:
     trash_dir.mkdir(parents=True, exist_ok=True)
     log_path = trash_dir / "stdout.log"
 
-    if args.pp_tokens + args.tg_tokens > PAST_LEN:
+    if args.pp_tokens + args.tg_tokens > cap:
         print(f"ERROR: pp_tokens + tg_tokens = {args.pp_tokens + args.tg_tokens} "
-              f"exceeds CL-512 cache capacity {PAST_LEN}")
+              f"exceeds CL-{ctx_tier} cache capacity {cap}")
         return 2
 
-    print(f"=== Qwen3-4B ORT-QNN bench (AR128 prefill + AR1 decode, CL{CTX_LEN}, chained 4-part) ===")
+    print(f"=== Qwen3-4B ORT-QNN bench (AR128 prefill + AR1 decode, CL{ctx_tier}, chained 4-part) ===")
     print(f"tag            : {tag}")
     print(f"power state    : {args.power_state}")
+    print(f"ctx tier       : {ctx_tier}  (cap {cap} KV slots)")
     print(f"pp tokens      : {args.pp_tokens}")
     print(f"tg tokens      : {args.tg_tokens}")
     print(f"prompt         : {PROMPT_PATH}")
     print(f"log (trash)    : {log_path}")
 
     metadata = yaml.safe_load((BUNDLE_DIR / "metadata.yaml").read_text())
-    parts_cfg_ar1 = build_part_cfg(metadata, ar=1)
-    parts_cfg_ar128 = build_part_cfg(metadata, ar=AR128_BATCH)
+    parts_cfg_ar1 = build_part_cfg(metadata, ar=1, ctx=ctx_tier)
+    parts_cfg_ar128 = build_part_cfg(metadata, ar=AR128_BATCH, ctx=ctx_tier)
 
     tokenizer = Tokenizer.from_file(str(BUNDLE_DIR / "tokenizer.json"))
     prompt_text = PROMPT_PATH.read_text(encoding="utf-8")
@@ -407,7 +422,7 @@ def main() -> int:
         sessions = {}
         per_part_s: list[float] = []
         for part_idx in (1, 2, 3, 4):
-            wrapper = BUNDLE_DIR / f"oracle_part{part_idx}{suffix}.wrapper.onnx"
+            wrapper = wrapper_path(BUNDLE_DIR, part_idx, suffix, ctx_tier)
             if not wrapper.exists():
                 build_wrapper(parts_cfg[part_idx], wrapper)
             bin_path = BUNDLE_DIR / parts_cfg[part_idx]["bin"]
@@ -430,7 +445,7 @@ def main() -> int:
 
     # AR128 path needs the matching-shape KV input buffer; the AR1 path
     # reads kv.keys / kv.values directly.
-    kv = KVStore(NUM_LAYERS, with_ar128_input=want_ar128)
+    kv = KVStore(NUM_LAYERS, with_ar128_input=want_ar128, ctx_len=ctx_tier)
 
     last_logits = None
     pp_ar128_latencies_ms: list[float] = []
@@ -461,7 +476,7 @@ def main() -> int:
             sessions_ar128, bindings_ar128, out_bufs_ar128,
             kv, 0, warmup_batch, scales_ar128,
         )
-        kv = KVStore(NUM_LAYERS, with_ar128_input=True)
+        kv = KVStore(NUM_LAYERS, with_ar128_input=True, ctx_len=ctx_tier)
 
         print(f"  prefill: {n_ar128_calls} AR128 calls = "
               f"{n_ar128_calls * AR128_BATCH} tokens")
@@ -512,7 +527,7 @@ def main() -> int:
     print("  warmup (1 AR1 step, discarded)")
     if not want_ar128:
         # No prior prefill yet; warm up against a fresh KV (use prompt[0]).
-        kv_w = KVStore(NUM_LAYERS)
+        kv_w = KVStore(NUM_LAYERS, ctx_len=ctx_tier)
         _, _ = _step(sessions_ar1, bindings_ar1, out_bufs_ar1, kv_w, 0, prompt_ids[0], scales_ar1)
     else:
         # KV is already at position n_ar128_calls*128; warm up at the next
@@ -651,7 +666,7 @@ def main() -> int:
         j_per_tok=j_per_tok,
         power_state=args.power_state,
         tag=tag,
-        ctx_tier=CTX_LEN,
+        ctx_tier=ctx_tier,
         note="AR128 swap-mode prefill + AR1 decode + IOBinding; ORT-QNN 1.24.4",
     )
 

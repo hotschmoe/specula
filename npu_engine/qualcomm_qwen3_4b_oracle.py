@@ -96,47 +96,52 @@ def half_dim_rope_quantized_ar128(
     return quant_uint16(cos_h, scale, offset), quant_uint16(sin_h, scale, offset)
 
 
-def attention_mask_quantized(pos: int, scale: float, offset: int) -> np.ndarray:
-    """Build the CL=512 attention mask for AR1 decode at position `pos`.
+def attention_mask_quantized(
+    pos: int, scale: float, offset: int, ctx_len: int = CTX_LEN
+) -> np.ndarray:
+    """Build the CL=N attention mask for AR1 decode at position `pos`.
 
-    KV layout: past_kv has 511 slots (chronological, left-aligned — slot
-    0 holds position 0, slot t-1 holds position t-1, slots t..510 are
+    KV layout: past_kv has N-1 slots (chronological, left-aligned — slot
+    0 holds position 0, slot t-1 holds position t-1, slots t..N-2 are
     zero-filled and unused). The model internally concatenates the
-    current step's K/V (1 slot) onto the past, producing 512 attention
-    slots: [past_511 | current_1].
+    current step's K/V (1 slot) onto the past, producing N attention
+    slots: [past_(N-1) | current_1].
 
     Therefore at step t (0-indexed):
       - past slots 0..t-1   -> attend (valid history)
-      - past slots t..510   -> block (unused, all-zero KV)
-      - current slot 511    -> attend (always, this is the live token)
+      - past slots t..N-2   -> block (unused, all-zero KV)
+      - current slot N-1    -> attend (always, this is the live token)
 
     Quantized representation: q=65535 -> dequant=0.0 (attend);
     q=0 -> dequant=(0-65535)*0.0015259 ~= -100 (mask). The dequantized
     mask is added to attention scores before softmax."""
-    mask = np.zeros((1, 1, 1, CTX_LEN), dtype=np.uint16)
+    mask = np.zeros((1, 1, 1, ctx_len), dtype=np.uint16)
     if pos > 0:
         mask[..., :pos] = 65535  # past positions 0..pos-1
-    mask[..., -1] = 65535  # current slot 511
+    mask[..., -1] = 65535  # current slot ctx_len-1
     _ = scale, offset  # values are fixed by metadata; included for symmetry
     return mask
 
 
-def attention_mask_quantized_ar128(p_base: int, scale: float, offset: int) -> np.ndarray:
-    """CL=512 mask for an AR128 batch at base absolute position p_base.
+def attention_mask_quantized_ar128(
+    p_base: int, scale: float, offset: int, ctx_len: int = CTX_LEN
+) -> np.ndarray:
+    """CL=N mask for an AR128 batch at base absolute position p_base.
 
-    Layout: mask[..., 0..383] indexes past KV slots (chronological:
-    slot k holds K/V for absolute position k); mask[..., 384..511]
-    indexes the new 128 query positions (slot 384+j holds K/V for
+    Layout: mask[..., 0..(N-128-1)] indexes past KV slots (chronological:
+    slot k holds K/V for absolute position k); mask[..., (N-128)..N-1]
+    indexes the new 128 query positions (slot (N-128)+j holds K/V for
     absolute position p_base+j).
 
     For query q (0..127, absolute position p_base+q):
-      - past slot k (0..383): attend iff k < p_base (valid past data
+      - past slot k (0..N-129): attend iff k < p_base (valid past data
         the previous calls wrote; later slots are zero-coded padding).
-      - current slot 384+j: attend iff j <= q (causal within batch).
+      - current slot (N-128)+j: attend iff j <= q (causal within batch).
 
     q=65535 -> dequant=0 (attend); q=0 -> dequant ~ -100 (mask).
     """
-    mask = np.zeros((1, 1, AR128_BATCH, CTX_LEN), dtype=np.uint16)
+    past_len = ctx_len - AR128_BATCH
+    mask = np.zeros((1, 1, AR128_BATCH, ctx_len), dtype=np.uint16)
     if p_base > 0:
         # All queries attend to all valid past slots — past < p_base is
         # always < p_base + q so causality is automatic.
@@ -144,21 +149,25 @@ def attention_mask_quantized_ar128(p_base: int, scale: float, offset: int) -> np
     # Causal triangle for new tokens within the batch: row q attends
     # to current slots 0..q.
     causal = np.tri(AR128_BATCH, AR128_BATCH, k=0, dtype=np.uint16) * 65535
-    mask[0, 0, :, PAST_LEN_AR128_CL512:] = causal
+    mask[0, 0, :, past_len:] = causal
     _ = scale, offset
     return mask
 
 
-def build_part_cfg(metadata: dict, ar: int = 1) -> dict:
-    """Pull cl512 IO specs from the bundle's metadata.yaml.
+def build_part_cfg(metadata: dict, ar: int = 1, ctx: int = CTX_LEN) -> dict:
+    """Pull cl=N IO specs from the bundle's metadata.yaml.
 
-    `ar=1` selects the single-token decode graphs (`ar1_cl512_*_of_4`);
-    `ar=128` selects the batched prefill graphs (`ar128_cl512_*_of_4`).
+    `ar=1` selects the single-token decode graphs (`ar1_cl{N}_*_of_4`);
+    `ar=128` selects the batched prefill graphs (`ar128_cl{N}_*_of_4`).
     Both target the same .bin files — only the graph_name differs.
+
+    `ctx` selects the context-length tier. The Qwen3-4B bundle ships
+    {512, 1024, 2048, 3072, 4096}. KeyError if the bundle wasn't
+    compiled for that tier.
     """
     cfg = {}
     for part in (1, 2, 3, 4):
-        comp_name = f"ar{ar}_cl512_{part}_of_4"
+        comp_name = f"ar{ar}_cl{ctx}_{part}_of_4"
         comp = metadata["components"][comp_name]
         # The wrapper.onnx must use UNDERSCORED tensor names — that's how
         # the QAIRT compiler stored them in the binary. metadata.yaml has
@@ -180,8 +189,9 @@ def build_part_cfg(metadata: dict, ar: int = 1) -> dict:
         prefix = "token" if ar == 1 else "prompt"
         cfg[part] = {
             "bin": f"qwen3_4b_part_{part}_of_4.bin",
-            "graph_name": f"{prefix}_ar{ar}_cl512_{part}_of_4",
+            "graph_name": f"{prefix}_ar{ar}_cl{ctx}_{part}_of_4",
             "ar": ar,
+            "ctx": ctx,
             "inputs": [
                 {
                     "name": to_underscore(name),
@@ -207,6 +217,19 @@ def build_part_cfg(metadata: dict, ar: int = 1) -> dict:
             ],
         }
     return cfg
+
+
+def wrapper_path(bundle_dir: Path, part_idx: int, suffix: str = "", ctx: int = CTX_LEN) -> Path:
+    """Standard wrapper-ONNX path for one partition.
+
+    For ctx=512 the legacy filename is preserved (`oracle_part{N}{suffix}.wrapper.onnx`)
+    so existing pre-built wrappers continue to be reused. For ctx>512 a `_cl{ctx}`
+    suffix is appended to disambiguate per-tier — wrappers are tier-specific
+    because they embed the QNN graph_name (`{prefix}_ar{ar}_cl{ctx}_{N}_of_4`).
+    """
+    if ctx == CTX_LEN:
+        return bundle_dir / f"oracle_part{part_idx}{suffix}.wrapper.onnx"
+    return bundle_dir / f"oracle_part{part_idx}{suffix}_cl{ctx}.wrapper.onnx"
 
 
 _DTYPE_PROTO = {
@@ -289,47 +312,59 @@ class KVStore:
     Per-layer scale/offset are FIXED (Qualcomm chose them at compile
     time) — verified that past_kv_in scale/offset == past_kv_out
     scale/offset for every layer, so we can concat raw uint8 across
-    steps without requantizing."""
+    steps without requantizing.
 
-    def __init__(self, num_layers: int, with_ar128_input: bool = False):
+    `ctx_len` selects the bundle's context tier; defaults to 512 for
+    backward compatibility. Larger tiers grow the master buffer linearly
+    (cl=4096 ⇒ ~32 MB per layer × 36 layers × 2 KV ≈ 2.3 GB total)."""
+
+    def __init__(
+        self,
+        num_layers: int,
+        with_ar128_input: bool = False,
+        ctx_len: int = CTX_LEN,
+    ):
         self.num_layers = num_layers
-        # Master cache: shape [8, 1, 128, PAST_LEN=511] / [8, 1, 511, 128]
+        self.ctx_len = ctx_len
+        self.past_len = ctx_len - 1
+        self.past_len_ar128 = ctx_len - AR128_BATCH
+        # Master cache: shape [8, 1, 128, past_len] / [8, 1, past_len, 128]
         # filled with the "zero" code (q=128 since offset=-128 for KV).
         # Attended slots are mask-controlled; unused slots stay zero so
         # any accidental contribution to attention is zero. This buffer
         # is what the AR1 graphs read directly (zero-copy via IOBinding).
         self.keys: list[np.ndarray] = [
-            np.full((NUM_KV_HEADS, 1, HEAD_DIM, PAST_LEN), 128, dtype=np.uint8)
+            np.full((NUM_KV_HEADS, 1, HEAD_DIM, self.past_len), 128, dtype=np.uint8)
             for _ in range(num_layers)
         ]
         self.values: list[np.ndarray] = [
-            np.full((NUM_KV_HEADS, 1, PAST_LEN, HEAD_DIM), 128, dtype=np.uint8)
+            np.full((NUM_KV_HEADS, 1, self.past_len, HEAD_DIM), 128, dtype=np.uint8)
             for _ in range(num_layers)
         ]
         # Optional AR128 input buffer at exactly the shape the AR128
-        # graphs expect ([8,1,128,384] / [8,1,384,128]). Eliminates the
-        # ~28 MB per-call ascontiguousarray copy that taking a 384-slot
-        # slice of the 511-slot master would cost. Kept in sync with
-        # the master via stitch_batch's dual-write.
+        # graphs expect ([8,1,128,past_len_ar128] / [8,1,past_len_ar128,128]).
+        # Eliminates the per-call ascontiguousarray copy that slicing the
+        # master would cost. Kept in sync with the master via
+        # stitch_batch's dual-write.
         self.has_ar128_in = with_ar128_input
         if with_ar128_input:
             self.keys_ar128_in: list[np.ndarray] = [
                 np.full(
-                    (NUM_KV_HEADS, 1, HEAD_DIM, PAST_LEN_AR128_CL512), 128, dtype=np.uint8
+                    (NUM_KV_HEADS, 1, HEAD_DIM, self.past_len_ar128), 128, dtype=np.uint8
                 )
                 for _ in range(num_layers)
             ]
             self.values_ar128_in: list[np.ndarray] = [
                 np.full(
-                    (NUM_KV_HEADS, 1, PAST_LEN_AR128_CL512, HEAD_DIM), 128, dtype=np.uint8
+                    (NUM_KV_HEADS, 1, self.past_len_ar128, HEAD_DIM), 128, dtype=np.uint8
                 )
                 for _ in range(num_layers)
             ]
-        self.t = 0  # next free slot index in [0, PAST_LEN)
+        self.t = 0  # next free slot index in [0, past_len)
 
     def stitch_step(self, k_outs: list[np.ndarray], v_outs: list[np.ndarray]) -> None:
-        if self.t >= PAST_LEN:
-            raise RuntimeError(f"KV cache full at t={self.t}; ctx={CTX_LEN}")
+        if self.t >= self.past_len:
+            raise RuntimeError(f"KV cache full at t={self.t}; ctx={self.ctx_len}")
         for i in range(self.num_layers):
             # k_out shape: [8, 1, 128, 1]
             self.keys[i][..., self.t : self.t + 1] = k_outs[i]
@@ -355,11 +390,11 @@ class KVStore:
         AR128 call can read it zero-copy.
         """
         end = p_base + AR128_BATCH
-        if end > PAST_LEN:
+        if end > self.past_len:
             raise RuntimeError(
-                f"AR128 batch ending at {end} exceeds buffer {PAST_LEN}"
+                f"AR128 batch ending at {end} exceeds buffer {self.past_len}"
             )
-        mirror = self.has_ar128_in and end <= PAST_LEN_AR128_CL512
+        mirror = self.has_ar128_in and end <= self.past_len_ar128
         for i in range(self.num_layers):
             self.keys[i][..., p_base:end] = k_outs[i]
             self.values[i][:, :, p_base:end, :] = v_outs[i]
