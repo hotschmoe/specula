@@ -1,0 +1,56 @@
+{
+  "note": "Representative slice of full 152 MB encodings.json. Full file is regeneratable from probe_qwen3_0p6b_ptq.py; staged in marked_for_deletion/.",
+  "top_level_keys": [
+    "activation_encodings",
+    "param_encodings"
+  ],
+  "param_encodings_count": 311,
+  "activation_encodings_count": 338,
+  "sample_param_encodings__inner.model.layers.0.input_layernorm.weight": [
+    {
+      "bitwidth": 4,
+      "dtype": "int",
+      "is_symmetric": "True",
+      "max": 0.986854076385498,
+      "min": -1.1278332471847534,
+      "offset": -8,
+      "scale": 0.14097915589809418
+    }
+  ],
+  "sample_activation_encodings__inner.model.layers.0.input_layernorm": {
+    "output": {
+      "0": {
+        "bitwidth": 16,
+        "dtype": "int",
+        "is_symmetric": "False",
+        "max": 2.107034683227539,
+        "min": -2.6771013736724854,
+        "offset": -36672,
+        "scale": 7.300123979803175e-05
+      }
+    }
+  },
+  "sample_lm_head_weight (truncated, full 151936 ch)": [
+    {
+      "bitwidth": 4,
+      "dtype": "int",
+      "is_symmetric": "True",
+      "max": 0.07830338925123215,
+      "min": -0.08948958665132523,
+      "offset": -8,
+      "scale": 0.011186198331415653
+    },
+    {
+      "bitwidth": 4,
+      "dtype": "int",
+      "is_symmetric": "True",
+      "max": 0.06876040995121002,
+      "min": -0.07858332991600037,
+      "offset": -8,
+      "scale": 0.009822916239500046
+    },
+    {
+      "_total_channels": 151936
+    }
+  ]
+}

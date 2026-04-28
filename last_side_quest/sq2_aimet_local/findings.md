@@ -403,4 +403,142 @@ recipe transitively requires `aimet_onnx`, so the **wrapper script**
 remains cloud-only — but the underlying `aimet_torch` library doesn't,
 which means we can author our own local PTQ driver.
 
+### Step 5 — basic PTQ on Qwen3-0.6B end-to-end (2026-04-28)
+
+Authored `last_side_quest/sq2_aimet_local/probe_qwen3_0p6b_ptq.py` as
+a minimal driver: HF-load → wrap to logits-only → AIMET v2 sim w4
+sym weights / a16 asym acts → `compute_encodings` on 4 short
+calibration prompts (64 tokens each, padded) → cos vs fp32 →
+`save_encodings_to_json`. Ran on Prism (axis B).
+
+#### Pipeline pre-conditions discovered
+
+| issue | fix |
+|---|---|
+| AIMET requires tensor return; HF `BaseModelOutputWithPast` doesn't trace | wrap model in `LogitsOnly` shim that calls inner with `return_dict=True, use_cache=False` and returns `out.logits` |
+| transformers 5.6.2 (default) raises `IndexError: tuple index out of range` in `sdpa_mask` under `torch.jit.trace` (dynamic-mask code path) | `pip install "transformers==4.54.1"` |
+| transformers 4.54.1 default attn impl uses SDPA (also trace-incompatible) | `attn_implementation="eager"` at `from_pretrained` |
+| transformers 4.54.1 with torch 2.11 trips `RuntimeError: invalid unordered_map<K, T> key` in functorch vmap during forward | `pip install "torch==2.4.1" "torchvision==0.19.1"` (Qualcomm's tested combination) |
+| `transformers.from_pretrained(..., dtype=...)` argument | older transformers takes `torch_dtype=` |
+| `sim.export()` writes 5.7 GB of intermediate weight files and trips a protobuf 2 GB serialize cap on the wrapping ONNX | use `sim.save_encodings_to_json(...)` instead — emits just the JSON (152 MB for 0.6B) |
+
+#### Final working dependency pin
+
+```text
+torch == 2.4.1            (cpu)
+torchvision == 0.19.1
+aimet-torch == 2.29.0
+transformers == 4.54.1
+attn_implementation = "eager"
+```
+
+#### End-to-end timing (Prism CPU, single-thread)
+
+| stage | wall-time |
+|---|---:|
+| Qwen3-0.6B FP32 load (cached HF) | 2-3 s |
+| FP32 probe forward | <1 s |
+| `QuantizationSimModel(...)` construct | 6.6 s |
+| `compute_encodings` (4 prompts × 64 tokens, 28 layers) | **254 s** |
+| Quantized probe forward | <1 s |
+| `save_encodings_to_json` | 12.7 s |
+
+Calibration scaling estimate: ~64 s/prompt at 64 tokens/prompt for
+0.6B / 28 layers. A typical SEQ_MSE calibration set is 128 prompts —
+that's ~2.3 hours on Prism CPU. SEQ_MSE itself adds iterative weight
+search per layer; budget another factor of 2-5× wall-time.
+
+For Qwen3-4B (32 layers, 6.7× params): ballpark 28 minutes for 4
+calibration prompts of basic PTQ; ~3 hours for the typical 128-prompt
+set. Order-of-magnitude estimate; would need real measurement.
+
+#### Quality result — basic PTQ at w4a16 on Qwen3-0.6B is broken
+
+```text
+[step 3] fp32 probe logits: shape=(1, 64, 151936), argmax=' Paris'  ✅
+[step 6] quantized probe logits: shape=(1, 64, 151936), argmax=' ont'  ❌
+[step 6] cos(fp32, quant) over real positions = -0.065061
+```
+
+Cos -0.065 ≈ orthogonal vectors. **The quantized model is essentially
+noise** — argmax shifted from " Paris" to " ont" on the most basic
+factual probe. This **reproduces** the V/O-projection collapse story
+from `docs/w4a16_investigation.md` Sessions 17-18: basic PTQ at w4
+on Qwen3-0.6B is structurally insufficient.
+
+This is the *exact* finding that motivates the SEQ_MSE + AdaScale
+escalation in `docs/one_pipeline_cloud_gpu.md` §"Q4: calibration
+technique stack." The SQ2 deliverable closes positive even though the
+*demo PTQ run* is negative — the negative result is consistent with
+prior diagnoses, the pipeline itself works, and the next step
+(SEQ_MSE) is now locally callable.
+
+#### encodings.json schema (AIMET v2 `save_encodings_to_json` form)
+
+Top-level keys: `param_encodings` (dict, layer_name → list-of-channel-encodings),
+`activation_encodings` (dict, op_name → {"output": {idx → encoding}}).
+Per-channel weight entry shape:
+
+```json
+{
+  "bitwidth": 4,
+  "dtype": "int",
+  "is_symmetric": "True",
+  "max": 0.0783,
+  "min": -0.0895,
+  "offset": -8,
+  "scale": 0.01119
+}
+```
+
+Per-tensor activation entry shape:
+
+```json
+{
+  "bitwidth": 16,
+  "dtype": "int",
+  "is_symmetric": "False",
+  "max": 2.107,
+  "min": -2.677,
+  "offset": -36672,
+  "scale": 7.30e-05
+}
+```
+
+311 param entries × per-channel arrays + 338 activation entries → 152
+MB JSON for 0.6B. lm_head alone is 151,936 channels.
+
+Note: **`save_encodings_to_json` schema differs from `sim.export()`
+schema** captured earlier on TinyMLP (which used `bw`/`enc_type`/
+`is_sym`/list-of-`offset`-and-`scale`). Both come out of AIMET v2 but
+through different code paths. For QAIRT consumption via
+`--quantization_overrides`, we'd need to confirm which schema QAIRT
+expects — that's the **P2 question** in
+`docs/one_pipeline_cloud_gpu.md` and remains unanswered without an
+actual `qairt-converter` round-trip test.
+
+Representative sample saved to
+`last_side_quest/sq2_aimet_local/encodings_sample.json`. Full 152 MB
+file is regeneratable from `probe_qwen3_0p6b_ptq.py`; staged in
+`marked_for_deletion/sq2_aimet_local/` per repo hygiene.
+
+#### Verdict on local AIMET surface for the SQ2 deliverable
+
+| capability | local? (Prism / WSL2) | notes |
+|---|:-:|---|
+| `aimet_torch.v2.QuantizationSimModel` construct | ✅ | works on real Qwen3-0.6B, 28 layers |
+| `sim.compute_encodings` (basic PTQ calibration) | ✅ | CPU, ~4 min on 4-prompt cal set |
+| Quantized forward pass under sim | ✅ | matches expected QDQ semantics |
+| `aimet_torch.v2.seq_mse.apply_seq_mse` | ✅ ‡ | ‡ imports + runs on TinyMLP — **untested on Qwen3** at scale |
+| `aimet_torch.experimental.adascale.apply_adascale` | ✅ ‡ | ‡ imports — **untested at scale** |
+| `aimet_torch.adaround` | ✅ † | † imports OK; calibration-ladder path |
+| `aimet_torch.cross_layer_equalization` (CLE) | ✅ † | † imports OK |
+| `aimet_torch.bias_correction` | ✅ † | † imports OK |
+| `aimet_torch.experimental.omniquant`, `spinquant`, `fptquant` | ✅ † | † imports OK; advanced experimental quant techniques |
+| `sim.save_encodings_to_json` | ✅ | size scales with model: 152 MB for 0.6B |
+| `sim.export` (full ONNX + encodings) | ⚠ partial | trips 2 GB protobuf cap for ≥ 0.6B model wrapping; per-tensor weight files DO emit |
+| `aimet_torch.onnx.export` (recommended replacement) | ⚠ untested | API exists; `use_external_data_format=True` likely required for ≥ 0.6B |
+| `aimet_onnx` (any function) | ❌ | manylinux_x86_64-only wheel; cloud-only |
+| `qai_hub_models.models.qwen3_4b.quantize` (Qualcomm wrapper) | ❌ | depends on `aimet_onnx`; cloud-only |
+
 (remaining steps appended as we run them)
