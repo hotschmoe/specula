@@ -2,10 +2,56 @@
 
 ## Status
 
-- **2026-04-27** — Engine generalization landed. Pure-Python smoke
-  test (`smoke_metadata.py`) passes at all 5 ctx tiers (512 / 1024 /
-  2048 / 3072 / 4096). NPU smoke + bench at cl=2048/4096 still
-  pending.
+- **2026-04-27** — Engine generalization landed; AR1-only AC bench
+  ran at all four jumps (cl=512 / 1024 / 2048 / 4096). cl=4096 loads
+  and decodes cleanly. AR128 prefill at >cl=512 still pending.
+
+## Headline result — AR1 decode scales gracefully through cl=4096
+
+| ctx tier | load (4 parts) | AR1 PP | AR1 TG | step median | Δ vs cl=512 TG |
+|---:|---:|---:|---:|---:|---:|
+| 512 (prior baseline) | ~14.8 s | 27.07 | **27.81** | ~36 ms | — |
+| 1024 | 8.6 s | 27.24 | 27.23 | 36.0 ms | -2% |
+| 2048 | 7.9 s | 24.33 | 25.15 | 40.2 ms | -10% |
+| 4096 | 7.7 s | 20.49 | **20.31** | 46.5 ms | **-27%** |
+
+(All AC, AR1-only, pp=256 tg=128, no AR128 swap.)
+
+**Strategic takeaway:** the NPU can serve as a long-context draft
+through the bundle's full 4K range. Per-step latency grows from
+36 ms → 47 ms across an 8× context jump (cl=512 → cl=4096) — that's
+**dispatch-bound, not weight-BW-bound**, exactly mirroring the
+session-22 cross-model finding (4B vs 7B per-step within 1.7%).
+Bigger past-KV at cl=4096 IS visible (~30% per-step penalty) but
+the magnitude is small enough that 4K context is a usable
+operating point for coding-assistant draft work.
+
+**Load cost is FLAT across tiers** at ~8 s for 4 AR1 partitions.
+HTP context init is dominated by something other than past-KV
+size — probably kernel finalization / weight upload (the .bin
+files are the same multi-graph object across tiers; only the
+selected graph changes). **The 7-session ceiling concern was
+misplaced**: 4 simultaneous AR1 sessions fit at cl=4096 with no
+errors. Whether AR1 + AR128 simultaneously fit at cl=4096 (the
+"two chains alive" pattern from the original sidequest) remains
+untested; cl=512 was already at 4+4=8 sessions and that was the
+ceiling.
+
+## Strategic answer to the user's "are we dead in the water for
+coding assistants" question
+
+**No.** 20 t/s decode at cl=4096 is comfortable for an interactive
+coding assistant. Tool-call loops with system prompt + 1-3 file
+reads typically land in the 4K–8K token range; cl=4096 covers the
+common case. The NPU draft at this tier is in the same throughput
+band as the existing cl=512 result minus a fixed ~25-30% tax.
+
+The **remaining ceiling questions:**
+- 8K+ contexts (multi-file refactors, deep agent traces) need a
+  custom-compiled bundle — out of scope for SQ5; routes to the
+  cloud pipeline doc (`one_pipeline_cloud_gpu.md`).
+- AR128 prefill at cl=4096 unmeasured; predicted to take ~10-30 s
+  for a 4K prompt vs ~1 s at cl=512. That's an open SQ5b.
 
 ## Goal
 
@@ -102,45 +148,48 @@ session would hold ~2.3 GB just in numpy buffers on the host side.
 The HTP context allocations on top of that are unmeasured but the
 ~7-session ceiling at cl=512 will likely move down significantly.
 
-## Open questions (resolved by NPU run)
+## Open questions resolved by the AC AR1 sweep
 
-1. **Does the cl=2048 4-partition AR1 chain even load?** Each AR1
-   partition's `.bin` is unchanged (the bundle re-uses the same
-   .bin for all tiers, switching graphs by name) so file I/O cost
-   should be flat. But HTP context-init cost grows with the
-   compiled graph's KV shape — unknown by how much.
-2. **AR1 per-step latency at cl=2048 vs cl=512.** Today: 36 ms median
-   on AR1 at cl=512. Prediction: per-step compute is mostly
-   bandwidth-bound on KV concat → linear-ish growth. Could reach
-   ~144 ms at cl=2048 (4× past KV) or be sublinear if the
-   attention math dominates rather than KV BW. **This is the
-   binding number for the SQ1 heterogeneous demo.**
-3. **AR128 prefill throughput at cl=2048.** Today: 2229 t/s at
-   cl=512. Prediction: stays similar in t/s but adds proportional
-   time for the bigger past-KV.
-4. **Simultaneous-session ceiling at cl=2048 / cl=4096.** Today:
-   ~7 sessions at cl=512. Prediction: each session uses 4× more
-   HTP memory for past-KV at cl=2048; ceiling drops to maybe 3-4
-   sessions. May force one-session-per-binary load pattern (worse
-   swap cost) at higher tiers.
+- ✅ **Does cl=2048/4096 AR1 chain load?** Yes; all 4 AR1 partitions
+  load successfully at every tier. Load cost is flat (~8 s).
+- ✅ **AR1 per-step latency at cl=4096 vs cl=512.** Grows from 36 ms
+  to 47 ms — only +30% across an 8× ctx jump. Sublinear.
+- ✅ **Simultaneous-session ceiling at cl=4096.** 4-session AR1 chain
+  fits fine. The 7-session worry was at cl=512 with 4 AR1 + 4 AR128;
+  larger tiers may shift that ceiling for the AR128-coexistence case
+  but the AR1-alone footprint is comfortable.
+
+## Open questions still pending
+
+- ⏳ **AR128 prefill throughput at cl=2048 / cl=4096.** Untested.
+  Predicted to scale similarly to AR1 (~30% penalty per ctx
+  doubling). Critical for the SQ1 heterogeneous demo's prefill
+  story — a 4K prompt prefilled at AR1 rates (24 t/s) would take
+  ~170 s, untenable; AR128 at cl=512 was 2229 t/s = 1.8 s for 4K.
+  AR128 at cl=4096 is the binding scaling test.
+- ⏳ **AR1+AR128 coexistence at cl=2048+.** The 7-session ceiling
+  observation was at cl=512 with 4+4 sessions. At cl=2048 the
+  per-session HTP footprint is bigger; coexistence likely fails
+  earlier. Practical impact: confirms swap-mode (one chain at a
+  time) is the right architecture for the 2K+ range too.
+- ⏳ **AR1 long-context with realistic pp+tg.** Today's runs are
+  pp=256 tg=128. Real coding assistant: pp=2048, tg=512. Would
+  exercise the full cl=2048 / cl=4096 buffers and validate the
+  per-step latency stays reasonable as KV fills.
 
 ## Next actions
 
-1. **NPU smoke at cl=2048** — load 4 AR1 sessions at cl=2048,
-   confirm session creation succeeds. If yes, run a short bench
-   (`--ctx-tier 2048 --pp-tokens 1024 --tg-tokens 256
-   --no-ar128`) — AR1-only is the cleanest first measurement.
-2. If smoke passes → **AR1 sweep across tiers** (cl=512 / 1024 /
-   2048) at fixed `pp=256 tg=128` — record per-step latency and
-   compare against the cl=512 baseline.
-3. **AR128 sweep** at cl=2048 / cl=4096 — measure prefill t/s and
-   see if the AR128 advantage extends to higher tiers.
-4. If cl=4096 fails to load 4 partitions: document, then either
-   try a 1-stream load (single partition at a time) or document
-   the ceiling.
-5. **Strategic conclusion** for the user's "are we dead in the
-   water for coding assistants" question once cl=4096 numbers
-   are in.
+1. **AR128 + AR1 swap-mode bench at cl=2048** (`--ctx-tier 2048
+   --pp-tokens 1024 --tg-tokens 128`) — exercises the full
+   prefill-then-decode pipeline at the 2K tier. Caps the AR128
+   scaling question.
+2. **Same at cl=4096** if (1) succeeds. Likely the upper bound on
+   what's tractable.
+3. **Long-realistic test** at cl=4096 with `pp=2048 tg=512` —
+   real coding-assistant prompt size. Confirms per-step doesn't
+   degrade as KV fills.
+4. After (1)-(3), close SQ5 with a writeup that feeds SQ1's
+   heterogeneous-demo ctx-tier choice.
 
 ## Reference
 
