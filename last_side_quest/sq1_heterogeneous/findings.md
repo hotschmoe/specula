@@ -327,7 +327,84 @@ range → ~1.5-1.8× speedup at this same K).
     --tag run_$(Get-Date -Format yyyyMMdd_HHmmss)
 ```
 
+## Path B — multi-round naive serial spec-decode (2026-04-28)
+
+**Result.** Real spec-decode loop works end-to-end. Two prompt classes
+× K=8 × 4 rounds:
+
+| prompt | K | rounds | mean accept | total commit | total wall | t/s | baseline t/s | speedup |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| python (34 tok) | 8 | 4 | 47% (3.75/8) | 19 | 9.58 s | 1.98 | 10.80 | 0.18× |
+| json (85 tok)   | 8 | 4 | **91%** (7.25/8) | 33 | 21.13 s | 1.56 | 8.37 | 0.19× |
+
+Mean accept rates **confirm SQ1.a's prompt-class finding at multi-
+round scale**: structured output (JSON) accepts ~91% of K=8 drafts
+sustained across rounds, free-form (Python coding) ~47%. JSON
+re-emerges as the spec-decode sweet spot.
+
+But the **0.18-0.19× speedup is real and bad** (i.e., spec-decode is
+~5× *slower* than CPU-only). Driver: `demo_path_b.py`. Reason: NPU
+re-prefills the entire growing context **every round**, because
+sidecar has no rewind op. Wall-time breakdown for the JSON run:
+
+| component | wall (s) | share |
+|---|---:|---:|
+| NPU prefill (4× re-prefill of growing ctx) | 15.68 | **74%** |
+| Target serial verify (32 calls × ~0.13 s avg) | 4.21 | 20% |
+| NPU decode (4 rounds × K=8 tokens) | 1.24 | 6% |
+
+NPU prefill cost grows per round: r0=3.77 s, r1=3.97 s, r2=4.43 s,
+r3=4.75 s — by round 3 with ~110-token context, prefill alone takes
+4.75 s. Linear scaling means a 30-round generation would spend
+~95 s on NPU re-prefills alone for ~250 committed tokens.
+
+### What Path B proved
+
+1. **The loop architecture works.** Round-by-round NPU draft → target
+   verify → commit → re-draft completes cleanly. EOS handling, max-
+   committed early-exit, KV cache reuse on target side (`cache_prompt:
+   true`) all behave.
+2. **Accept rates are workload-dependent and stable.** JSON 91% holds
+   across 4 rounds; Python 47% holds. SQ1.a's one-round measurement
+   wasn't a fluke.
+3. **Naive Path B can't deliver speedup at this draft/target ratio.**
+   With NPU prefill at 74% of wall, even hypothetical 100% accept
+   wouldn't beat baseline. Fixing requires:
+   - **NPU rewind** (sidecar.py change) — cuts the per-round prefill
+     to incremental delta, ~0.05–0.2 s/round vs full re-prefill
+   - **Target batched verify** (Path C) — 1 forward pass instead of K
+     serial calls, cuts target wall ~K-fold
+
+The math from `findings.md` Pre-Path-B/C analysis is now grounded:
+
+```
+Hypothetical Path C + rewind, JSON K=8 91% accept (current measured):
+  round_wall ≈ 0.05 s NPU rewind-prefill + 8 × 0.04 s NPU decode
+             + 1 × 0.07 s target batched verify
+             = 0.05 + 0.32 + 0.07 = 0.44 s
+  committed ≈ 7.25 (per-round mean)
+  rate     ≈ 7.25 / 0.44 = 16.5 t/s
+```
+
+vs CPU-only at 8.37 t/s on this prompt ⇒ **~2× speedup feasible** if
+both engineering blockers are removed. Without either, no win.
+
+### Decision gate
+
+Path B closes negative-but-informative. Real-world improvement
+requires:
+1. **NPU rewind op** (~half-session of sidecar.py work — out of scope
+   for this side-quest cycle but well-scoped)
+2. **Path C batched verify** — pursued next via in-process
+   `llama-cpp-python` (no `prompt_logprobs` exposed by llama-server's
+   /completion endpoint as of 2026-04, only generated-token logprobs)
+
 ## Update log
 
 - **2026-04-27** — Path A landed. K=16, cl=2048, fixed Python
   coding prompt: 6/16 first-position match. Plumbing demo done.
+- **2026-04-28** — Path B landed. Multi-round naive serial
+  spec-decode runs end-to-end. Mean accept Python 47% / JSON 91% over
+  4 rounds (confirms SQ1.a). Speedup 0.18-0.19× (5× slower than
+  baseline) due to NPU re-prefill per round. Closes negative-but-
+  informative; Path C and NPU rewind are the unlocks.

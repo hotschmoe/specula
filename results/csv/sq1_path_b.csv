@@ -1,0 +1,3 @@
+tag,k,max_rounds,max_committed,ctx_tier,prompt_tokens,stop_reason,rounds,n_committed,total_npu_pp_s,total_npu_tg_s,total_target_s,total_loop_s,spec_decode_t_s,baseline_t_s,mean_accept_per_K
+sq1b_initial,8,4,32,2048,34,max_rounds,4,19,6.158996099955402,1.2122932000202127,2.20170799997868,9.576226700010011,1.9840800134754681,10.803879173269593,3.75
+sq1b_json_k8,8,4,32,2048,85,max_committed,4,33,15.680275199963944,1.239124699990498,4.206472400052007,21.130895900016185,1.5616943150988087,8.37436181797263,7.25
