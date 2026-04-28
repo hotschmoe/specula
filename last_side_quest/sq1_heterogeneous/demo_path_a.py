@@ -34,6 +34,15 @@ import sys
 import time
 from pathlib import Path
 
+# Windows cp1252 default stdout can't encode token strings that include
+# Qwen's tokenizer special bytes (Ġ space marker, multi-byte UTF-8 in
+# non-ASCII tokens). Force UTF-8 before any print.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 import requests
 from tokenizers import Tokenizer
 
