@@ -1,0 +1,3 @@
+Write a single coherent paragraph about why clean, well-named code matters more than clever code in long-running software projects. Begin your paragraph with the word "Clean" and end it with a sentence that ties readability to maintenance cost.
+
+Clean

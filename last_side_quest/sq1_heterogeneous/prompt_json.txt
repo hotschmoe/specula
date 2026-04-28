@@ -1,0 +1,12 @@
+Respond with a JSON object describing a person. Use exactly this format, no extra fields and no trailing comments:
+
+{
+  "name": "Alice",
+  "age": 30,
+  "occupation": "engineer",
+  "languages": ["English", "Spanish"]
+}
+
+Now describe a person named Bob, age 42, working as a doctor, who speaks English and French. Output JSON only:
+
+{

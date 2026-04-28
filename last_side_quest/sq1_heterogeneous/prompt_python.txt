@@ -1,0 +1,11 @@
+You are an expert Python developer. Complete the following function:
+
+def fibonacci(n: int) -> int:
+    """Return the nth Fibonacci number using O(n) time.
+
+    Args:
+        n: Non-negative integer.
+
+    Returns:
+        The nth Fibonacci number, where fibonacci(0) = 0 and fibonacci(1) = 1.
+    """
