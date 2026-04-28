@@ -228,8 +228,9 @@ Driver: `probe_granite_1b_a400m_seqmse.py`.
 | run | technique | calib data | calib time | cos | argmax |
 |---|---|---|---:|---:|---|
 | A0 | basic PTQ, per-tensor experts | 4 × 64-tok | 99.8 s | 0.656 | `<\|end_of_text\|>` |
-| A1 | basic PTQ, per-(exp, out) experts | 4 × 64-tok | 70.2 s | 0.712 | ` ` |
-| **B** | **SEQ_MSE + per-(exp, out) experts** | **4 × 64-tok** | **377 s** | **0.640** | ` ` |
+| **A1** | **basic PTQ, per-(exp, out) experts** | 4 × 64-tok | 70.2 s | **0.712** | ` ` |
+| B | SEQ_MSE + per-(exp, out) experts | 4 × 64-tok | 377 s | 0.640 | ` ` |
+| B.5 | SEQ_MSE + per-(exp, out) experts | 16 × 64-tok | **1333 s** | **0.682** | ` ` |
 
 SEQ_MSE was applied to the 121 `nn.Linear`-class modules (attn proj
 × 24 layers × 4 + router-gate × 24 + lm_head). The 48
@@ -268,13 +269,45 @@ calibration: ~50 minutes. For 128-prompt × 64-token: ~3 hours.
 **Encodings.json:** 503 MB (same shape as A1 since per-channel
 overrides on experts dominate the file size).
 
-## Open follow-ups (not done in this session)
+## Follow-up B.5 — SEQ_MSE retest with 16 calibration prompts
 
-1. **SEQ_MSE with 32+ calibration prompts.** Test the
-   "calibration overfitting" hypothesis. If cos returns to or
-   exceeds A1's 0.712 with more data, the regression is overfitting
-   (recoverable). If it stays below A1, the per-layer optimization
-   is fundamentally not the right lever for this model.
+**Result: cos 0.682.** Recovered partially from B's 0.640 but still
+**below basic-PTQ-A1's 0.712**. Wall-time scaled linearly (4× cal
+data ⇒ 4× time): 22 minutes for SEQ_MSE + 1 minute for
+compute_encodings. Encodings.json: 503 MB (same shape as A1/B —
+per-channel ParallelExperts override dominates).
+
+**Refines the SEQ_MSE narrative.** It's not pure overfitting —
+more data did help, going 4→16 prompts closed ~30% of the
+distance back toward A1. But the trend (0.640 → 0.682, +0.042
+absolute, vs A1's 0.712 = +0.030 above B.5) suggests **diminishing
+returns**: a 32-prompt run would likely land somewhere in
+0.69-0.70, **still below A1**. To beat per-channel basic PTQ on
+this 1.3B MoE, we'd need either **much** more calibration (64+
+prompts, ~hours wall-time) **or** a different technique.
+
+**Probable explanation specific to MoE.** SEQ_MSE optimizes per-
+layer reconstruction MSE on the **routed** activations. With 32
+experts top-8, each expert sees ~1/4 of tokens during calibration.
+Per-layer MSE estimates on attention proj weights (Q/K/V/O are
+shared across experts) get full-token statistics, but per-router-
+gate MSE on the routing layer is noisy because routing is sparse
+and discrete-ish. SEQ_MSE may pick router-gate scales that fit
+calibration tokens' routing patterns but generalize poorly. This
+is consistent with the observation that SEQ_MSE on dense models
+(qwen3-0.6b would be the apples-to-apples test) is reported to
+work better than what we see here.
+
+**Verdict for the SQ3 quality stack.** A1 (basic PTQ + per-channel
+weights on fused experts) is the locally-achievable champion at
+**cos 0.712** on Granite-1B-A400M w4a16. SEQ_MSE with this hardware
+budget regresses; AdaScale untested. The next quality lever is
+likely **AdaScale** (which scales activations rather than weights —
+designed exactly for outlier-channel activation collapse, the SQ2
+finding) or **expanding bit-width** (a16 → a32 on outlier-prone
+projections like V/O / down_proj).
+
+## Open follow-ups (not done in this session)
 2. **AdaScale on this same model.** Imports work; behavior on
    GraniteMoe attention head untested.
 3. **The same AIMET adapter approach applied to Granite-3.0-3B-A800M
@@ -340,3 +373,9 @@ Everything in this writeup is reproducible from:
   Hypothesis: per-layer MSE overfits a 4-prompt noise pattern. Need
   to retest with 32+ prompts to confirm before believing SEQ_MSE
   works at all on this hardware budget.
+- **2026-04-28** — Follow-up B.5 landed: SEQ_MSE with 16-prompt
+  calibration improved on B (cos 0.640 → 0.682) but still below
+  basic-PTQ-A1's 0.712. Refines verdict: SEQ_MSE not pure overfitting,
+  but diminishing returns suggest 64+ prompts (~hours) would only
+  marginally help. **A1 is the locally-achievable champion** at this
+  recipe; AdaScale is the next lever to try.

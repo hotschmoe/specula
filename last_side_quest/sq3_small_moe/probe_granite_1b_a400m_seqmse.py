@@ -43,10 +43,15 @@ PER_EXPERT_PER_CHANNEL_WEIGHTS = True
 # but lower quality. Qualcomm's published recipes use 20.
 NUM_CANDIDATES = 20
 
+# Calibration set size. The first SEQ_MSE run used CAL_BREADTH=4 and
+# regressed cos 0.712 -> 0.640 — likely overfitting. Bump to 16 to test
+# the hypothesis that more breadth recovers and exceeds basic-PTQ.
+CAL_BREADTH = 16
+
 REPO = Path(__file__).resolve().parents[2]
 os.environ.setdefault("HF_HOME", str(REPO / "models" / ".hf_cache"))
 
-OUT_DIR = REPO / "last_side_quest" / "sq3_small_moe" / "out_granite_1b_a400m_seqmse"
+OUT_DIR = REPO / "last_side_quest" / "sq3_small_moe" / f"out_granite_1b_a400m_seqmse_cal{CAL_BREADTH}"
 
 MODEL_ID = "ibm-granite/granite-3.0-1b-a400m-instruct"
 
@@ -91,12 +96,28 @@ def main() -> int:
     model.generation_config = None
     model = LogitsOnly(model).eval()
 
-    cal_prompts = [
+    # Diverse calibration set spanning code, prose, math, dialogue,
+    # structured output, technical writing, multilingual. Designed to
+    # span the input distribution for SEQ_MSE per-layer MSE estimation.
+    base_prompts = [
         "The quick brown fox jumps over the lazy dog.",
-        "def fibonacci(n):\n    if n < 2:\n        return n",
+        "def fibonacci(n):\n    if n < 2:\n        return n\n    return fibonacci(n-1)",
         "User: Hello!\nAssistant: Hi there, how can I help?",
-        "import json\ndata = json.loads('{\"a\": 1}')",
+        "import json\ndata = json.loads('{\"a\": 1, \"b\": [2, 3]}')",
+        "Solve for x: 2x + 5 = 17. Subtracting 5 from both sides gives",
+        "The capital of France is Paris, which is located in the",
+        "function add(a, b) {\n    return a + b;\n}\nconsole.log(add(",
+        "Once upon a time in a small village, there lived a young",
+        "Q: What is the difference between TCP and UDP? A: TCP is connection-oriented,",
+        "Le chat est sur la table. La maison est grande. Bonjour mon",
+        "SELECT name, age FROM users WHERE age > 18 ORDER BY name;",
+        "# Project README\n\n## Installation\nRun `pip install` to install",
+        "Claude is an AI assistant created by Anthropic. It can help with",
+        "<thought>Let me think about this step by step.</thought>\n<answer>",
+        "The integral of x^2 dx from 0 to 1 equals 1/3. The proof uses",
+        "{\"name\": \"Alice\", \"age\": 30, \"hobbies\": [\"reading\", \"chess\"]}",
     ]
+    cal_prompts = base_prompts[:CAL_BREADTH]
     cal_pairs = []
     for p in cal_prompts:
         enc = tok(p, return_tensors="pt", truncation=True,
