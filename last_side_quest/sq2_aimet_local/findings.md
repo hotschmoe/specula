@@ -304,4 +304,103 @@ locally**.
 SEQ_MSE + AdaScale + ONNX export surface runs on Prism. This is the
 unblock that closes SQ2 positive.
 
+### Step 4 — C: WSL2 ARM64 Linux Python 3.10 install (2026-04-28)
+
+WSL2 status: Ubuntu 24.04 default distro, ARM64 (aarch64), Python 3.12
+default. Installed `uv 0.11.8 aarch64-unknown-linux-gnu` to
+`~/.local/bin/uv`. Created `~/aimet-wsl` venv with Python 3.10.20.
+
+#### C1 — `uv pip install aimet-torch` ✅ install ❌ aimet_common import
+
+Wheel installed:
+
+```
+aimet_torch-2.29.0-py310-none-any.whl  (48 MB)
+torch==2.11.0+cu130
+triton==3.6.0
+... (same 80-package transitive set as Prism, plus triton)
+```
+
+torch on aarch64-linux comes with the cu130 CUDA build (CUDA 13.0
+sym-linked stubs); `torch.cuda.is_available()` is `False` since
+WSL2 has no GPU passthrough on this box. The aarch64 `aimet-torch`
+wheel uses the **universal tag** `py310-none-any` — pip treats it as
+platform-agnostic and installs without checking binary contents.
+
+Inside the wheel, `aimet_torch/common/`:
+```
+_libpymo.abi3.so          99 MB   ELF 64-bit LSB shared object, x86-64
+AimetTensorQuantizer.so   77 MB   ELF 64-bit LSB shared object, x86-64
+AimetEncodingRescaler.so  75 MB   ELF 64-bit LSB shared object, x86-64
+```
+
+The v1 native binaries are **x86-64 ELF**, not aarch64. They were
+shipped as-is in a universal wheel.
+
+The naive smoke (`from aimet_common.defs import QuantScheme; ...`)
+crashes:
+
+```text
+ImportError: aimet_torch/common/_libpymo.abi3.so: cannot open shared
+object file: No such file or directory
+```
+
+`ldd` confirms: "not a dynamic executable" — the loader can't even
+parse a non-aarch64 ELF as a dynamic object. Triggered because
+`aimet_common.__init__.py` does `pkgutil.iter_modules(pkg.__path__)`
+and tries to `importlib.import_module(...)` every submodule it finds.
+On Linux, `.so` is a recognized extension suffix → it enumerates the
+`.so` files → the loader fails on the architecture mismatch.
+
+#### C2 — workaround: skip `aimet_common`, import v2 directly ✅
+
+Switching to `from aimet_torch.common.defs import QuantScheme`
+(the v2.20+ recommended import that the FutureWarning explicitly
+suggests) bypasses the `aimet_common` auto-importer entirely. The v2
+quantsim path is pure-Python and never touches `_libpymo`.
+
+```python
+from aimet_torch.common.defs import QuantScheme    # ← not aimet_common
+from aimet_torch.v2.quantsim import QuantizationSimModel
+sim = QuantizationSimModel(model, dummy_input=d,
+    quant_scheme=QuantScheme.post_training_tf_enhanced,
+    default_param_bw=4, default_output_bw=16)
+sim.compute_encodings(fwd, None)
+out = sim.model(d)   # quantized fwd OK on aarch64
+```
+
+Works.
+
+#### Why Prism didn't hit this
+
+Same wheel, same `.so` files. On Windows, `pkgutil.iter_modules`
+respects `importlib.machinery.all_suffixes()` which **does not include
+Linux `.so`** — only `.pyd`, `.dll`, `.py`, etc. So the auto-importer
+silently skips the Linux ELF binaries on Windows. The fact that they
+even shipped is a no-op there.
+
+This means the wheel's universal tag is technically incorrect (it
+should be `manylinux_2_xx_x86_64`), but it works on Prism by
+**accident** of Windows path-rule differences.
+
+**Verdict C.** ✅ Works with the v2-only import discipline. Same
+v2 surface + SEQ_MSE smoke runs on aarch64 Linux as it does on Prism.
+Slightly closer to the Qualcomm reference path (Linux), but Prism is
+fine for our purposes too.
+
+#### Combined verdict on install axis (A vs B vs C)
+
+| axis | install? | run? | notes |
+|---|:-:|:-:|---|
+| **A**: native Windows-on-ARM Py3.12/3.10 | ❌ | n/a | torch + onnxruntime have no `win_arm64` wheels — blocks the dep tree |
+| **B**: Windows x86_64 / Prism / Py3.10 | ✅ | ✅ | aimet-torch 2.29.0 + torch 2.11.0+cpu; v1 `.so` files unused on Windows; v2 quantsim works |
+| **C**: WSL2 aarch64 Linux / Py3.10 | ✅ | ✅ † | **† only when import discipline avoids `aimet_common` auto-importer** |
+| **D**: cloud x86_64 Linux + CUDA (rented) | ✅ | ✅ | `aimet_onnx` + `aimet_torch` + GPU SEQ_MSE; the `qai_hub_models.qwen3_4b.quantize` happy path |
+
+**`aimet_onnx` — manylinux_2_34_x86_64 only**, fails on A/B/C.
+The Qualcomm-published `qai_hub_models.models.qwen3_4b.quantize`
+recipe transitively requires `aimet_onnx`, so the **wrapper script**
+remains cloud-only — but the underlying `aimet_torch` library doesn't,
+which means we can author our own local PTQ driver.
+
 (remaining steps appended as we run them)
