@@ -307,6 +307,131 @@ designed exactly for outlier-channel activation collapse, the SQ2
 finding) or **expanding bit-width** (a16 → a32 on outlier-prone
 projections like V/O / down_proj).
 
+## Follow-up C — OLMoE-1B-7B (NEGATIVE — AIMET v2 incompatible at multiple layers)
+
+**Status: did NOT complete an end-to-end PTQ run.** Three iterations,
+each peeling back a deeper AIMET-v2-vs-OLMoE incompatibility. The
+adapter/probe (`olmoe_adapters.py`, `probe_olmoe_1b_7b_ptq.py`)
+land as a **reference for the failure modes**, not as a working pipeline.
+
+### Why OLMoE is structurally harder than Granite
+
+Compare expert-dispatch designs:
+
+| arch | how experts get tokens | empty-expert calls? |
+|---|---|---|
+| **Granite-MoE** (`GraniteMoeParallelExperts`) | Fused 3D weight tensor `[num_experts, out, in]` + `expert_size = expert_size.tolist()` then a single index-based MatMul | No — internal index_select, never per-expert empty forward |
+| **Qwen3-MoE** (`Qwen3MoeSparseMoeBlock`) | `nn.ModuleList([Qwen3MoeMLP(...) ...])` per-expert calls **but** filters `expert_hitted = (mask.sum() > 0).nonzero()` first | No — only iterates experts with ≥1 token |
+| **OLMoE** (`OlmoeSparseMoeBlock`) | `nn.ModuleList([OlmoeMLP(...) ...])` per-expert calls, **iterates ALL `range(num_experts)`** regardless of token count | **Yes** — empty `[0, hidden]` forwards happen routinely |
+
+OLMoE's choice to iterate all experts is the structural source of the
+problems below.
+
+### Iteration 1 — Empty-tensor crash in encoding analyzer
+
+Fresh `compute_encodings` with adapters for RoPE (ignore) + RMSNorm:
+
+```text
+File "transformers/models/olmoe/modeling_olmoe.py:606
+    current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+File ".../aimet_torch/v2/quantization/encoding_analyzer.py:210, _get_min_max
+    min = torch.where(isfinite, hist_input, float("inf")).min()
+RuntimeError: min(): Expected reduction dim to be specified for input.numel() == 0
+```
+
+Root cause: `expert_layer(empty_tensor)` flows through `gate_proj` → empty
+output → AIMET's encoding analyzer chokes on `torch.min()` of empty input.
+
+### Iteration 2 — `@QuantizationMixin.implements(OlmoeMLP)` adapter that early-returns on empty
+
+Wrapped OlmoeMLP with a custom adapter that returns
+`torch.zeros(*x.shape[:-1], hidden_size)` when `x.numel() == 0`,
+bypassing inner Linears entirely on empty inputs.
+
+```text
+File "olmoe_adapters.py, in QuantizedOlmoeMLP.forward
+    return super().forward(x)   # non-empty path
+File "modeling_olmoe.py:229, in OlmoeMLP.forward
+    down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+File "...aimet_torch/v2/quantization/affine/quantizer.py:1124
+RuntimeError: Failed to run QuantizeDequantize since quantization parameters
+are not initialized. Please initialize the quantization parameters using
+`compute_encodings()`.
+```
+
+Different error, deeper. The empty-input fix worked; non-empty path now
+fails. Hypothesis: `@QuantizationMixin.implements(OlmoeMLP)` as a
+parent-class wrapper somehow disrupts AIMET's per-quantizer
+`patch_attr(quantizer, "forward", _no_op)` mechanism for inner
+QuantizedLinears during `compute_encodings`. The patch sets quantizer
+forwards to `_no_op` for stats collection — but our wrapper class
+intercepts in a way that the patch doesn't propagate through.
+
+### Iteration 3 — Class-level monkey-patch of `OlmoeMLP.forward` (not a Mixin) + disable per-expert output quantizers
+
+Replaced the QuantizationMixin adapter with a transformers-class-level
+monkey-patch (`OlmoeMLP.forward = _patched_forward`) so AIMET sees
+stdlib OlmoeMLP and doesn't add MLP-level wrappers. **Plus** post-build
+disable: walk `sim.model.named_modules()` and set
+`output_quantizers = ModuleList([None])` on all 3072 inner expert
+QuantizedLinears (`16 layers × 64 experts × 3 linears each`).
+
+`compute_encodings` ran clean for **30 minutes** (1796 s). Then the
+post-cal probe forward at step 6 hit the **same error**:
+
+```text
+File "modeling_olmoe.py:229, in OlmoeMLP.forward
+    down_proj = self.down_proj(...)
+File ".../quantizer.py:1124
+RuntimeError: Failed to run QuantizeDequantize since quantization
+parameters are not initialized.
+```
+
+This shouldn't happen — `_forward_no_dispatch` in true_quant.py:607-608
+explicitly does `if self.output_quantizers[0]:` before applying. Setting
+the entry to `None` should make this skip. But it didn't skip. Either:
+(a) `compute_encodings` re-instantiated output_quantizers on the
+disabled modules (bypassing the user's None setting), or (b) something
+else holds an old reference. Did not pursue further — the diagnostic
+loop here is open-ended and out of scope for this side-quest's budget.
+
+### Verdict for SQ3-OLMoE
+
+OLMoE's per-expert dispatch design is **architecturally hostile to
+AIMET v2's PTQ pipeline** in ways that Granite's fused-experts and
+Qwen3-MoE's hit-filtered iteration both avoid. Three layered
+workarounds didn't yield a working pipeline. **A fourth+ workaround
+might exist** — e.g., monkey-patching `OlmoeSparseMoeBlock.forward` to
+emulate Qwen3-MoE's `expert_hitted` filter so empty-expert iterations
+are simply skipped — but at this point the engineering cost equals or
+exceeds writing a transformers-side PR to upstream that fix.
+
+**Implication for the AIMET-MoE-adapter narrative.** The "~80 LOC per
+arch" rule from SQ3-Granite was over-optimistic. It applies cleanly to
+**fused-expert architectures**. **Per-expert-dispatch architectures
+that don't filter empty experts** require either:
+1. transformers-side fixes (upstream OLMoE to add `expert_hitted`),
+2. AIMET-side fixes (encoding analyzer that handles empty stats),
+3. or selective-quantization workarounds that we couldn't get working
+   in the time budget.
+
+For Specula's roadmap: **avoid OLMoE family until one of those fixes
+lands**. Granite-MoE and (pending verification) Qwen3-MoE are the
+locally-tractable MoE candidates.
+
+### Cross-cutting AIMET-v2 limitation discovered
+
+`compute_encodings`'s per-quantizer `patch_attr(quantizer, "forward",
+_no_op)` mechanism doesn't survive in scenarios where:
+- A quantizer is reached via a custom QuantizationMixin wrapper class
+  whose forward calls `super().forward()` to delegate (Iteration 2),
+- A quantizer's `output_quantizers[0]` is set to None post-sim-build,
+  yet the post-cal forward still treats it as non-None (Iteration 3).
+
+Both could be AIMET v2 bugs. Worth a github issue if Specula pursues
+OLMoE further. For now, the workaround is "use Granite-MoE-shaped
+architectures."
+
 ## Open follow-ups (not done in this session)
 2. **AdaScale on this same model.** Imports work; behavior on
    GraniteMoe attention head untested.
@@ -379,3 +504,12 @@ Everything in this writeup is reproducible from:
   but diminishing returns suggest 64+ prompts (~hours) would only
   marginally help. **A1 is the locally-achievable champion** at this
   recipe; AdaScale is the next lever to try.
+- **2026-04-28** — Follow-up C did NOT close: OLMoE-1B-7B's per-expert
+  dispatch (vs Granite's fused experts and Qwen3-MoE's hit-filtered
+  iteration) is architecturally hostile to AIMET v2 PTQ in ways that
+  three layered workarounds couldn't fully overcome. Empty-tensor in
+  encoding analyzer (fixed); `@QuantizationMixin.implements(OlmoeMLP)`
+  disrupts inner-Linear quantizer-forward patching (worked around via
+  monkey-patch); post-cal forward still hits "QuantizeDequantize not
+  initialized" on disabled output_quantizers (root cause unclear, likely
+  AIMET v2 bug). **Verdict: avoid OLMoE family until upstream fix.**
