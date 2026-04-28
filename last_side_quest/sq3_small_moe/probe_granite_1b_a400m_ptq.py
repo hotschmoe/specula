@@ -32,10 +32,19 @@ import sys
 import time
 from pathlib import Path
 
+# Toggle: True overrides the default per-tensor weight quantizer on
+# fused GraniteMoeParallelExperts weights with per-(expert, out-channel)
+# granularity (scale shape (num_experts, out_size, 1)) — matches what
+# nn.Linear gets per expert if experts were unrolled. False keeps
+# AIMET's default scalar pick (one scale per fused 3D weight tensor).
+PER_EXPERT_PER_CHANNEL_WEIGHTS = True
+
 REPO = Path(__file__).resolve().parents[2]
 os.environ.setdefault("HF_HOME", str(REPO / "models" / ".hf_cache"))
 
-OUT_DIR = REPO / "last_side_quest" / "sq3_small_moe" / "out_granite_1b_a400m_basic_ptq"
+# Output dir suffix tracks the experiment configuration.
+_OUT_SUFFIX = "perch" if PER_EXPERT_PER_CHANNEL_WEIGHTS else "pertensor"
+OUT_DIR = REPO / "last_side_quest" / "sq3_small_moe" / f"out_granite_1b_a400m_basic_ptq_{_OUT_SUFFIX}"
 
 MODEL_ID = "ibm-granite/granite-3.0-1b-a400m-instruct"
 
@@ -163,6 +172,45 @@ def main() -> int:
     qlinear = post_counts.get("QuantizedLinear", 0)
     print(f"[step 4] QuantizedLinear modules in sim: {qlinear} "
           f"(was {pre_counts.get('Linear', 0)} nn.Linear pre-sim)")
+
+    # ---- 4b. (optional) override per-tensor weight quantizer on the
+    # fused GraniteMoeParallelExperts modules with per-(expert, out-channel).
+    # AIMET's auto-pick for a 3D weight tensor [num_experts, out, in] is
+    # per-tensor (one scale for the whole tensor). For parity with what
+    # nn.Linear gets per expert, we want scale shape (num_experts, out, 1).
+    if PER_EXPERT_PER_CHANNEL_WEIGHTS:
+        from aimet_torch.v2.quantization.affine import QuantizeDequantize
+        n_overridden = 0
+        total_scales_before = 0
+        total_scales_after = 0
+        for name, mod in sim.model.named_modules():
+            if type(mod).__name__ == "QuantizedGraniteMoeParallelExperts":
+                w = mod.weight
+                ne, out_size, _in_size = w.shape
+                # AIMET's default created a scalar quantizer (shape=()).
+                old = mod.param_quantizers["weight"]
+                old_numel = (old.scale.numel() if old is not None and
+                             hasattr(old, "scale") else 0)
+                new_q = QuantizeDequantize(
+                    shape=(ne, out_size, 1),
+                    qmin=-8, qmax=7,
+                    symmetric=True,
+                )
+                mod.param_quantizers["weight"] = new_q
+                total_scales_before += old_numel
+                total_scales_after += ne * out_size
+                n_overridden += 1
+                if n_overridden == 1:
+                    print(f"[step 4b] override sample: {name}")
+                    print(f"          weight shape = {tuple(w.shape)}")
+                    print(f"          old quant scale numel = {old_numel} "
+                          f"(per-tensor)")
+                    print(f"          new quant scale shape = "
+                          f"({ne}, {out_size}, 1) = {ne*out_size} scales")
+        print(f"[step 4b] overrode weight quantizer on {n_overridden} "
+              f"ParallelExperts modules.")
+        print(f"[step 4b] total weight scales: {total_scales_before} -> "
+              f"{total_scales_after} ({total_scales_after // max(total_scales_before, 1)}x more)")
 
     # Show one router-gate quantizer if we can find it.
     for name, mod in sim.model.named_modules():

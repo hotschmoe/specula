@@ -177,25 +177,65 @@ FFNs are stdlib `nn.Linear` so no custom expert adapter. Granite's
 class for which we wrote genuinely-new (not template-copied) code, and
 even that came from AIMET's emitted error template.
 
+## Follow-up A — per-expert per-output-channel weight quantization
+
+**Result: cos 0.656 → 0.712** (modest, +0.056). Encodings.json size
+**38 MB → 503 MB** (~13× larger). Calibration time **99.8 s → 70.2 s**
+(faster, likely because per-tensor min/max tracking was less efficient
+across a 16M-element flat tensor than per-channel min/max per output).
+
+| run | weight quant on ParallelExperts | scales / fused tensor | calib time | cos | argmax | encodings.json |
+|---|---|---:|---:|---:|---|---:|
+| A0 baseline | per-tensor (AIMET default) | 1 | 99.8 s | 0.656 | `<\|end_of_text\|>` | 38 MB |
+| **A1 per-(exp, out)** | shape (32, 1024, 1) per layer | 32,768 | **70.2 s** | **0.712** | ` ` (space) | 503 MB |
+
+Scales for first 1000 channels of `layers.0.block_sparse_moe.input_linear.weight`:
+min=0.00408, max=0.02525, mean=0.01042, stdev=0.00294. The 6× spread
+in per-channel scales confirms per-axis granularity captures real
+distribution variance that per-tensor averaged away.
+
+**Why the small jump.** Going from 1 scale → 32K scales per fused
+expert tensor reduces weight quantization error proportionally to the
+per-channel distribution variance. For Granite-MoE this is ~6×
+narrower per channel than per-tensor, so weight rounding error drops
+a few-fold. But the dominant remaining error sources are likely
+**activation quantization at a16** (uint16 isn't enough for outlier-
+channel activations in V/O / down-projections — the SQ2 V/O collapse
+story) and **calibration breadth** (4 prompts × 64 tokens is tiny).
+Those need SEQ_MSE / AdaScale / SmoothQuant, not weight granularity.
+
+**Probe configuration.** `probe_granite_1b_a400m_ptq.py` now has a
+top-of-file toggle `PER_EXPERT_PER_CHANNEL_WEIGHTS = True` (default).
+Set False to reproduce A0 baseline. Output dir suffix tracks which
+config ran. Override is post-sim-build (walking `sim.model` for
+`QuantizedGraniteMoeParallelExperts` instances and replacing
+`param_quantizers["weight"]`) — keeps the adapter file canonical.
+
+**Implication for production bundles.** Per-(expert, out-channel) is
+the right granularity for quality, but the 503 MB encodings.json is
+unwieldy. For deployment we'd want per-expert (scale shape
+`(num_experts, 1, 1)` = 32 scales/layer) as a middle ground, or
+per-row-block compression via `qairt-quantizer`'s row-grouping.
+Untested in this session.
+
 ## Open follow-ups (not done in this session)
 
-1. **Per-expert weight quantization on `GraniteMoeParallelExperts`.**
-   Set the `weight` param quantizer to per-axis-0 explicitly. Re-run.
-   Re-measure cos. (~15 LOC change, ~2 min wall-time per re-run.)
-2. **SEQ_MSE on this 1.3 B-MoE.** SQ2 left this open for Qwen3-0.6B
+1. **SEQ_MSE on this 1.3 B-MoE.** SQ2 left this open for Qwen3-0.6B
    "to see if cos -0.065 closes to ≥ 0.95"; the Granite case starts
-   from cos +0.656 and would likely close even faster. Estimated
-   wall-time ~30-90 minutes on Prism CPU.
-3. **AdaScale on this same model.** Imports work; behavior on
+   from cos +0.712 with per-channel weights and would likely close
+   even faster. Estimated wall-time ~30-90 minutes on Prism CPU.
+   Likely the real lever for closing to 0.95+.
+2. **AdaScale on this same model.** Imports work; behavior on
    GraniteMoe attention head untested.
-4. **The same AIMET adapter approach applied to Granite-3.0-3B-A800M
+3. **The same AIMET adapter approach applied to Granite-3.0-3B-A800M
    or OLMoE-1B-7B.** OLMoE has its own custom `OlmoeForCausalLM`
    with a different MLP shape; predicted ~80 LOC adapter.
-5. **Apply the per-tensor-vs-per-channel comparison to the
-   "MoE-quantizes-better-than-dense" hypothesis.** With the
-   per-expert weight quantizer fixed, the gap may widen further. Need
-   a comparable dense baseline at the same active-param count
-   (Qwen3-1.7B is the obvious one) for the comparison to be fair.
+4. **Apply the per-tensor-vs-per-channel comparison to the
+   "MoE-quantizes-better-than-dense" hypothesis.** Need a comparable
+   dense baseline at the same active-param count (Qwen3-1.7B is the
+   obvious one) for the comparison to be fair.
+5. **Per-expert (axis-0 only) variant** as a middle ground for
+   deployment. Untested.
 
 ## Feed back into the umbrella plan
 
@@ -239,3 +279,8 @@ Everything in this writeup is reproducible from:
   end-to-end on Prism CPU; cos 0.656 vs FP32 (vs SQ2's -0.065 on
   Qwen3-0.6B at same recipe). AIMET extensibility verified — three
   adapters in ~80 LOC unblocks any future non-blessed MoE.
+- **2026-04-28** — Follow-up A landed: per-(expert, out-channel)
+  weight quantization on `GraniteMoeParallelExperts` (override post-
+  sim-build). Cos 0.656 → 0.712 (+0.056). Confirms per-axis weights
+  help but aren't the dominant quality lever — activation a16 outliers
+  + calibration breadth are likely bigger. SEQ_MSE next.
