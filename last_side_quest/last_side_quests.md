@@ -379,6 +379,17 @@ Suggested sequence (each ≤ 1 session unless noted):
   engine that already exists; if it fails (HTP context-memory
   ceiling collapses past cl=512), it changes everything downstream.
 
+## Progress
+
+| SQ | status | one-line outcome |
+|---|---|---|
+| SQ1 | ⏳ pending | needs Qwen3-14B-Q4_K_M download (~9 GB, use `curl.exe -C -`) |
+| SQ2 | ⏳ pending | independent of NPU work |
+| SQ3 | ⏳ pending | downstream of SQ2 |
+| SQ4 | ⏳ blocked by SQ2+SQ3 | sizing verdict |
+| **SQ5** | ✅ **closed POSITIVE 2026-04-27** | engine generalized cl=512..4096; coding-asst contexts viable up through 4K at 20 t/s |
+| SQ6 | ⏳ pending | independent, anytime |
+
 ## Where this fits in the bigger picture
 
 Per `CLAUDE.md` priority path, the headline goal of the next phase

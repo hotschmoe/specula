@@ -1,5 +1,58 @@
 # specula -- current status
 
+Last updated: 2026-04-27 (session 24 — **last_side_quest umbrella
+opens; SQ5 long-context NPU closes POSITIVE.** New `last_side_quest/`
+workspace at repo root frames the final 6 deliverables before the
+Qwen3 → Qwen3.5/3.6 graduation: SQ1 heterogeneous-demo (NPU 4B draft
++ Qwen3-14B CPU target), SQ2 AIMET local venv survey, SQ3 smallest-
+Qwen-MoE for AIMET → NPU, SQ4 cloud-compute sizing decision, SQ5
+long-context NPU, SQ6 small-model server harness for opencode.
+
+Plan doc: `last_side_quest/last_side_quests.md`. User locked SQ1 target
+to Qwen3-14B-Q4_K_M, SQ2 first model to Qwen3-0.6B, starting order
+SQ5 first.
+
+**SQ5 result.** `npu_engine` generalized from hardcoded ctx=512 to
+take any of the bundle's 5 ctx tiers (512 / 1024 / 2048 / 3072 /
+4096) via a `--ctx-tier` flag — backward compat preserved. Pure-Python
+metadata smoke passes for all tiers; AC NPU benches landed at
+cl=1024/2048/4096.
+
+| ctx | AR1 step | AR1 TG (t/s) | AR128 PP (t/s) | warm-sidecar wall (640 toks) |
+|---:|---:|---:|---:|---:|
+| 512 (prior) | 36 ms | 27.81 | 2229 | (baseline) |
+| 1024 | 36 ms | 27.23 | — | — |
+| 2048 | 40 ms | 25.27 | 1629 | ~6 s |
+| 4096 | 47 ms | 20.28 | 1284 | ~9 s |
+
+(All AC, AR128 swap-mode for cl=2048/4096, pp=512 + tg=128.)
+
+Both phases scale sublinearly with ctx. Per-tier 4-partition load
+cost is FLAT at ~8 s — HTP context init dominates over past-KV size,
+so mmap/cache wins are unlikely. The cl=512 ~7-session ceiling
+worry does NOT apply to AR1-alone or AR128-alone at cl=4096; only
+AR1+AR128 coexistence remains untested at higher tiers (and
+irrelevant for swap-mode).
+
+Strategic answer for the user's "are we dead in the water for
+coding-assistant context" question: **no.** 4K context at 20 t/s
+decode is comfortably interactive for system-prompt + 1-3 file
+reads. >4K still routes to the cloud pipeline
+(`docs/one_pipeline_cloud_gpu.md`). SQ1's heterogeneous demo can
+ship at cl=2048 default (25 t/s) with cl=4096 available.
+
+Findings + per-tier analysis in
+`last_side_quest/sq5_long_context_npu/findings.md`. Engine edits in
+`npu_engine/{qualcomm_qwen3_4b_oracle,bench_qwen3_4b_ortqnn,sidecar}.py`.
+TODO #1 of `docs/npu_engine_todos.md` has shipped.
+
+Commits: 29853b5 (engine generalization), c9d8242 (AR1 sweep),
+5f30fba (AR128 swap-mode + SQ5 close-out).
+
+Next: pick from SQ1 (heterogeneous demo — needs Qwen3-14B-Q4_K_M
+download), SQ2 (AIMET venv on a fresh isolated env), or SQ6 (small-
+model server harness). User to direct.)
+
 Last updated: 2026-04-25 (session 23 — **NPU engine v0 sidequest
 lands. Our ORT-QNN stack now beats Genie at PP (+39%, 2229 vs 1598
 t/s) and TG (+19%, 27.81 vs 23.30 t/s) on the same Qwen3-4B w4a16

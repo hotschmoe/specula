@@ -3,45 +3,38 @@
 Followups from `docs/npu_engine_prefill_sidequest.md`. Ranked by
 impact-per-effort.
 
-## 1. CL=N wrappers for prompts > 512 tokens
+## 1. ~~CL=N wrappers for prompts > 512 tokens~~ — SHIPPED 2026-04-27
 
-**What.** Extend `build_part_cfg(metadata, ar=)` to take a `ctx`
-parameter selecting the cl tier. The bundle ships
-`{ar1,ar128}_cl{512,1024,2048,3072,4096}_*_of_4` graphs in the
-same `.bin` files we already use — no recompile needed.
+Landed in commits 29853b5 / c9d8242 / 5f30fba via SQ5 of the
+last_side_quest umbrella. `--ctx-tier` flag on bench + sidecar;
+`build_part_cfg(metadata, ar=, ctx=)`, `KVStore(ctx_len=)`,
+mask helpers, and `wrapper_path()` all parameterized.
 
-**Why.** CL=512 caps `pp_tokens + tg_tokens` at 511. Real agentic
-workloads run 2-8k token contexts (system prompt + tool outputs +
-chat history). Today the engine refuses anything larger. This is
-the blocker between "neat sidequest" and "actually usable".
+Per-tier AC measurements:
 
-**How.**
-- Add `ctx` param to `build_part_cfg(metadata, ar=1, ctx=512)`.
-- Update graph_name template to `{prefix}_ar{ar}_cl{ctx}_{N}_of_4`.
-- Past-len for AR128 changes per ctx tier: `past = ctx - AR128_BATCH`.
-  Already parameterized via `PAST_LEN_AR128_CL512`; generalize to
-  a per-ctx constant or computed at runtime.
-- AR1 past-len = `ctx - 1`. Same generalization.
-- KVStore needs `ctx_len` parameter; mask + RoPE helpers use it.
-- Wrappers gain a ctx suffix in the filename (e.g.
-  `oracle_part1_ar128_cl2048.wrapper.onnx`).
-- Bench + sidecar gain a `--ctx-tier` flag (default 512 for
-  parity with current behavior).
+| ctx | AR1 step | AR1 TG (t/s) | AR128 PP (t/s) |
+|---:|---:|---:|---:|
+| 512 | 36 ms | 27.81 | 2229 |
+| 1024 | 36 ms | 27.23 | — |
+| 2048 | 40 ms | 25.27 | 1629 |
+| 4096 | 47 ms | 20.28 | 1284 |
 
-**Effort.** ~1 session. Mostly mechanical. Risk: per-ctx tier
-might have different IO scales/offsets — verify by re-extracting
-from metadata.yaml per tier.
+Sublinear scaling on both phases; per-step penalty is dispatch-bound
+not weight-BW-bound (consistent with session 22's 4B-vs-7B finding).
+4-partition load cost is FLAT at ~8 s across all tiers — HTP
+context init dominates, mmap/cache won't help.
 
-**Validation.**
-- Standalone bench at pp=2048, tg=512 on cl2048 wrappers; match
-  current AR128 t/s within ~5%.
-- Phase-batched demo at the same size; speedup should hold.
+Memory-ceiling concern was misplaced: 4 simultaneous AR1 sessions
+fit cleanly at cl=4096; 4 simultaneous AR128 sessions also fit.
+AR1+AR128 coexistence at cl=2048+ untested but irrelevant for
+swap-mode (the only architecture in use).
 
-**Memory consequence.** Larger ctx tiers = bigger past-KV input
-shape = more HTP context memory per session. May further reduce
-the simultaneous-session ceiling. Re-test the swap-mode session
-budget at cl2048 / cl4096; might force one-session-per-binary
-which currently fits.
+Full writeup: `last_side_quest/sq5_long_context_npu/findings.md`.
+
+**Still deferred (not blocking SQ1):**
+- battery J/tok at cl=2048+
+- pp=2048+ realistic-fill test (needs longer prompt file or sidecar's
+  `synth_prompt` repeat ported into the bench)
 
 ## 2. Async prefill / decode interleave
 
