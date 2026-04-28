@@ -386,7 +386,7 @@ Suggested sequence (each ≤ 1 session unless noted):
 | **SQ1.a** | ✅ **Path A landed 2026-04-27** | NPU 4B + CPU 14B exchange tokens; JSON 100% accept, Python K=8 6/8 accept, Qwen3.6 incompat (sep memory) |
 | SQ1.b/c | ⏳ pending | Path B (real loop w/ rewind) or Path C (batched verify via prompt_logprobs) |
 | **SQ2** | ✅ **closed POSITIVE 2026-04-28** | aimet_torch v2 + SEQ_MSE/AdaScale work locally on Prism + WSL2 ARM64; aimet_onnx + qai_hub_models wrapper still cloud-only; basic-PTQ Qwen3-0.6B end-to-end demo lands negative-but-expected (cos -0.065 = V/O collapse repro) |
-| SQ3 | ⏳ pending | downstream of SQ2 — **UNBLOCKED** (AIMET 2.29 ships qwen3_moe quantsim hooks, smallest target Qwen3-30B-A3B 30 GB FP32 fits 48 GB DRAM) |
+| **SQ3-small** | ✅ **closed POSITIVE 2026-04-28** (Granite-MoE branch) | Granite-3.0-1B-A400M ran AIMET basic-PTQ end-to-end on Prism CPU; cos +0.656 vs FP32 (vs SQ2's -0.065 on Qwen3-0.6B dense — MoE quantizes better at same recipe). AIMET 2.29 has no granitemoe adapter; written in ~80 LOC following the qwen3 template. **Qwen3-30B-A3B remains cloud-only** (corrected math: 30B FP32 = 120 GB, BF16 = 60 GB — neither fits 48 GB DRAM). |
 | SQ4 | ⏳ partially fed by SQ2 | new prior: rent on demand, not by default — local AIMET unblocks design iteration on ≤4B; cloud only for production blessed bundles |
 | **SQ5** | ✅ **closed POSITIVE 2026-04-27** | engine generalized cl=512..4096; coding-asst contexts viable up through 4K at 20 t/s |
 | SQ6 | ⏳ pending | independent, anytime |
@@ -411,6 +411,21 @@ Suggested sequence (each ≤ 1 session unless noted):
   remain cloud-only. AIMET 2.29 ships first-class Qwen3-MoE
   quantsim hooks. This collapses SQ4's expected rental footprint
   from "every iteration" to "production blessed bundles only."
+- **AIMET extensibility to non-blessed MoE archs is cheap** (SQ3-small):
+  AIMET 2.29 ships adapters for {gemma3, internvl, llama, mistral,
+  phi3, qwen2/2_5/3/3_5/3_moe/3_vl}. Granite-MoE / OLMoE / DBRX /
+  JetMoE need user-written adapters, but the bar is **~80 LOC** of
+  mechanical `@QuantizationMixin.implements` code following the qwen3
+  template (ignore RoPE, custom RMSNorm, custom expert FFN). Verified
+  on granitemoe; `last_side_quest/sq3_small_moe/granite_moe_adapters.py`
+  is the canonical reference.
+- **MoE quantizes better than dense at the same w4a16 recipe**
+  (single data point, 2026-04-28): Granite-1B-A400M (1.3B/400M act)
+  cos +0.656 vs Qwen3-0.6B-dense cos -0.065, identical AIMET basic-PTQ
+  recipe. Hypothesis (untested): expert specialization narrows
+  per-expert weight distributions, so per-tensor quantization captures
+  them better. Needs 2-3 more (model, recipe) cells to confirm; if it
+  holds, it's a real publishable finding for the NPU-MoE story.
 
 ## Where this fits in the bigger picture
 
@@ -439,3 +454,10 @@ Qwen3.5/3.6.
   manylinux-only. Qwen3-0.6B basic PTQ ran end-to-end (254 s cal),
   reproduced V/O collapse (cos -0.065). Deliverable:
   `last_side_quest/sq2_aimet_local/aimet_local_survey.md`.
+- **2026-04-28** — SQ3 small-MoE branch closes positive on Granite-3.0-1B-A400M.
+  Qwen3-30B-A3B deferred to cloud (memory math corrected: doesn't fit
+  48 GB DRAM at FP32 or BF16). Granite-1B-A400M ran AIMET basic-PTQ
+  end-to-end on Prism CPU in 99.8 s; cos +0.656 vs FP32. Wrote
+  ~80 LOC `granite_moe_adapters.py` (3 classes) — first reference
+  implementation for extending AIMET to a non-blessed MoE arch.
+  Deliverable: `last_side_quest/sq3_small_moe/findings.md`.
