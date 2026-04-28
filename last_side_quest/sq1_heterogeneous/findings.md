@@ -144,13 +144,53 @@ projection, not measurement.)
 3. **Bigger target.** Qwen3-32B-Q4_K_M (~19 GB) would push the
    draft/target ratio to ~5:1 (vs current ~1.75:1) — that's
    where spec-decode math actually pays off at modest accept
-   rates.
+   rates. Qwen3 family only — see negative result below.
 4. **Re-convergence detection.** The prose run showed positions
    7-13 all match after a position-6 mismatch. If a future
    verifier could "skip ahead and re-engage" past a single
    mismatch, the effective accept rate climbs from 38% to 81%.
    That's a real research direction, possibly tractable for
    structured-output-heavy workloads.
+
+## Negative result: Qwen3.6 stretch target — tokenizer incompat
+
+**2026-04-27 probe.** Tried to use `Qwen3.6-35B-A3B-Q4_K_M.gguf`
+as the SQ1 stretch target, expecting the bigger active-parameter
+gap to make spec-decode math more favorable. It's blocked at the
+tokenizer level.
+
+`probe_tokenizer_match.py` (committed alongside this doc) sent
+6 probe strings to llama-server's `/tokenize` and compared
+against the Qualcomm Qwen3-4B bundle's `tokenizer.json` output.
+**All 6 probes failed at index 0.** Concrete divergences:
+
+| string | Qwen3 (bundle) head | Qwen3.6 (35B-A3B) head |
+|---|---|---|
+| "Hello" | 9707 | 9419 |
+| "def fibonacci" | [750, 75698, 1445, ...] (29 IDs) | [727, 73111, 1393, ...] (31 IDs) |
+| `<\|im_start\|>` | 151644 | 248045 |
+| `<\|im_end\|>` | 151645 | 248046 |
+
+Length-of-encoding also differs (29 vs 31 tokens for the same
+Python snippet), so it's not a simple offset shift — Qwen3.6
+appears to have an **expanded vocabulary** with new tokens
+inserted, possibly for safety markers, multilingual coverage, or
+both.
+
+**Implication.** Any heterogeneous-decode architecture using the
+Qwen3 NPU bundle as draft REQUIRES a Qwen3-family target. Crossing
+to Qwen3.6 / Qwen3.5 (if also vocab-shifted) / Gemma4 needs
+either a translator layer (out of scope) or rebuilding the NPU
+bundle for the target's vocabulary. This is a real constraint on
+SQ1's "graduate to Qwen3.5/3.6" pathway tracked in
+`docs/roadmap.md`. Saved as memory
+`reference_qwen_tokenizer_generations.md`.
+
+For SQ1 going forward: stretch targets must come from the Qwen3
+family — Qwen3-32B-Q4_K_M is the largest dense option (would
+need download), Qwen3-30B-A3B is the MoE option (~18 GB,
+not on disk). The Qwen3-14B-Q4_K_M Path A run remains the only
+viable demo target on disk today.
 
 ## Headline result — Path A run on a fixed Python coding prompt
 
