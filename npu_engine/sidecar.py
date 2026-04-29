@@ -580,6 +580,121 @@ def emit(obj):
     sys.stdout.flush()
 
 
+def serve_chat_stream_request(state, req_id, prompt_ids, max_new_tokens,
+                              eos_ids, stop_token_seqs,
+                              ar128_min_tokens, force_ar128):
+    """Streaming variant of serve_chat_request. Same prefill phase, but
+    after each decoded token emits a {"event":"token","token_id":T} line
+    via `emit`. Concludes with {"event":"chat_done", ...summary...}. The
+    caller (HTTP wrapper) reads lines until it sees the chat_done event.
+
+    Returns nothing (`emit`s directly). The serve loop checks the return
+    value to decide whether to also emit a final response — this op
+    handles its own emission.
+    """
+    if len(prompt_ids) + max_new_tokens > state.past_len:
+        emit({"id": req_id, "event": "chat_done", "ok": False,
+              "error": f"prompt+max_new = {len(prompt_ids) + max_new_tokens} > "
+                       f"CL-{state.ctx_len} cap {state.past_len}"})
+        return
+
+    use_ar128 = (
+        force_ar128 or (
+            len(prompt_ids) >= AR128_BATCH
+            and len(prompt_ids) >= ar128_min_tokens
+        )
+    )
+    n_ar128_calls = (len(prompt_ids) // AR128_BATCH) if use_ar128 else 0
+    n_ar1_tail = len(prompt_ids) - n_ar128_calls * AR128_BATCH
+    swap_total_s = 0.0
+    pp_ar128_compute_s = 0.0
+    pp_ar1_compute_s = 0.0
+    last_logits = None
+    kv = KVStore(NUM_LAYERS, with_ar128_input=use_ar128, ctx_len=state.ctx_len)
+
+    if use_ar128:
+        swap_s, _ = state.ensure_mode("ar128")
+        swap_total_s += swap_s
+        _maybe_warmup(state, prompt_ids)
+        kv = KVStore(NUM_LAYERS, with_ar128_input=True, ctx_len=state.ctx_len)
+        t = time.perf_counter()
+        p = 0
+        for _ in range(n_ar128_calls):
+            batch = list(prompt_ids[p:p + AR128_BATCH])
+            last_logits, _ = _step_ar128(
+                state.sessions, state.bindings, state.out_bufs,
+                kv, p, batch, state.scales_ar128,
+            )
+            p += AR128_BATCH
+        pp_ar128_compute_s = time.perf_counter() - t
+
+    swap_s, _ = state.ensure_mode("ar1")
+    swap_total_s += swap_s
+    _maybe_warmup(state, prompt_ids)
+
+    if not use_ar128 or n_ar1_tail > 0:
+        p = n_ar128_calls * AR128_BATCH
+        t = time.perf_counter()
+        while p < len(prompt_ids):
+            last_logits, _ = _step(
+                state.sessions, state.bindings, state.out_bufs,
+                kv, p, prompt_ids[p], state.scales_ar1,
+            )
+            p += 1
+        pp_ar1_compute_s = time.perf_counter() - t
+
+    pp_compute_s = pp_ar128_compute_s + pp_ar1_compute_s
+    pp_tps = len(prompt_ids) / pp_compute_s if pp_compute_s > 0 else 0.0
+
+    eos_set = set(eos_ids or [])
+    stop_seqs = [list(s) for s in (stop_token_seqs or []) if s]
+    generated: list[int] = []
+    next_token = int(np.argmax(last_logits))
+    stop_reason = "max_new_tokens"
+
+    t = time.perf_counter()
+    for i in range(max_new_tokens):
+        position = len(prompt_ids) + i
+        logits, _ = _step(
+            state.sessions, state.bindings, state.out_bufs,
+            kv, position, next_token, state.scales_ar1,
+        )
+        generated.append(next_token)
+        # Emit token event (excluding final EOS — http_server strips it
+        # from the visible text anyway, and clients prefer the EOS not
+        # to leak into the SSE delta stream).
+        if next_token not in eos_set:
+            emit({"id": req_id, "event": "token", "token_id": next_token})
+
+        if next_token in eos_set:
+            stop_reason = "eos"
+            break
+        for seq in stop_seqs:
+            if len(generated) >= len(seq) and generated[-len(seq):] == seq:
+                stop_reason = "stop"
+                break
+        if stop_reason == "stop":
+            break
+
+        next_token = int(np.argmax(logits))
+    tg_compute_s = time.perf_counter() - t
+    tg_tps = len(generated) / tg_compute_s if tg_compute_s > 0 else 0.0
+
+    emit({
+        "id": req_id,
+        "event": "chat_done",
+        "ok": True,
+        "stop_reason": stop_reason,
+        "n_prompt": len(prompt_ids),
+        "n_generated": len(generated),
+        "swap_s": swap_total_s,
+        "pp_compute_s": pp_compute_s,
+        "tg_compute_s": tg_compute_s,
+        "pp_tps": pp_tps,
+        "tg_tps": tg_tps,
+    })
+
+
 def _load_engine(args):
     """Build EngineState and warm to the args.start_mode. Returns
     (state, base_tokens, startup_s, per_part_s)."""
@@ -657,6 +772,23 @@ def cmd_serve(args):
                 ar128_min_tokens=int(req.get("ar128_min_tokens", args.ar128_min_tokens)),
                 force_ar128=bool(req.get("force_ar128", False)),
             )
+        elif op == "chat_stream":
+            # Streaming variant: emits one {event:"token", token_id} per
+            # decoded token, then a final {event:"chat_done", ...} summary.
+            # Caller is responsible for reading lines until chat_done.
+            prompt_ids = list(req["prompt_ids"])
+            serve_chat_stream_request(
+                state, req_id=req.get("id"),
+                prompt_ids=prompt_ids,
+                max_new_tokens=int(req["max_new_tokens"]),
+                eos_ids=req.get("eos_ids", []),
+                stop_token_seqs=req.get("stop_token_seqs", []),
+                ar128_min_tokens=int(req.get("ar128_min_tokens", args.ar128_min_tokens)),
+                force_ar128=bool(req.get("force_ar128", False)),
+            )
+            # serve_chat_stream_request emits its own chat_done; skip the
+            # generic emit at the bottom of the loop.
+            continue
         else:
             emit({"id": req.get("id"), "ok": False, "error": f"unknown op: {op}"})
             continue

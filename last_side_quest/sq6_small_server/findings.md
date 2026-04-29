@@ -265,3 +265,14 @@ sessions need stateful streams.
   quantified: 70-token prompt re-prefill = 2.93 s; 1500-token
   conversation extrapolates to ~62 s per turn — headline argument
   for Phase B.
+- **2026-04-28** — Phase A.5 lands. SSE streaming via OpenAI's
+  standard `text/event-stream` protocol. New sidecar op
+  `chat_stream` emits one `{event:"token", token_id}` line per
+  decoded token; HTTP server's `_do_chat_streaming` async
+  generator decodes the rolling token buffer and yields incremental
+  text deltas (BPE-correct: re-decodes whole buffer each step so
+  multi-byte UTF-8 chars split across tokens render correctly).
+  Final chunk has `finish_reason` set; terminator is `data: [DONE]`.
+  Smoke-tested with `curl -N` against counting / coding prompts —
+  deltas flow live, `finish_reason` populates correctly on `length`
+  cap, `[DONE]` always closes the stream.

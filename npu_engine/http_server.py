@@ -37,7 +37,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from tokenizers import Tokenizer
 
@@ -138,6 +138,25 @@ class SidecarClient:
         if not rsp_line:
             raise RuntimeError("sidecar closed stdout mid-request")
         return json.loads(rsp_line.strip())
+
+    async def stream_request(self, op: str, **kwargs):
+        """Async generator yielding event dicts until a `chat_done` event
+        arrives. Caller is responsible for holding self.lock."""
+        if self.proc is None or self.proc.poll() is not None:
+            raise RuntimeError("sidecar is not running")
+        req = {"op": op, "id": kwargs.pop("id", "http-stream"), **kwargs}
+        loop = asyncio.get_running_loop()
+        line = json.dumps(req) + "\n"
+        await loop.run_in_executor(None, self.proc.stdin.write, line)
+        await loop.run_in_executor(None, self.proc.stdin.flush)
+        while True:
+            rsp_line = await loop.run_in_executor(None, self.proc.stdout.readline)
+            if not rsp_line:
+                raise RuntimeError("sidecar closed stdout mid-stream")
+            evt = json.loads(rsp_line.strip())
+            yield evt
+            if evt.get("event") == "chat_done":
+                return
 
     async def shutdown(self) -> None:
         if self.proc is None or self.proc.poll() is not None:
@@ -295,12 +314,81 @@ def _strip_trailing_eos(token_ids: list[int]) -> list[int]:
     return token_ids
 
 
+_OPENAI_FINISH = {"eos": "stop", "stop": "stop", "max_new_tokens": "length"}
+
+
+async def _do_chat_streaming(prompt_ids, max_new, stop_seqs, model: str):
+    """Async generator yielding SSE-formatted lines for /v1/chat/completions.
+
+    OpenAI's streaming protocol: each chunk is `data: {json}\\n\\n`,
+    final marker is `data: [DONE]\\n\\n`. The first chunk's delta carries
+    role=assistant; subsequent chunks carry incremental content; the
+    final chunk carries finish_reason and an empty delta.
+
+    Token-to-text decoding is incremental: we decode the whole
+    accumulated buffer each step and emit only the suffix that's
+    grown. This is the canonical way to handle BPE tokens whose
+    decoded form depends on neighbours (multi-byte UTF-8 split
+    across tokens, leading-space markers, etc.).
+    """
+    created = int(time.time())
+    completion_id = f"chatcmpl-npu-{created}"
+
+    def chunk(delta: dict, finish: str | None = None) -> str:
+        payload = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": delta,
+                "finish_reason": finish,
+            }],
+        }
+        return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+
+    yield chunk({"role": "assistant", "content": ""})
+
+    buffer_ids: list[int] = []
+    emitted_text = ""
+
+    async with sidecar.lock:
+        async for evt in sidecar.stream_request(
+            "chat_stream",
+            prompt_ids=prompt_ids,
+            max_new_tokens=max_new,
+            eos_ids=DEFAULT_EOS_IDS,
+            stop_token_seqs=stop_seqs,
+            force_ar128=(len(prompt_ids) >= 128),
+        ):
+            if evt.get("event") == "token":
+                buffer_ids.append(evt["token_id"])
+                # Decode-the-whole-buffer is O(N) per step but N is
+                # small (≤ max_new_tokens), and BPE decoding is fast.
+                # Robust to multi-byte UTF-8 chars split across tokens.
+                full_text = tokenizer.decode(buffer_ids)
+                if len(full_text) > len(emitted_text):
+                    delta_text = full_text[len(emitted_text):]
+                    yield chunk({"content": delta_text})
+                    emitted_text = full_text
+            elif evt.get("event") == "chat_done":
+                if not evt.get("ok"):
+                    # Sidecar-side error mid-stream
+                    yield chunk({}, finish="stop")
+                    yield "data: [DONE]\n\n"
+                    return
+                stop_reason = evt.get("stop_reason", "stop")
+                finish = _OPENAI_FINISH.get(stop_reason, "stop")
+                yield chunk({}, finish=finish)
+                yield "data: [DONE]\n\n"
+                return
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(req: ChatCompletionRequest):
     if sidecar is None or tokenizer is None:
         raise HTTPException(503, detail="server not initialized")
-    if req.stream:
-        raise HTTPException(501, detail="streaming arrives in Phase A.5")
     if req.n and req.n != 1:
         raise HTTPException(400, detail="n != 1 not supported (greedy)")
 
@@ -312,10 +400,17 @@ async def chat_completions(req: ChatCompletionRequest):
     max_new = req.max_tokens or DEFAULT_MAX_NEW_TOKENS
     stop_seqs = _resolve_stop_token_seqs(req.stop)
 
-    # Single-tenant: hold the lock for the entire request.
     if sidecar.lock.locked():
         raise HTTPException(503, detail="busy — single-tenant NPU server, retry after current request")
 
+    if req.stream:
+        return StreamingResponse(
+            _do_chat_streaming(prompt_ids, max_new, stop_seqs, MODEL_NAME),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # Non-streaming path
     async with sidecar.lock:
         t0 = time.perf_counter()
         rsp = await sidecar.request(
@@ -332,16 +427,10 @@ async def chat_completions(req: ChatCompletionRequest):
         raise HTTPException(500, detail=f"sidecar: {rsp.get('error')}")
 
     raw_ids: list[int] = rsp["generated_ids"]
-    # Strip trailing EOS so completion text is clean
     visible_ids = _strip_trailing_eos(raw_ids)
     text = tokenizer.decode(visible_ids)
 
-    finish_reason = {
-        "eos": "stop",
-        "stop": "stop",
-        "max_new_tokens": "length",
-    }.get(rsp.get("stop_reason"), "stop")
-
+    finish_reason = _OPENAI_FINISH.get(rsp.get("stop_reason"), "stop")
     created = int(time.time())
     response = {
         "id": f"chatcmpl-npu-{created}",
@@ -358,7 +447,6 @@ async def chat_completions(req: ChatCompletionRequest):
             "completion_tokens": rsp.get("n_generated", len(raw_ids)),
             "total_tokens": rsp.get("n_prompt", len(prompt_ids)) + rsp.get("n_generated", len(raw_ids)),
         },
-        # Non-standard but useful for the SQ6 writeup
         "specula_npu": {
             "wall_s": wall_s,
             "swap_s": rsp.get("swap_s"),
