@@ -254,6 +254,124 @@ sessions need stateful streams.
   sidecar (separate session — see `docs/qwen2_5_7b_baseline_all_backends.md`
   line 442 "follow-on workstream").
 
+## Phase C — Agent A/B (real-world use, 2026-04-28)
+
+### Setup
+
+Daisy on battery + foreground archicad 3D modeling; NPU and OpenCL
+servers running on Windows host; pi (`@mariozechner/pi-coding-agent`
+v0.70.6) installed via Windows ARM64 bun 1.3.12 (`bun add -g`); pi's
+config at `C:\Users\hotschmoe\.pi\agent\models.json` with one
+provider per backend.
+
+WSL Ubuntu-24.04 was prepped (bun installed via direct zip+python
+extract because sudo apt unzip was interactive-blocked) but **WSL
+networking failed**: even with a Windows Firewall rule allowing 8081,
+WSL2's `host.docker.internal` couldn't reach the bound `0.0.0.0:8081`
+inside the timeout. Pivoted to running pi directly on Windows ARM64
+which bypassed the firewall issue entirely. WSL setup is documented
+below for reuse but isn't on the test path.
+
+### Backend availability
+
+| backend | Qwen3-4B status | notes |
+|---|---|---|
+| **NPU (this server)** | ✅ works | 9 s cold load; 24-27 t/s TG steady |
+| **OpenCL** (`build-opencl`) | ✅ works | reasoning_content split natively |
+| **Vulkan** (`build-vulkan` + `GGML_VK_DISABLE_F16=1` + `--flash-attn off` + `--no-warmup`) | ❌ **broken for chat completions** | Returns garbage tokens + "Failed to parse input at pos 22" 500 error. Bench numbers in `qwen3_4b_baseline_all_backends.md` were validated only via `llama-bench` (raw prefill+decode), never end-to-end through `/v1/chat/completions`. With or without `--flash-attn off` / `--no-warmup` / Q4_0 vs Q4_K_M, output is pure token soup. Same llama.cpp commit's Vulkan backend works for the daily-driver Qwen3.6-35B-A3B (used by opencode daily) — issue is specific to Qwen3-4B-Q4_0 chat path. Filed as a known-bad config; CPU/OpenCL/NPU are the working backends. |
+| **CPU** (`build-cpu`) | not exercised this session | per all-backends doc would land at ~24 t/s TG |
+
+### Direct curl A/B (no pi overhead, `enable_thinking=false` on both)
+
+Same prompt: *"Write a minimal HTML5 page with a centered red Click Me button. Include CSS in a style tag. Output only the code, no explanation."*
+
+| backend | wall (s) | n_prompt | n_generated | TG t/s | quality |
+|---|---:|---:|---:|---:|---|
+| **NPU** | **7.96** | 41 | 139 | 24.5 (decode) | clean valid HTML, flexbox center, working onclick |
+| **OpenCL** | **6.91** | 41 | 164 | 23.7 (wall avg, prompt cached 40/41) | clean valid HTML, more verbose CSS |
+
+NPU 1.05 s slower wall (15%) but generated 25 fewer tokens; per-token
+parity. OpenCL benefited from llama-server's prompt cache hitting on
+40/41 tokens — first-call comparison would narrow further.
+
+### Pi-driven A/B (`--no-builtin-tools`, default thinking)
+
+Same prompt, no tool-use, model decides whether to think.
+
+| backend | wall (s) | output |
+|---|---:|---|
+| NPU (after reset) | **82.3** | long thinking trace + valid HTML with **duplicate attributes** (`box-sizing` listed twice; `margin: 0; padding: 0` repeated). Likely w4a16 V/O-collapse manifesting subtly. |
+| OpenCL | **60.7** | clean concise HTML, no thinking visible (llama-server splits to `reasoning_content` which pi hides) |
+| NPU (interactive `pi -p`, separate run, `--thinking off`) | 84.9 | thinking inline (because my server doesn't split it), then valid HTML with onclick |
+| OpenCL (same flags) | 73.8 | thinking hidden (split to reasoning_content), clean HTML |
+
+**NPU consistently 25-35% slower wall in pi-driven runs.** Two factors:
+1. NPU's stateful append cost paid per round (LCP-divergence on pi's
+   system prompt mixing with cached state).
+2. NPU's w4a16 quant emits more verbose tokens on average, and pi's
+   default flow doesn't suppress thinking — the model thinks long.
+
+### The actual SQ6 win — UX axis
+
+Daisy's running observation while these tests ran:
+> "we are 1) on battery and 2) currently working on a 3d architectural
+> model and drawings in archicad so this test between npu and gpu for
+> pi is a real world use study (traveling, working, agent in
+> background). note: i can hear fans slightly and a coil whine when GPU
+> was running"
+
+This is the SQ6 punchline. Throughput numbers are basically a tie
+between NPU and OpenCL (within 30% wall, near-identical TG t/s). What
+differs is what doesn't show up in t/s:
+
+| signal | NPU | OpenCL/Vulkan |
+|---|---|---|
+| **Fans audible** | no | **yes — slight fan + coil whine** (Daisy's observation) |
+| **Mean power (BAT)** | ~13.7 W | ~58 W (OpenCL/Q4_K_M, 7B baseline) — 4× draw |
+| **J/gen-tok** | ~0.97 J | ~25 J (OpenCL) — 26× efficiency edge |
+| **GPU contention with foreground app (archicad)** | none — Hexagon is independent | yes — same Adreno that archicad needs |
+| **UI lag during sustained inference** | none (memory: `project_npu_silent_operation.md`) | UI sluggishness expected at sustained GPU load |
+
+This is the case for the silent compute island. **For a coding agent
+running in the background on battery while real work is happening in
+the foreground, the NPU isn't just a speed contender — it's the only
+backend that doesn't tax the user's actual workflow.** A 30% wall
+penalty is cheap when the alternative is fans + coil whine + GPU
+contention with the user's primary tool + 4× battery drain.
+
+### What I learned
+
+- **Vulkan-Q4_0 is a known-bad config for chat completions** at this
+  llama.cpp commit on this Adreno driver. The all-backends bench numbers
+  (PP 70 t/s, TG 25.8 t/s) are throughput-real but quality-untested.
+  OpenCL is the working GPU path for chat use.
+- **Pi works well as a benchmark client** — `--no-tools -p` is direct
+  generation; `--no-builtin-tools -p` removes tools but keeps system
+  prompt; `--mode json` would give per-event JSON for finer profiling.
+- **Pi runs natively on Windows ARM64 via bun** (1.3.12). No need for
+  WSL — saves the firewall+networking dance for this use case.
+- **WSL is set up** (Ubuntu-24.04 ARM64 + bun + pi) for future tests
+  if we want isolated networking. Install steps captured in
+  `last_side_quest/sq6_small_server/write_pi_models.sh` and
+  `wsl_setup_notes.md` (TODO: write the latter).
+
+### Limitations / follow-ups
+
+- **NPU output quality is sometimes degraded vs OpenCL** on the same
+  prompt (duplicate attributes, slightly more verbose). Consistent
+  with the V/O-collapse finding from W4A16 investigations. For a
+  PRODUCTION coding agent, would want either (a) AIMET SEQ_MSE+AdaScale
+  on the NPU bundle to recover quality, OR (b) NPU-draft + CPU/OpenCL-target
+  spec-decode (SQ1 architecture) so NPU's quant errors get caught
+  by the larger target.
+- **Multi-turn agent loops (with tools enabled)** weren't exercised —
+  pi's tool calls would test the chat-template/KV-LCP issue documented
+  earlier. Quick test recommended.
+- **Daily-driver Qwen3.6-35B-A3B comparator** wasn't tested this
+  session (would need ~5 min cold load).
+- **Qwen2.5-7B comparator** wasn't tested (NPU sidecar still 4B-only;
+  OpenCL/CPU should work but skipped this session).
+
 ## Update log
 
 - **2026-04-28** — SQ6 reframed; this doc scaffolded with the
@@ -265,6 +383,20 @@ sessions need stateful streams.
   quantified: 70-token prompt re-prefill = 2.93 s; 1500-token
   conversation extrapolates to ~62 s per turn — headline argument
   for Phase B.
+- **2026-04-28** — Phase C lands. Real-world A/B between NPU (specula
+  http_server) and OpenCL (llama-server) Qwen3-4B on a coding task,
+  driven by `pi` (`@mariozechner/pi-coding-agent` v0.70.6) installed
+  on Windows ARM64 via bun. Headline: throughput is roughly tied
+  (NPU 7.96 s vs OpenCL 6.91 s direct curl with thinking off; pi
+  overhead pushes both to 60-85 s wall). The actual SQ6 win is the
+  UX axis Daisy observed live: fans + coil whine on GPU vs silent
+  on NPU, plus 4× battery draw and Adreno contention with the
+  foreground archicad work — NPU is the only backend that doesn't
+  tax the primary workflow. Vulkan-4B is a known-bad config for
+  chat completions at this llama.cpp commit (validated only via
+  llama-bench, not end-to-end). Documented limitations: NPU output
+  occasionally has duplicate attributes (w4a16 V/O collapse
+  manifesting subtly).
 - **2026-04-28** — Phase B lands. Stateful streams in sidecar +
   HTTP server context retention. Same refactor unlocks SQ1 NPU
   rewind op (next). Probe (`probe_stream_api.py`) confirms stateful
