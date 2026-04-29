@@ -43,22 +43,38 @@ from tokenizers import Tokenizer
 
 _HERE = Path(__file__).resolve().parent
 REPO_ROOT = _HERE.parent
-BUNDLE_DIR = (
-    REPO_ROOT / "models" / "qualcomm-qwen3-4b-ref"
-    / "qwen3_4b-genie-w4a16-qualcomm_snapdragon_x2_elite"
-)
+
+# Model selection via NPU_MODEL env var (uvicorn doesn't forward argv to
+# the app module). Supported: 'qwen3-4b' (default) or 'qwen2_5-7b'.
+NPU_MODEL = os.environ.get("NPU_MODEL", "qwen3-4b")
+if NPU_MODEL == "qwen3-4b":
+    BUNDLE_DIR = (
+        REPO_ROOT / "models" / "qualcomm-qwen3-4b-ref"
+        / "qwen3_4b-genie-w4a16-qualcomm_snapdragon_x2_elite"
+    )
+    MODEL_NAME = "qwen3-4b-npu"
+    DEFAULT_CTX_TIER = 2048
+elif NPU_MODEL == "qwen2_5-7b":
+    BUNDLE_DIR = (
+        REPO_ROOT / "models" / "qualcomm-qwen2_5-7b-ref"
+        / "qwen2_5_7b_instruct-genie-w8a16-qualcomm_snapdragon_x2_elite"
+    )
+    MODEL_NAME = "qwen2_5-7b-npu"
+    DEFAULT_CTX_TIER = 4096  # 7B bundle ships only this tier
+else:
+    raise RuntimeError(f"NPU_MODEL={NPU_MODEL!r} not supported "
+                       "(use 'qwen3-4b' or 'qwen2_5-7b')")
 TOKENIZER_PATH = BUNDLE_DIR / "tokenizer.json"
 
-# Qwen3 ChatML special tokens. Stable across all Qwen3-* tokenizers
-# (verified via probe_tokenizer_match.py for Qwen3-4B). Hardcoded so
-# we don't have to round-trip through tokenizer.token_to_id() for
-# every request.
+# Qwen ChatML special tokens. Same IDs across Qwen3-4B and Qwen2.5-7B
+# (verified: Qwen2.5 genie_config.json reports bos=151643 / eos=151645,
+# matching Qwen3-4B). Qwen3.6 is the breakaway generation — see memory
+# `reference_qwen_tokenizer_generations.md`. Don't add Qwen3.6 here
+# without re-running probe_tokenizer_match.
 IM_START_ID = 151644
 IM_END_ID = 151645
 ENDOFTEXT_ID = 151643
 DEFAULT_EOS_IDS = [IM_END_ID, ENDOFTEXT_ID]
-
-MODEL_NAME = "qwen3-4b-npu"
 
 # Phase A re-prefills every turn. We cap max_tokens conservatively so a
 # 4K-ctx run can fit ~3.5K prompt + ~512 generated. Override via request.
@@ -80,8 +96,9 @@ class SidecarClient:
     expected to be inside the lock — see `chat_completion`.
     """
 
-    def __init__(self, ctx_tier: int = 2048):
-        self.ctx_tier = ctx_tier
+    def __init__(self, ctx_tier: int | None = None, model: str = "qwen3-4b"):
+        self.ctx_tier = ctx_tier if ctx_tier is not None else DEFAULT_CTX_TIER
+        self.model = model
         self.proc: subprocess.Popen | None = None
         self.startup_info: dict | None = None
         self.lock = asyncio.Lock()
@@ -89,6 +106,7 @@ class SidecarClient:
     async def start(self) -> None:
         cmd = [
             sys.executable, str(_HERE / "sidecar.py"),
+            "--model", self.model,
             "--mode", "serve",
             "--ctx-tier", str(self.ctx_tier),
             "--start-mode", "ar1",
@@ -387,9 +405,13 @@ async def lifespan(app: FastAPI):
     if not TOKENIZER_PATH.exists():
         raise RuntimeError(f"bundle tokenizer not found: {TOKENIZER_PATH}")
     tokenizer = Tokenizer.from_file(str(TOKENIZER_PATH))
-    sidecar = SidecarClient(ctx_tier=int(os.environ.get("NPU_CTX_TIER", "2048")))
+    sidecar = SidecarClient(
+        ctx_tier=int(os.environ.get("NPU_CTX_TIER", str(DEFAULT_CTX_TIER))),
+        model=NPU_MODEL,
+    )
     conv_state = ConversationState(stream_id="http")
-    print(f"[http_server] starting NPU sidecar (ctx_tier={sidecar.ctx_tier})...",
+    print(f"[http_server] starting NPU sidecar (model={sidecar.model}, "
+          f"ctx_tier={sidecar.ctx_tier})...",
           flush=True)
     t0 = time.perf_counter()
     await sidecar.start()

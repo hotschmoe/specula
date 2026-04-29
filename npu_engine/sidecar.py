@@ -61,37 +61,77 @@ from tokenizers import Tokenizer
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
-from qualcomm_qwen3_4b_oracle import (  # noqa: E402
-    AR128_BATCH,
-    BUNDLE_DIR,
-    CTX_LEN,
-    NUM_LAYERS,
-    KVStore,
-    build_part_cfg,
-    build_wrapper,
-    dequant_uint16,
-    load_session,
-    wrapper_path,
-)
-from bench_qwen3_4b_ortqnn import (  # noqa: E402
-    CTX_TIERS,
-    _step,
-    _step_ar128,
-    make_bound_chain,
-    PROMPT_PATH,
-)
+# Model module pluggability — the sidecar is single-tenant per process,
+# so a `--model` flag selects which oracle/chain modules to bind to the
+# names used throughout this file. Both modules expose the same surface
+# (BUNDLE_DIR, NUM_LAYERS, NUM_PARTS, KVStore, load_parts_cfg, ...).
+import qualcomm_qwen3_4b_oracle as _model_4b  # noqa: E402
+import qualcomm_qwen2_5_7b_oracle as _model_7b  # noqa: E402
+import bench_qwen3_4b_ortqnn as _chain_4b  # noqa: E402
+import bench_qwen2_5_7b_ortqnn as _chain_7b  # noqa: E402
+
+# Default to 4B for backward-compat with existing callers / scripts.
+_model = _model_4b
+_chain = _chain_4b
+
+
+def _bind_model(model_name: str) -> None:
+    """Rebind module-level names from the selected model module pair.
+    Call once before any sidecar function that touches the NPU.
+    Functions defined in this file resolve these names via globals at
+    call time, so rebinding here propagates through the whole module."""
+    global _model, _chain
+    global AR128_BATCH, BUNDLE_DIR, CTX_LEN, NUM_LAYERS, NUM_PARTS, KVStore
+    global BACKEND_PATH, build_wrapper, dequant_uint16, load_session
+    global load_parts_cfg, wrapper_path
+    global CTX_TIERS, _step, _step_ar128, make_bound_chain, PROMPT_PATH
+    if model_name == "qwen2_5-7b":
+        _model = _model_7b
+        _chain = _chain_7b
+    elif model_name == "qwen3-4b":
+        _model = _model_4b
+        _chain = _chain_4b
+    else:
+        raise ValueError(f"unknown --model {model_name!r}; "
+                         "expected 'qwen3-4b' or 'qwen2_5-7b'")
+    AR128_BATCH = _model.AR128_BATCH
+    BUNDLE_DIR = _model.BUNDLE_DIR
+    CTX_LEN = _model.CTX_LEN
+    NUM_LAYERS = _model.NUM_LAYERS
+    NUM_PARTS = _model.NUM_PARTS
+    KVStore = _model.KVStore
+    BACKEND_PATH = _model.BACKEND_PATH
+    build_wrapper = _model.build_wrapper
+    dequant_uint16 = _model.dequant_uint16
+    load_session = _model.load_session
+    load_parts_cfg = _model.load_parts_cfg
+    wrapper_path = _model.wrapper_path
+    CTX_TIERS = _chain.CTX_TIERS
+    _step = _chain._step
+    _step_ar128 = _chain._step_ar128
+    make_bound_chain = _chain.make_bound_chain
+    PROMPT_PATH = _chain.PROMPT_PATH
+
+
+# Initialize globals from the default model so module-level functions
+# referencing these names resolve correctly even if main() runs --model
+# qwen3-4b (the default).
+_bind_model("qwen3-4b")
 
 
 REPO_ROOT = _HERE.parent
 
 
 def _scales_tuple(part_cfg):
-    """cos/mask/logits scale+offset extracted from a parts_cfg dict."""
+    """cos/mask/logits scale+offset extracted from a parts_cfg dict.
+    cos/mask come from part 2 (the first transformer partition — same
+    in 4B and 7B). logits come from the last partition, which differs
+    by model (4B: part 4, 7B: part 6) — read NUM_PARTS at call time."""
     def find(side, part_idx, name):
         return next(io for io in part_cfg[part_idx][side] if io["name"] == name)
     cos = find("inputs", 2, "position_ids_cos")
     mask = find("inputs", 2, "attention_mask")
-    logits = find("outputs", 4, "logits")
+    logits = find("outputs", NUM_PARTS, "logits")
     return (cos["scale"], cos["offset"],
             mask["scale"], mask["offset"],
             logits["scale"], logits["offset"])
@@ -131,12 +171,12 @@ class EngineState:
             parts_cfg, suffix = self.parts_cfg_ar128, "_ar128"
         sessions = {}
         per_part_s = []
-        for part_idx in (1, 2, 3, 4):
+        for part_idx in range(1, NUM_PARTS + 1):
             wrapper = wrapper_path(BUNDLE_DIR, part_idx, suffix, self.ctx_len)
             if not wrapper.exists():
                 build_wrapper(parts_cfg[part_idx], wrapper)
             t = time.perf_counter()
-            sessions[part_idx] = load_session(wrapper)
+            sessions[part_idx] = load_session(wrapper, backend_path=BACKEND_PATH)
             per_part_s.append(time.perf_counter() - t)
         bindings, out_bufs = make_bound_chain(sessions, parts_cfg)
         return sessions, bindings, out_bufs, per_part_s
@@ -936,9 +976,8 @@ def _load_engine(args):
     """Build EngineState and warm to the args.start_mode. Returns
     (state, base_tokens, startup_s, per_part_s)."""
     ctx_tier = getattr(args, "ctx_tier", CTX_LEN)
-    metadata = yaml.safe_load((BUNDLE_DIR / "metadata.yaml").read_text())
-    parts_cfg_ar1 = build_part_cfg(metadata, ar=1, ctx=ctx_tier)
-    parts_cfg_ar128 = build_part_cfg(metadata, ar=AR128_BATCH, ctx=ctx_tier)
+    parts_cfg_ar1 = load_parts_cfg(ar=1, ctx=ctx_tier)
+    parts_cfg_ar128 = load_parts_cfg(ar=AR128_BATCH, ctx=ctx_tier)
     state = EngineState(parts_cfg_ar1, parts_cfg_ar128, ctx_len=ctx_tier)
 
     tokenizer = Tokenizer.from_file(str(BUNDLE_DIR / "tokenizer.json"))
@@ -1271,6 +1310,14 @@ def cmd_demo_phase_batch(args):
 
 def main():
     p = argparse.ArgumentParser(description="NPU engine sidecar")
+    p.add_argument("--model", choices=("qwen3-4b", "qwen2_5-7b"),
+                   default="qwen3-4b",
+                   help="which Qualcomm NPU bundle to drive. qwen3-4b is "
+                        "the original 4-partition w4a16 bundle "
+                        "(metadata.yaml-based, multi-ctx-tier). qwen2_5-7b "
+                        "is the 6-partition w8a16 bundle "
+                        "(qnn-context-binary-utility introspection, "
+                        "cl=4096 only, requires QAIRT 2.45 backend DLL).")
     p.add_argument("--mode", choices=("demo", "demo-phase-batch", "serve"), default="demo")
     p.add_argument("--n-phase-batch", type=int, default=3,
                    help="number of AR128 requests in the phase-batched A/B demo "
@@ -1282,12 +1329,21 @@ def main():
     p.add_argument("--ar128-min-tokens", type=int, default=512,
                    help="prompt-token threshold above which inference uses "
                         "AR128 prefill (and pays a swap if needed).")
-    p.add_argument("--ctx-tier", type=int, default=CTX_LEN, choices=CTX_TIERS,
-                   help="bundle context-tier graphs to load. Bundle ships {512,"
-                        " 1024, 2048, 3072, 4096}. KV memory grows linearly per"
-                        " session; the HTP simultaneous-session ceiling shrinks"
-                        " as ctx grows.")
+    p.add_argument("--ctx-tier", type=int, default=None,
+                   help="bundle context-tier graphs to load. Per-model:"
+                        " qwen3-4b ships {512, 1024, 2048, 3072, 4096};"
+                        " qwen2_5-7b ships only {4096}. Defaults to the model's"
+                        " CTX_LEN. KV memory grows linearly per session; the"
+                        " HTP simultaneous-session ceiling shrinks as ctx grows.")
     args = p.parse_args()
+    _bind_model(args.model)
+    if args.ctx_tier is None:
+        args.ctx_tier = CTX_LEN
+    if args.ctx_tier not in CTX_TIERS:
+        raise SystemExit(
+            f"--ctx-tier {args.ctx_tier} not available for --model "
+            f"{args.model}. Bundle ships {CTX_TIERS}."
+        )
     if args.mode == "demo":
         cmd_demo(args)
     elif args.mode == "demo-phase-batch":

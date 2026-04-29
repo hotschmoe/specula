@@ -45,6 +45,7 @@ SOC_MODEL = "88"
 HTP_ARCH = "81"
 
 NUM_LAYERS = 36
+NUM_PARTS = 4  # 1 embed + 3 transformer (parts 2/3/4 own 12 layers each)
 LAYERS_PER_PART = 12
 NUM_KV_HEADS = 8
 HEAD_DIM = 128
@@ -54,6 +55,12 @@ PAST_LEN = CTX_LEN - 1  # 511 — buffer size for AR1 cl512
 HIDDEN_DIM = 2560
 VOCAB_SIZE = 151936
 ROPE_THETA = 1_000_000.0
+
+# 4B w4a16 bundle was AI-Hub-built against QAIRT 2.42 — matches the
+# venv-bundled ORT 1.24.4. Default backend (None ⇒ venv-bundled
+# QnnHtp.dll) loads it correctly. Sister 7B bundle needs an explicit
+# 2.45 DLL override via this constant; see qualcomm_qwen2_5_7b_oracle.
+BACKEND_PATH = None
 
 # AR128 prefill graphs share the same .bin files as AR1 but expect a
 # 128-wide query batch. The cl512 cap splits as past=384 + current=128.
@@ -152,6 +159,16 @@ def attention_mask_quantized_ar128(
     mask[0, 0, :, past_len:] = causal
     _ = scale, offset
     return mask
+
+
+def load_parts_cfg(ar: int = 1, ctx: int = CTX_LEN) -> dict:
+    """Model-uniform helper for sidecar.py — reads the bundle's
+    metadata.yaml, calls build_part_cfg, returns the cfg dict. The 7B
+    oracle exposes a same-named helper that builds cfg from QNN
+    introspection JSONs instead. Sidecar can call _model.load_parts_cfg
+    without caring which path produced the dict."""
+    metadata = yaml.safe_load((BUNDLE_DIR / "metadata.yaml").read_text())
+    return build_part_cfg(metadata, ar=ar, ctx=ctx)
 
 
 def build_part_cfg(metadata: dict, ar: int = 1, ctx: int = CTX_LEN) -> dict:

@@ -87,9 +87,11 @@ HTP_ARCH = "81"
 # `buildId: v2.45.0.260326154327`). Our venv ORT 1.24.4 ships QAIRT 2.42
 # which fails the .bin load with QNN error 5000. Override to the
 # system-installed QAIRT 2.45.40 DLL — works in-process.
-QAIRT_2_45_BACKEND = Path(
+BACKEND_PATH = Path(
     "C:/Qualcomm/AIStack/QAIRT/2.45.40.260406/lib/aarch64-windows-msvc/QnnHtp.dll"
 )
+# Backward-compat alias for any existing direct uses.
+QAIRT_2_45_BACKEND = BACKEND_PATH
 
 NUM_LAYERS = 28
 NUM_KV_HEADS = 4  # Qwen2.5-7B GQA: 28 attention heads, 4 KV heads
@@ -208,6 +210,14 @@ def _io_spec_from_qnn(t: dict) -> dict:
         "scale": qp.get("scale"),
         "offset": qp.get("offset"),
     }
+
+
+def load_parts_cfg(ar: int = 1, ctx: int = CTX_LEN) -> dict:
+    """Model-uniform helper. Sister to qualcomm_qwen3_4b_oracle.load_parts_cfg
+    — reads QNN introspection JSON dumps (the 7B bundle ships no
+    metadata.yaml) and produces the same shape cfg dict the 4B path
+    builds from yaml + build_part_cfg."""
+    return build_part_cfg(ar=ar, ctx=ctx)
 
 
 def build_part_cfg(ar: int = 1, ctx: int = CTX_LEN) -> dict:
