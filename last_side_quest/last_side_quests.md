@@ -396,9 +396,9 @@ Suggested sequence (each ≤ 1 session unless noted):
 | **SQ1 NPU rewind** | ✅ **landed 2026-04-28** | Path C STATEFUL (`demo_path_c_stateful.py`) uses the SQ6 stateful stream API. NPU re-prefill share collapses to 0; JSON K=8 r=4 runs in 5.96 s wall (vs 21.70 stateless), spec-decode 5.53 t/s (vs 1.52), **2.37× speedup vs same-host baseline** — first-ever cross of 1.0×. 91% accept byte-identical to stateless. CSV `results/csv/sq1_path_c_stateful_2026-04-28.csv`. Native ARM64 llama-cpp-python build remains the only outstanding follow-up (cross-arch drift on free-form prompts). |
 | **SQ2** | ✅ **closed POSITIVE 2026-04-28** | aimet_torch v2 + SEQ_MSE/AdaScale work locally on Prism + WSL2 ARM64; aimet_onnx + qai_hub_models wrapper still cloud-only; basic-PTQ Qwen3-0.6B end-to-end demo lands negative-but-expected (cos -0.065 = V/O collapse repro) |
 | **SQ3-small** | ✅ **closed POSITIVE 2026-04-28** (Granite-MoE branch + 3 follow-ups) | Granite-3.0-1B-A400M ran AIMET basic-PTQ end-to-end on Prism CPU; cos +0.656 (per-tensor experts) → +0.712 (per-channel experts, "A1" champion). SEQ_MSE-4 regressed (0.640); SEQ_MSE-16 partially recovered (0.682) — **A1 wins on Prism budget**. OLMoE-1B-7B failed end-to-end across 3 iterations — per-expert dispatch architecturally hostile to AIMET v2 (Granite's fused-experts + Qwen3-MoE's hit-filter both avoid this). AIMET 2.29 has no granitemoe adapter; written in ~80 LOC. **Qwen3-30B-A3B remains cloud-only** (corrected math: 30B FP32 = 120 GB, BF16 = 60 GB — neither fits 48 GB DRAM). |
-| SQ4 | ⏳ partially fed by SQ2 | new prior: rent on demand, not by default — local AIMET unblocks design iteration on ≤4B; cloud only for production blessed bundles |
+| SQ4 | ⏳ writeup pending | partially fed by SQ2/SQ3. New prior: rent on demand, not by default — local AIMET unblocks design iteration on ≤4B; cloud only for production blessed bundles. Qwen3-30B-A3B remains cloud-only (FP32 120 GB / BF16 60 GB doesn't fit 48 GB DRAM). |
 | **SQ5** | ✅ **closed POSITIVE 2026-04-27** | engine generalized cl=512..4096; coding-asst contexts viable up through 4K at 20 t/s |
-| SQ6 | ⏳ pending | independent, anytime |
+| **SQ6** | ✅ **Phases A→E landed 2026-04-28..29** | OpenAI-compat NPU HTTP server (`npu_engine/http_server.py`). A stateless + A.5 SSE + B stateful KV-LCP streams (2.3-2.6× speedup) + C real-world pi A/B (NPU silent-island UX wins; throughput tied with OpenCL; Vulkan-4B chat broken at this commit) + D daily-driver Q3.6-35B-A3B CPU 32 t/s comparator + E Qwen2.5-7B-NPU sidecar generalization. Phase F follow-ups open: tool-call parser + 7B AR1↔AR128 swap fix. |
 
 ## Cross-cutting findings landed this session
 
@@ -435,6 +435,114 @@ Suggested sequence (each ≤ 1 session unless noted):
   per-expert weight distributions, so per-tensor quantization captures
   them better. Needs 2-3 more (model, recipe) cells to confirm; if it
   holds, it's a real publishable finding for the NPU-MoE story.
+- **Silent compute island is the SQ6 punchline, not throughput**
+  (Phase C live observation, 2026-04-28). NPU 4B and OpenCL 4B are
+  near-tied on TG (24-27 t/s both); NPU loses 15-30% on wall. But
+  while running on battery with archicad in the foreground, OpenCL
+  produces audible fan + coil whine and contends with Adreno for the
+  primary workflow; NPU is silent and independent. Power: NPU ~13.7 W
+  vs OpenCL ~58 W (~4× draw, 26× J/gen-tok edge). For background
+  coding agents during real foreground work, NPU is the only backend
+  that doesn't tax the user's actual workload — a 30% wall penalty is
+  cheap insurance against fan noise + GPU contention + battery drain.
+- **Daily-driver Q3.6-35B-A3B on CPU is the throughput baseline to beat**
+  (Phase D, 2026-04-29). 32 t/s wall avg via `build-cpu/llama-server -t 8`
+  on a 35B/3B-active MoE — beats both 4B candidates per-second because
+  active-only CPU memory bandwidth (228 GB/s on 3B = ~32 t/s) outpaces
+  dense 4B's 33% larger weight read. OpenCL-on-big-MoE is a dead path:
+  Adreno's 2 GB `max_mem_alloc_size` fragments the 20 GB Q4_K_M and
+  TG collapses to 5 t/s. Vulkan-4B chat completions are also a known-
+  bad config at the current llama.cpp commit (token-soup + parse error
+  on `/v1/chat/completions`; `llama-bench` numbers are throughput-real
+  but quality-untested). NPU-4B has to win on **quality** vs the 35B,
+  not speed — and currently doesn't (W4A16 V/O collapse manifests as
+  occasional duplicate-attribute output).
+- **Qwen2.5 has cleaner multi-turn KV behavior than Qwen3** (Phase E,
+  2026-04-29). Qwen2.5 has no thinking-mode at all, so the upstream
+  chat template never injects a `<think></think>` block, and
+  per-assistant-turn LCP isn't capped by template/KV divergence. On
+  the 7B-NPU bundle, turn 2 of a 2-turn chat ran in 0.89 s vs turn 1
+  at 1.83 s *despite a longer prompt* — pure stateful-stream LCP win.
+  Phase B's `enable_thinking=False` workaround on Qwen3 is a real
+  protocol-level constraint that simply doesn't exist on Qwen2.5.
+- **Tool-calling protocol gap blocks real agent loops** (Phase E,
+  2026-04-29). `npu_engine/http_server.py` accepts `tools=[...]` from
+  OpenAI clients but ignores it, generates plain text, returns. Pi
+  parses the placeholder string the model emits as a final answer; no
+  multi-turn loop ever happens. Adding a Hermes-XML or OpenAI-JSON
+  tool-call parser is the gating engineering item before the SQ6
+  http_server is a real coding-agent backend.
+
+## Outstanding follow-ups (post 2026-04-29)
+
+Six SQs are closed positive on their primary thesis; SQ4 is the only
+fully-pending umbrella deliverable. The follow-ups below are the
+"would-be-nice" tail per SQ — not blocking the close-out narrative but
+worth one more session each if budget allows.
+
+**SQ1 — heterogeneous spec-decode**
+- Native ARM64 `llama-cpp-python` build (clang-on-ARM toolchain). Free-
+  form prompts collapse to 9% accept on Prism x86_64 target via cross-
+  arch logit drift (`reference_cross_arch_logit_drift.md`); JSON
+  resists. Same-arch target would unblock Python/prose workloads.
+
+**SQ2 — AIMET local**
+- Run SEQ_MSE / AdaScale / AdaRound / CLE on **real Qwen3** (only
+  TinyMLP and Granite verified at scale to date).
+- Qwen3-4B basic PTQ end-to-end (~3h on Prism CPU est.).
+- Confirm which `encodings.json` schema QAIRT's `--quantization_overrides`
+  actually consumes (the P2 question in `one_pipeline_cloud_gpu.md`,
+  still open after SQ2).
+- `aimet_torch.onnx.export` with `use_external_data_format=True` for
+  ≥0.6B (the v1 `sim.export` trips a 2 GB protobuf cap; v2 export API
+  exists but untested).
+
+**SQ3 — small-MoE**
+- Per-tensor vs per-channel comparison on a **dense** Qwen3-1.7B
+  baseline to confirm the "MoE quantizes better than dense" hypothesis
+  (currently 1 data point — Granite vs Qwen3-0.6B).
+- AdaScale on GraniteMoe attention head (imports work, behavior
+  untested).
+- Granite-3.0-3B-A800M (~80 LOC adapter predicted, mirrors 1B path).
+- Per-expert axis-0-only weight quant variant as deployment middle
+  ground.
+
+**SQ4 — cloud-sizing writeup** (the only fully-pending SQ)
+- Compose SQ2 + SQ3 results into a `$/VRAM/recipe` table; slot into
+  `docs/one_pipeline_cloud_gpu.md` §Budget.
+- Document the new prior: rent only for **production blessed bundles**,
+  not iteration — local AIMET unblocks design loop ≤4B.
+- Qwen3-30B-A3B remains cloud-only (FP32 120 GB / BF16 60 GB doesn't
+  fit 48 GB DRAM).
+
+**SQ5b — long-context NPU tail**
+- Battery J/tok at cl=4096 (current numbers are AC).
+- pp=2048 tg=512 at cl=2048+ (bundled prompt file caps at 512 tokens).
+- AR1+AR128 simultaneous sessions at cl=2048+.
+
+**SQ6 — small-server (Phase F+ work)**
+- **AR1↔AR128 swap fails on 7B** for >512-token prompts — sidecar
+  crashes mid-request (`sidecar closed stdout mid-request`). HTP teardown
+  for 6 sessions doesn't clean up before AR128 reload. Workaround today:
+  bump `--ar128-min-tokens` to 1500. Real fix: `gc.collect() + sleep`
+  between teardown/reload, or load both chains simultaneously if HTP
+  can hold 12 sessions at cl=4096 (untested; 7B is w8a16 → smaller HTP
+  footprint than 4B w4a16 might fit).
+- **Tool-call protocol** (Hermes-XML or OpenAI-JSON parser) — gates
+  real multi-turn agent loops. Without it, pi/opencode degrade silently
+  to text and the model hallucinates tool output.
+- **AIMET SEQ_MSE+AdaScale on the 4B NPU bundle** to recover output
+  quality (the duplicate-attribute regression observed in Phase C is
+  the W4A16 V/O collapse manifesting subtly). Now locally tractable
+  via SQ2's aimet_torch path.
+- 7B has only one ctx tier (4096) — long-prompt prefill always pays
+  full KV size. AR1 prefill ≈18 t/s for >256-token prompts is slow.
+- 7B `BACKEND_PATH` hardcoded to `C:/Qualcomm/AIStack/QAIRT/2.45.40.260406/...`
+  → move to env var.
+- Multi-turn agent loops with tools enabled never exercised on 4B
+  (would surface chat-template/KV-LCP issues; quick test recommended
+  once tool-call parser lands).
+- `wsl_setup_notes.md` referenced in Phase C but never written.
 
 ## Where this fits in the bigger picture
 
@@ -482,3 +590,50 @@ Qwen3.5/3.6.
   session) and ARM64 llama-cpp-python build (clang-on-ARM toolchain).
   Deliverables: `demo_path_b.py`, `demo_path_c.py` updates to
   `findings.md`.
+- **2026-04-28** — SQ6 Phases A → C land in one session.
+  Phase A: `npu_engine/http_server.py` is a working OpenAI-compatible
+  HTTP server backed by `sidecar.py serve_chat_request`; smoke-tested
+  EOS, stop sequences, multi-turn, real HTML coding task. NPU TG
+  24-27 t/s. Phase A.5: SSE streaming via `chat_stream` op + async
+  generator in `_do_chat_streaming` (BPE-correct rolling decode).
+  Phase B: stateful streams in sidecar (`stream_open`/`truncate`/
+  `append`/`decode`/`close`) + `ConversationState` LCP machinery in
+  http_server. Wins: 2.6× on strict-prefix re-send, 2.3× on realistic
+  2-turn coding chat. Heuristic: stay AR1-append for deltas <1024
+  tokens. The same Phase B refactor unlocks SQ1's NPU rewind op
+  (Path C STATEFUL).
+  Phase C: real-world pi (`@mariozechner/pi-coding-agent` v0.70.6)
+  A/B between NPU and OpenCL Qwen3-4B on a coding prompt. Throughput
+  near-tied (NPU 7.96 s vs OpenCL 6.91 s direct curl). Headline win
+  is the UX axis: silent NPU vs audible fan + coil whine on OpenCL
+  while running archicad in foreground on battery. Vulkan-4B chat
+  found broken at this llama.cpp commit (token soup + parse error).
+  Deliverable: `last_side_quest/sq6_small_server/findings.md`.
+- **2026-04-29** — SQ6 Phase D lands. Daily-driver Q3.6-35B-A3B CPU
+  comparator measured. `build-cpu/llama-server -t 8` hits 32 t/s wall
+  avg (direct curl), 39 s pi-default wall — beats both 4B candidates
+  per-second on the same prompt. OpenCL ruled out for big-MoE: Adreno's
+  2 GB `max_mem_alloc_size` fragments the 20 GB Q4_K_M and TG drops
+  to 5 t/s. Conclusion: NPU 4B has to win on quality, not speed; the
+  silent-island UX axis remains its argument.
+- **2026-04-29** — SQ6 Phase E lands. Qwen2.5-7B-NPU sidecar
+  generalization: new `qualcomm_qwen2_5_7b_oracle.py` and
+  `bench_qwen2_5_7b_ortqnn.py` for the 6-partition w8a16 bundle;
+  sidecar+http_server now select model via `--model` flag /
+  `NPU_MODEL` env var. Cross-version QAIRT mismatch fixed via
+  explicit `backend_path=` to system-installed QAIRT 2.45.40.
+  E.3 stderr drainer thread fixes a 7B startup hang (PIPE buffer
+  fill at 6-session ORT-QNN load). 7B HTML prompt 6.80 s wall /
+  19.9 t/s — clean output, no W4A16 dup-attribute regression.
+  Multi-turn KV-LCP cleaner than 4B (Qwen2.5 has no thinking-mode
+  → no template/KV divergence). pi+tools test surfaces a structural
+  gap: http_server ignores `tools=[...]`, model hallucinates tool
+  output. AR128 7B prefill works direct (1289 t/s) but AR1↔AR128
+  swap on 7B crashes the sidecar — HTP teardown/reload bug.
+  Workaround: bump `--ar128-min-tokens` to 1500 to stay in AR1.
+- **2026-04-29** — Umbrella plan resync. SQ6 progress row updated
+  (Phases A→E landed); cross-cutting findings augmented with
+  silent-island UX, daily-driver throughput baseline, Qwen2.5
+  KV-LCP, tool-call protocol gap. Outstanding follow-ups
+  consolidated as a new section. SQ4 confirmed as the only fully-
+  pending umbrella deliverable.
