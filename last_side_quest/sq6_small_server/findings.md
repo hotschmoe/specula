@@ -620,6 +620,43 @@ the http_server needs a tool-call parser that emits OpenAI-format
 `tool_calls` from textual model output (Hermes XML, ReAct, or
 OpenAI-JSON). Out of scope for this session.
 
+### AR128 7B prefill — works direct, fails on swap
+
+Smoke-tested the AR128 7B chain runner in isolation (load 6 sessions
+direct, no AR1 chain), feeding a 128-token batch at p_base=0:
+
+```
+all loaded in 4.8s   per-part [1.07, 0.69, 0.67, 0.64, 0.81, 0.91]
+AR128 step wall: 99.3 ms (= 1289.5 t/s)
+last_logits shape: (152064,), argmax=5059
+```
+
+**1289 t/s prefill on 7B** — competitive with 4B's ~1629 t/s at
+cl=2048. The AR128 chain code is correct.
+
+But: feeding a >512-token prompt through the http_server crashes
+the sidecar mid-request (`sidecar closed stdout mid-request` from
+http_server side). The standalone test does AR128 only; the
+http_server starts in AR1 mode then swaps to AR128 when a
+long-prompt request arrives. **The AR1↔AR128 swap on 7B fails.**
+
+Hypothesis: HTP context teardown for 6 sessions doesn't clean up
+fully before the AR128 chain tries to re-allocate, and the second
+load fails. The 4B path (3 transformer parts) doesn't trip this.
+
+Fix path (deferred): make the swap explicit in sidecar's
+`EngineState.ensure_mode` for 7B — possibly add a `gc.collect() +
+sleep(0.5)` between teardown and reload, or load both chains
+simultaneously if HTP can hold 12 sessions at cl=4096 (untested per
+SQ5 findings but might fit since 7B is w8a16, smaller than 4B's
+w4a16 at cl=4096).
+
+For now: the 7B http_server works for prompts under 512 tokens
+(stays in AR1 mode). Long-prompt agentic workflows on 7B need this
+swap fix. Bumping `--ar128-min-tokens` higher (to e.g. 1500) keeps
+the server in AR1 longer, paying AR1's slower-prefill cost but
+avoiding the crash.
+
 ### Phase E known limitations
 
 - **No tool-calling protocol.** As above. Adding it would unblock
