@@ -392,7 +392,7 @@ Suggested sequence (each ≤ 1 session unless noted):
 | SQ | status | one-line outcome |
 |---|---|---|
 | **SQ1.a** | ✅ **Path A landed 2026-04-27** | NPU 4B + CPU 14B exchange tokens; JSON 100% accept, Python K=8 6/8 accept, Qwen3.6 incompat (sep memory) |
-| SQ1.b/c | ⏳ pending | Path B (real loop w/ rewind) or Path C (batched verify via prompt_logprobs) |
+| **SQ1.b/c** | ✅ **closed POSITIVE 2026-04-28** | Path B (multi-round naive serial verify) and Path C (batched verify + KV cache rewind via in-process llama-cpp-python) both run end-to-end. JSON 91% accept reproduced across both. Path C 3.5× more per-round-efficient than Path B at K=8. Same-arch JSON speedup 0.67× (Path C) vs 0.19× (Path B). Two engineering follow-ups gate real speedup: **NPU sidecar rewind op** (~half-session) + **ARM64 llama-cpp-python build** (clang-on-ARM toolchain). Cross-arch numerical drift: free-form Python prompts collapse to 9% accept when target is Prism x86_64 vs draft ARM64; structural prompts (JSON) resist this. |
 | **SQ2** | ✅ **closed POSITIVE 2026-04-28** | aimet_torch v2 + SEQ_MSE/AdaScale work locally on Prism + WSL2 ARM64; aimet_onnx + qai_hub_models wrapper still cloud-only; basic-PTQ Qwen3-0.6B end-to-end demo lands negative-but-expected (cos -0.065 = V/O collapse repro) |
 | **SQ3-small** | ✅ **closed POSITIVE 2026-04-28** (Granite-MoE branch + 3 follow-ups) | Granite-3.0-1B-A400M ran AIMET basic-PTQ end-to-end on Prism CPU; cos +0.656 (per-tensor experts) → +0.712 (per-channel experts, "A1" champion). SEQ_MSE-4 regressed (0.640); SEQ_MSE-16 partially recovered (0.682) — **A1 wins on Prism budget**. OLMoE-1B-7B failed end-to-end across 3 iterations — per-expert dispatch architecturally hostile to AIMET v2 (Granite's fused-experts + Qwen3-MoE's hit-filter both avoid this). AIMET 2.29 has no granitemoe adapter; written in ~80 LOC. **Qwen3-30B-A3B remains cloud-only** (corrected math: 30B FP32 = 120 GB, BF16 = 60 GB — neither fits 48 GB DRAM). |
 | SQ4 | ⏳ partially fed by SQ2 | new prior: rent on demand, not by default — local AIMET unblocks design iteration on ≤4B; cloud only for production blessed bundles |
@@ -469,3 +469,15 @@ Qwen3.5/3.6.
   ~80 LOC `granite_moe_adapters.py` (3 classes) — first reference
   implementation for extending AIMET to a non-blessed MoE arch.
   Deliverable: `last_side_quest/sq3_small_moe/findings.md`.
+- **2026-04-28** — SQ1.b and SQ1.c both close. Path B: multi-round
+  naive serial spec-decode end-to-end, JSON 91% accept reproduced,
+  0.19× speedup (NPU re-prefill dominates). Path C: real batched
+  verify + KV rewind via in-process llama-cpp-python (built from
+  source on Prism x86_64), JSON 91% accept reproduced again,
+  0.67× same-arch speedup — batched verify is 3.5× more per-round-
+  efficient than serial. Free-form Python: 9% accept due to cross-
+  arch drift (Prism x86_64 vs ARM64 native at precision boundary).
+  Two follow-ups would deliver real speedup: NPU rewind op (~half-
+  session) and ARM64 llama-cpp-python build (clang-on-ARM toolchain).
+  Deliverables: `demo_path_b.py`, `demo_path_c.py` updates to
+  `findings.md`.
