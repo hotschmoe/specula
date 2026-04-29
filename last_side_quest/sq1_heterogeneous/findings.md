@@ -511,3 +511,21 @@ workloads — matches the analytic projection in this doc's earlier
   Prism vs draft on ARM64 native disagree at precision boundary.
   NPU re-prefill is now the dominant constraint; with rewind op
   + ARM64 target, projected ~1.9× speedup for JSON workloads.
+- **2026-04-28** — **NPU rewind op landed (Path C STATEFUL).**
+  `demo_path_c_stateful.py` rewrites the round loop to use SQ6's new
+  stateful stream API (`stream_open` once, then `stream_decode(K)` /
+  `stream_truncate` / `stream_append` per round). NPU re-prefill cost
+  collapses from 15.84 s (73% of stateless Path C's wall) to 0 s.
+  Headline JSON K=8 r=4: total wall **5.96 s** (vs stateless
+  21.70 s, 3.6× faster); spec-decode rate **5.53 t/s** (vs 1.52,
+  3.6× faster); **2.37× speedup vs same-host baseline** — first
+  time crossing 1.0× since Path A. Mean accept 91% (7.25/8) byte-
+  identical to stateless Path C — confirms rewind is correctness-
+  preserving. Python free-form: 62% accept (vs the 9% noise floor
+  in the original Path C run), 1.06× speedup vs baseline. CSVs in
+  `results/csv/sq1_path_c_stateful_2026-04-28.csv`. The full SQ1
+  architectural thesis ("two compute islands cooperating, real
+  speedup, structural workloads dominant") is **landed and
+  measurable**. Cross-arch caveat unchanged: native ARM64
+  llama-cpp-python build remains the second outstanding follow-up
+  for free-form prompt robustness.
