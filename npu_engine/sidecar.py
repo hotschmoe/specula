@@ -452,6 +452,129 @@ def serve_draft_request(state, prompt_ids, n_draft, ar128_min_tokens, force_ar12
     }
 
 
+def serve_chat_request(state, prompt_ids, max_new_tokens, eos_ids,
+                       stop_token_seqs, ar128_min_tokens, force_ar128):
+    """Greedy single-shot chat completion: prefill + decode with early-stop
+    on EOS / stop-sequence / max_new_tokens. Returns the generated token
+    IDs (not just timing), so an HTTP wrapper can decode them to text.
+
+    Same prefill phase shape as `serve_request` (AR128 batches + AR1 tail).
+    Decode loop differs: walks one step at a time, checking EOS set and
+    stop-sequence suffix-match on `generated` after each token. Stateless
+    — every call re-prefills the full prompt; that's the Phase A MVP shape.
+    Phase B will replace this with stream_open/append/decode primitives
+    that skip re-prefill across turns.
+
+    Args:
+      prompt_ids: list[int] — already chat-templated and tokenized
+      max_new_tokens: hard cap on decode iterations
+      eos_ids: list[int] — token IDs that terminate generation
+      stop_token_seqs: list[list[int]] — token-ID sequences; if any matches
+        as a suffix of `generated`, terminate (matched seq IS included in
+        `generated`; HTTP wrapper strips before returning text)
+      ar128_min_tokens, force_ar128: same semantics as serve_request
+
+    Returns dict with: ok, generated_ids, stop_reason ("eos"/"stop"/"max_new_tokens"),
+        n_prompt, n_generated, swap_s, pp_compute_s, tg_compute_s, pp_tps, tg_tps.
+    """
+    if len(prompt_ids) + max_new_tokens > state.past_len:
+        return {"ok": False, "error":
+                f"prompt+max_new = {len(prompt_ids) + max_new_tokens} > CL-{state.ctx_len} cap {state.past_len}"}
+
+    use_ar128 = (
+        force_ar128 or (
+            len(prompt_ids) >= AR128_BATCH
+            and len(prompt_ids) >= ar128_min_tokens
+        )
+    )
+    n_ar128_calls = (len(prompt_ids) // AR128_BATCH) if use_ar128 else 0
+    n_ar1_tail = len(prompt_ids) - n_ar128_calls * AR128_BATCH
+    swap_total_s = 0.0
+    pp_ar128_compute_s = 0.0
+    pp_ar1_compute_s = 0.0
+    last_logits = None
+    kv = KVStore(NUM_LAYERS, with_ar128_input=use_ar128, ctx_len=state.ctx_len)
+
+    # ----- AR128 prefill phase -----
+    if use_ar128:
+        swap_s, _ = state.ensure_mode("ar128")
+        swap_total_s += swap_s
+        _maybe_warmup(state, prompt_ids)
+        kv = KVStore(NUM_LAYERS, with_ar128_input=True, ctx_len=state.ctx_len)
+        t = time.perf_counter()
+        p = 0
+        for _ in range(n_ar128_calls):
+            batch = list(prompt_ids[p:p + AR128_BATCH])
+            last_logits, _ = _step_ar128(
+                state.sessions, state.bindings, state.out_bufs,
+                kv, p, batch, state.scales_ar128,
+            )
+            p += AR128_BATCH
+        pp_ar128_compute_s = time.perf_counter() - t
+
+    # ----- AR1 chain for tail prefill + decode -----
+    swap_s, _ = state.ensure_mode("ar1")
+    swap_total_s += swap_s
+    _maybe_warmup(state, prompt_ids)
+
+    if not use_ar128 or n_ar1_tail > 0:
+        p = n_ar128_calls * AR128_BATCH
+        t = time.perf_counter()
+        while p < len(prompt_ids):
+            last_logits, _ = _step(
+                state.sessions, state.bindings, state.out_bufs,
+                kv, p, prompt_ids[p], state.scales_ar1,
+            )
+            p += 1
+        pp_ar1_compute_s = time.perf_counter() - t
+
+    pp_compute_s = pp_ar128_compute_s + pp_ar1_compute_s
+    pp_tps = len(prompt_ids) / pp_compute_s if pp_compute_s > 0 else 0.0
+
+    # ----- AR1 decode with early-stop -----
+    eos_set = set(eos_ids or [])
+    stop_seqs = [list(s) for s in (stop_token_seqs or []) if s]
+    generated: list[int] = []
+    next_token = int(np.argmax(last_logits))
+    stop_reason = "max_new_tokens"
+
+    t = time.perf_counter()
+    for i in range(max_new_tokens):
+        position = len(prompt_ids) + i
+        logits, _ = _step(
+            state.sessions, state.bindings, state.out_bufs,
+            kv, position, next_token, state.scales_ar1,
+        )
+        generated.append(next_token)
+
+        if next_token in eos_set:
+            stop_reason = "eos"
+            break
+        for seq in stop_seqs:
+            if len(generated) >= len(seq) and generated[-len(seq):] == seq:
+                stop_reason = "stop"
+                break
+        if stop_reason == "stop":
+            break
+
+        next_token = int(np.argmax(logits))
+    tg_compute_s = time.perf_counter() - t
+    tg_tps = len(generated) / tg_compute_s if tg_compute_s > 0 else 0.0
+
+    return {
+        "ok": True,
+        "generated_ids": generated,
+        "stop_reason": stop_reason,
+        "n_prompt": len(prompt_ids),
+        "n_generated": len(generated),
+        "swap_s": swap_total_s,
+        "pp_compute_s": pp_compute_s,
+        "tg_compute_s": tg_compute_s,
+        "pp_tps": pp_tps,
+        "tg_tps": tg_tps,
+    }
+
+
 def emit(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
     sys.stdout.flush()
@@ -518,6 +641,19 @@ def cmd_serve(args):
             result = serve_draft_request(
                 state, prompt_ids,
                 n_draft=int(req["n_draft"]),
+                ar128_min_tokens=int(req.get("ar128_min_tokens", args.ar128_min_tokens)),
+                force_ar128=bool(req.get("force_ar128", False)),
+            )
+        elif op == "chat":
+            # Single-shot chat completion. Caller supplies pre-tokenized
+            # prompt + max_new + EOS/stop config; sidecar runs prefill +
+            # greedy decode loop with early stop. Used by http_server.py.
+            prompt_ids = list(req["prompt_ids"])
+            result = serve_chat_request(
+                state, prompt_ids,
+                max_new_tokens=int(req["max_new_tokens"]),
+                eos_ids=req.get("eos_ids", []),
+                stop_token_seqs=req.get("stop_token_seqs", []),
                 ar128_min_tokens=int(req.get("ar128_min_tokens", args.ar128_min_tokens)),
                 force_ar128=bool(req.get("force_ar128", False)),
             )

@@ -47,5 +47,10 @@ scripts/sme_probe/*.pdb
 Thumbs.db
 .DS_Store
 
+# QNN runtime trace dropped in CWD by every ORT-QNN session
+# (sidecar / http_server / oracle scripts). Large binary log,
+# regenerable, contains nothing we'd want to track.
+_qnn.log
+
 # Cleanup staging — large artifacts pending hard delete
 marked_for_deletion/
