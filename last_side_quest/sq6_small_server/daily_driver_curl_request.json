@@ -1,0 +1,9 @@
+{
+  "model": "daily-driver",
+  "messages": [
+    {"role": "user", "content": "Write a minimal HTML5 page with a centered red Click Me button. Include CSS in a style tag. Output only the code, no explanation."}
+  ],
+  "max_tokens": 512,
+  "temperature": 0.0,
+  "chat_template_kwargs": {"enable_thinking": false}
+}

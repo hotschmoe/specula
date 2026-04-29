@@ -368,9 +368,117 @@ contention with the user's primary tool + 4× battery drain.
   pi's tool calls would test the chat-template/KV-LCP issue documented
   earlier. Quick test recommended.
 - **Daily-driver Qwen3.6-35B-A3B comparator** wasn't tested this
-  session (would need ~5 min cold load).
+  session (would need ~5 min cold load). *(Closed 2026-04-29 — see
+  Phase D below.)*
 - **Qwen2.5-7B comparator** wasn't tested (NPU sidecar still 4B-only;
   OpenCL/CPU should work but skipped this session).
+
+## Phase D — daily-driver 35B-A3B comparator (2026-04-29)
+
+Closed the open follow-up from Phase C. Reuses the same pi prompt
+(*"Write a minimal HTML5 page with a centered red Click Me
+button..."*) so the cell drops cleanly into the Phase C matrix.
+
+### Backend choice — CPU, not OpenCL
+
+Quick `llama-bench` smoke on `Qwen3.6-35B-A3B-Q4_K_M.gguf` with
+`build-opencl/llama-bench.exe -ngl 99 -p 32 -n 16` returned:
+
+| backend | PP t/s | TG t/s |
+|---|---:|---:|
+| OpenCL (Adreno X2-90) | 10.97 ± 1.85 | 5.17 ± 0.85 |
+| CPU (per recipe `daily_driver/recipe.md` Phase 10c) | — | 15.5 |
+
+OpenCL fragments a 20 GB model badly across Adreno's 2 GB
+`max_mem_alloc_size`; throughput collapses to ~1/3 of CPU. CPU is
+the better non-Vulkan cell for this model. (Vulkan was excluded by
+user direction this session — daily-driver Vulkan TG 20 t/s remains
+the production path per recipe.)
+
+### Server config
+
+```
+build-cpu/llama-server.exe \
+  -m models/Qwen3.6-35B-A3B-Q4_K_M.gguf \
+  -c 16384 --alias daily-driver \
+  --host 127.0.0.1 --port 8080 -t 8
+```
+
+`-t 8` (Phase 5 sweet-spot — leaves 4 P-cores for the agent
+harness). Cold load ~3-4 min on a freshly-cached file (mmap warm);
+first request flushed to ready right after.
+
+### Direct curl A/B (thinking off, temp 0, identical prompt to Phase C)
+
+| run | wall (s) | n_prompt | n_generated | TG t/s (wall avg) | finish |
+|---|---:|---:|---:|---:|---|
+| #1 first request | 7.41 | 41 | 224 | 30.2 | stop (EOS) |
+| #2 steady | 6.96 | 41 | 224 | 32.2 | stop (EOS) |
+
+Output is clean, valid HTML5: flexbox-centered button, deterministic
+across runs at temp=0 (224 tokens both runs).
+
+### Pi-driven (`--no-builtin-tools`, identical prompt)
+
+| run | flags | wall (s) | output |
+|---|---|---:|---|
+| pi default thinking | `--no-builtin-tools -p` | **39 (avg of 36, 40)** | clean valid HTML, no visible thinking |
+| pi `--thinking medium` | `--no-builtin-tools --thinking medium -p` | **9** | clean valid HTML, no visible thinking |
+
+The 30 s wall delta between the two pi runs ≈ ~1000 hidden tokens at
+~30 t/s. Despite `reasoning: false` on the daily-driver provider in
+`~/.pi/agent/models.json`, pi's default flow still elicits an
+internal thinking trace from Qwen3.6-A3B that llama-server splits
+to `reasoning_content` (hidden from the visible response). Setting
+an explicit `--thinking medium` paradoxically suppresses it — pi
+appears to translate the level to a chat template flag the model
+reads as "thinking off" for this provider config. Documented as a
+quirk; not a blocker.
+
+### Phase D in the Phase C matrix
+
+| model | backend | served by | direct curl wall | pi default wall |
+|---|---|---|---:|---:|
+| Qwen3-4B | NPU | specula http_server | 7.96 s | 82.3 s |
+| Qwen3-4B | OpenCL | llama-server | 6.91 s | 60.7 s |
+| Qwen3.6-35B-A3B | **CPU** | llama-server (this row) | **6.96 s** | **39 s** |
+| Qwen3.6-35B-A3B | OpenCL | llama-server | (5.17 t/s — too slow) | n/a |
+
+**Headline: per-second the daily-driver beats both 4B models on
+CPU**, and pi-driven wall is the lowest of all three cells. Two
+factors:
+1. **A3B sparsity.** Only 3B active params per token; CPU memory
+   bandwidth (228 GB/s) decodes 3B at ~32 t/s — competitive with
+   the NPU's 24 t/s on a dense 4B because dense 4B has 33% more
+   bytes-per-token of weight read.
+2. **`reasoning: false` provider config.** pi's default doesn't
+   force a long visible thinking trace through `daily-driver`'s
+   provider, only a short hidden one (vs the 4B providers which
+   were `reasoning: true` in Phase C and emitted ~50-70 s of visible
+   thinking).
+
+### UX axis (Daisy not present this run)
+
+CPU at 8 threads with sustained inference is *audible* (fan ramp
+expected). Power draw at sustained CPU load lands between OpenCL
+and NPU — closer to OpenCL (per `docs/qwen2_5_7b_baseline_all_backends.md`).
+The SQ6 silent-compute-island argument from Phase C still favors
+NPU for foreground-task-active scenarios; CPU daily-driver wins on
+raw throughput when fan noise is acceptable.
+
+### What this means for the SQ6 narrative
+
+- **The daily-driver is a strong throughput baseline.** 32 t/s on
+  CPU for a 35B-A3B model is the operating point any NPU/OpenCL
+  alternative needs to clear on **quality** (since it can't easily
+  clear on speed without bigger models that don't fit on NPU).
+- **NPU's W4A16 quality regression matters more than raw t/s.**
+  The Phase C "duplicate attributes" finding on NPU 4B vs the clean
+  output here at 35B suggests for production coding-agent use, the
+  NPU's value is the silent-island UX axis, not the throughput axis.
+- **OpenCL on big-MoE is a dead path** at this Adreno driver
+  generation (2 GB alloc cap fragments large weights). Don't add
+  an OpenCL row to `serve_daily_driver.ps1`.
 
 ## Update log
 
@@ -409,6 +517,17 @@ contention with the user's primary tool + 4× battery drain.
   Limitation: `enable_thinking=False` causes a chat-template/KV
   divergence that caps multi-turn LCP at ~lcp_max - 5 per prior
   assistant turn.
+- **2026-04-29** — Phase D lands. Daily-driver Qwen3.6-35B-A3B
+  comparator measured against the Phase C matrix. CPU `-t 8` wins
+  on throughput: 32 t/s wall avg direct-curl (matches/beats both 4B
+  models per-second), 39 s pi-default wall (lowest cell, beats 4B-NPU
+  by 2×). OpenCL ruled out for big-MoE — Adreno's 2 GB
+  `max_mem_alloc_size` fragments the 20 GB Q4_K_M and TG collapses
+  to 5 t/s. Vulkan excluded this session by user direction (remains
+  the production daily-driver path per recipe). Conclusion: the
+  daily-driver is a strong throughput baseline that NPU 4B has to
+  beat on quality, not speed — the silent-island UX axis remains
+  NPU's argument.
 - **2026-04-28** — Phase A.5 lands. SSE streaming via OpenAI's
   standard `text/event-stream` protocol. New sidecar op
   `chat_stream` emits one `{event:"token", token_id}` line per
