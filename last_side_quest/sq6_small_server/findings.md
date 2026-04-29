@@ -371,7 +371,8 @@ contention with the user's primary tool + 4× battery drain.
   session (would need ~5 min cold load). *(Closed 2026-04-29 — see
   Phase D below.)*
 - **Qwen2.5-7B comparator** wasn't tested (NPU sidecar still 4B-only;
-  OpenCL/CPU should work but skipped this session).
+  OpenCL/CPU should work but skipped this session). *(Closed
+  2026-04-29 — see Phase E below.)*
 
 ## Phase D — daily-driver 35B-A3B comparator (2026-04-29)
 
@@ -480,6 +481,165 @@ raw throughput when fan noise is acceptable.
   generation (2 GB alloc cap fragments large weights). Don't add
   an OpenCL row to `serve_daily_driver.ps1`.
 
+## Phase E — Qwen2.5-7B-NPU sidecar generalization (2026-04-29)
+
+Closes the second Phase C follow-up. The NPU sidecar+http_server
+pair, until this session, was hardcoded to the 4-partition Qwen3-4B
+w4a16 bundle. Now both serve either model with a runtime selector.
+
+### Phase E.1 — 7B oracle
+
+`npu_engine/qualcomm_qwen2_5_7b_oracle.py` mirrors the 4B oracle's
+shape (per-step logit + token trace, AR1 / CL=4096) for the 6-partition
+Qwen2.5-7B-Instruct w8a16 bundle. Architectural deltas:
+
+  | knob          | 4B            | 7B                |
+  | num_layers    | 36            | 28                |
+  | layer-parts   | 3 (12/12/12)  | 5 (6/6/6/6/4)     |
+  | total parts   | 4             | 6                 |
+  | num_kv_heads  | 8             | 4                 |
+  | hidden_dim    | 2560          | 3584              |
+  | vocab         | 151936        | 152064            |
+  | ctx tiers     | 5             | 1 (4096 only)     |
+
+The 7B bundle ships only `.bin` partitions + `tokenizer.json` — no
+metadata.yaml. Tensor specs are reconstructed at runtime from
+`qnn-context-binary-utility` JSON dumps, committed under
+`last_side_quest/sq6_small_server/7b_bundle_metadata/`.
+
+**Cross-version QAIRT mismatch.** Qualcomm AI Hub compiled the 7B
+bundle against QAIRT 2.45.40, but the venv's ORT 1.24.4 ships QAIRT
+2.42 — `.bin` load fails with QNN error 5000. Workaround: pass the
+system-installed QAIRT 2.45.40 `QnnHtp.dll` explicitly via the new
+`load_session(wrapper_path, backend_path=...)` parameter. Works
+in-process; cleanup-time `DmaData` warnings are spurious (no
+functional impact).
+
+Smoke test (AR1, prompt='The capital of France is', 8 gen steps):
+prefill 54 ms/step, decode 46 ms/step (~22 t/s — matches Genie's
+22.91 t/s baseline). Generated `.\nA. Paris\nB. Lyon` — coherent.
+
+### Phase E.2 — sidecar+http_server pluggable model selection
+
+Both files now select between the 4B and 7B module pairs at runtime:
+
+  - `npu_engine/bench_qwen2_5_7b_ortqnn.py` (new) — IOBinding-optimized
+    chain runner mirroring `bench_qwen3_4b_ortqnn`'s API for 6
+    partitions / 5 transformer parts / num_kv_heads=4. Sidecar imports
+    from this when `--model qwen2_5-7b`.
+  - `sidecar.py`: new `_bind_model(name)` rebinds module-level globals
+    (BUNDLE_DIR, NUM_LAYERS, NUM_PARTS, KVStore, _step, _step_ar128,
+    ...) from the chosen module pair. Hardcoded `for part_idx in (1,2,
+    3,4)` → `range(1, NUM_PARTS+1)`. `_scales_tuple` reads NUM_PARTS
+    for the logits-bearing partition (4 for 4B, 6 for 7B).
+  - `http_server.py`: `NPU_MODEL` env var picks bundle. `SidecarClient`
+    forwards `--model` to subprocess. Default ctx_tier per model.
+
+To launch:
+```
+NPU_MODEL=qwen2_5-7b NPU_CTX_TIER=4096 .venv/Scripts/python.exe \
+    -m uvicorn npu_engine.http_server:app --host 127.0.0.1 \
+    --port 8084 --no-access-log
+```
+
+### Phase E.3 — stderr drainer fixes 7B startup hang
+
+The 7B http_server hung at sidecar startup with no progress logged.
+Root cause: `subprocess.PIPE`'d stderr was filling during ORT-QNN
+multi-session load and blocking the child's writes. The 4B path had
+fewer sessions and ~5 KB of init-time stderr — under the 64 KB pipe
+buffer. The 7B has 6 sessions and accumulates more init-time output
+that crosses the threshold.
+
+Fix: `SidecarClient.start()` now spawns a daemon thread that drains
+`proc.stderr` into a bounded ring buffer (last 200 lines). The
+`sidecar died before ready` diagnostic reads from that buffer
+instead of `.read()`'ing the pipe (which would have blocked under
+the same condition). Worth carrying forward — any future model with
+longer startup output would have hit the same edge.
+
+### Smoke results (NPU CL=4096)
+
+| backend | wall (s) | n_prompt | n_generated | TG t/s (wall avg) | quality |
+|---|---:|---:|---:|---:|---|
+| **4B-NPU /v1 chat** "What is 2+2?" | 1.3 | 21 | 7 | — | "The answer is 4." (clean) |
+| **7B-NPU /v1 chat** "Capital of France?" | 1.3 | 21 | 8 | — | "The capital of France is Paris." |
+| **7B-NPU /v1 chat** Phase C HTML prompt | **6.80** | 37 | 135 | 19.9 | clean valid HTML, **no duplicate attributes** (vs 4B's W4A16 V/O collapse symptom — see Phase C limitations) |
+
+7B drops cleanly into the SQ6 matrix as a strong silent-island
+candidate. Per-second slightly lower than 4B (W8A16 vs W4A16 weight
+size delta), output quality clean (no duplicate-attributes
+regression that the 4B-NPU showed in Phase C).
+
+### Multi-turn KV-LCP test on 7B (raw curl, no tools)
+
+Sequential 2-turn chat to exercise stream LCP behavior:
+
+| turn | prompt | wall | n_prompt | n_generated | history_after |
+|---|---|---:|---:|---:|---:|
+| 1 | system + "My favorite fruit is mango. Remember this." | 1.83 s | 34 | 9 | 43 |
+| 2 | same system + same user1 + assistant1 + "What is my favorite fruit?" | **0.89 s** | 58 | 7 | 65 |
+
+Turn 2 wall < turn 1 wall *despite a longer prompt* — stateful
+streams' longest-common-prefix worked: 43 of 58 prompt tokens
+matched the prior stream state, only 15 delta tokens needed AR1
+ingest. Zero retransmission, zero re-prefill of the system prompt.
+
+**Important: 7B does NOT exhibit the Phase B `enable_thinking=False`
+chat-template/KV mismatch.** Qwen2.5 has no thinking-mode at all, so
+the upstream chat template never injects a `<think></think>` block,
+and there's no per-assistant-turn LCP cap. **For multi-turn coding-
+agent use, 7B has cleaner KV behavior than 4B at the protocol level.**
+
+### Multi-turn pi+tools test — current limitation surfaced
+
+Ran `pi --provider specula-npu-7b --thinking off -p "Use the read
+tool to read /tmp/q7b_oracle.stdout if it exists. Then in one
+sentence tell me what's in it."` (default tools enabled, no
+`--no-builtin-tools`). 43 s wall, exit 0, but the model output was
+the *placeholder string* `"The file /tmp/q7b_oracle.stdout exists
+and contains: [output of the file]"` — i.e. the model HALLUCINATED
+the tool result rather than invoking a tool.
+
+Root cause: `http_server.py` doesn't implement OpenAI's
+`tool_calls` field — the server accepts the request, ignores the
+`tools=[...]` array, generates plain text content, and returns. Pi
+parses `.message.content` as a final answer. No multi-turn loop
+ever happens.
+
+This is a **structural limitation of Phase A.5**, not a regression.
+Phase A's known-limitations section already flagged it:
+> "No `tools` field. Coding agents using OpenAI tool-calling
+> won't work. Phase C decision: either (a) ignore tools entirely
+> and let the agent fall back to text protocol, or (b) wire up a
+> Hermes-style XML tool-call parser. Defer."
+
+The user's current behavior is option (a): tools degrade silently
+to text. To exercise real multi-turn tool-calling under KV-LCP,
+the http_server needs a tool-call parser that emits OpenAI-format
+`tool_calls` from textual model output (Hermes XML, ReAct, or
+OpenAI-JSON). Out of scope for this session.
+
+### Phase E known limitations
+
+- **No tool-calling protocol.** As above. Adding it would unblock
+  real multi-turn coding-agent loops with file-read / bash tools.
+  Hermes-2-Pro XML parser is the lowest-friction path.
+- **Single ctx tier (4096) on 7B.** The bundle wasn't compiled for
+  smaller tiers; long-prompt prefill always pays the 4096-shape KV
+  size. AR1 prefill is 18 t/s (slow for >256-token prompts);
+  AR128 prefill exists in the 7B bench but wasn't smoke-tested in
+  this session.
+- **QAIRT 2.45 DLL hard-coded path.** `BACKEND_PATH` in the 7B
+  oracle assumes `C:/Qualcomm/AIStack/QAIRT/2.45.40.260406/...`.
+  If a different QAIRT version is installed, this needs to flex.
+  Move to env var or config in a follow-up.
+- **Sidecar memory pressure on 7B.** Each ORT-QNN session for 7B
+  consumes ~3.4 GB of HTP+host memory. 6 sessions ≈ 20 GB peak
+  (likely shared via mmap, but still substantial). AR1+AR128
+  coexistence (12 sessions) is untested at cl=4096 — would need a
+  swap mode like 4B's even on 4 ports of HTP context memory.
+
 ## Update log
 
 - **2026-04-28** — SQ6 reframed; this doc scaffolded with the
@@ -517,6 +677,19 @@ raw throughput when fan noise is acceptable.
   Limitation: `enable_thinking=False` causes a chat-template/KV
   divergence that caps multi-turn LCP at ~lcp_max - 5 per prior
   assistant turn.
+- **2026-04-29** — Phase E lands. Qwen2.5-7B-NPU sidecar
+  generalization closes the second open Phase C follow-up. New 7B
+  oracle (`qualcomm_qwen2_5_7b_oracle.py`) and chain runner
+  (`bench_qwen2_5_7b_ortqnn.py`); sidecar+http_server now serve
+  either model via `--model` flag / `NPU_MODEL` env var. 7B HTML
+  prompt 6.80 s wall / 19.9 t/s — clean output, no W4A16 dup-attribute
+  regression. Multi-turn KV-LCP works cleanly on 7B (turn 2 = 0.89 s
+  vs turn 1 = 1.83 s); Qwen2.5 has no thinking-mode so the Phase B
+  `enable_thinking=False` template/KV mismatch doesn't apply. pi+tools
+  agent loop reveals a structural gap: http_server doesn't implement
+  OpenAI tool_calls so tools degrade silently to text — model
+  hallucinates tool output rather than invoking. Adding a Hermes-XML
+  parser is the path forward; deferred.
 - **2026-04-29** — Phase D lands. Daily-driver Qwen3.6-35B-A3B
   comparator measured against the Phase C matrix. CPU `-t 8` wins
   on throughput: 32 t/s wall avg direct-curl (matches/beats both 4B
