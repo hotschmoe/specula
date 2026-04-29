@@ -32,6 +32,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -102,6 +103,27 @@ class SidecarClient:
         self.proc: subprocess.Popen | None = None
         self.startup_info: dict | None = None
         self.lock = asyncio.Lock()
+        # Bounded ring buffer of recent sidecar stderr lines, populated
+        # by a daemon drainer thread so the child's stderr pipe can't
+        # fill up and block (Phase E.2 found this the hard way — the 7B
+        # ORT-QNN load emits enough init-time warnings to fill the
+        # default 64 KB pipe buffer over the multi-session load period,
+        # which deadlocks the child while it waits to write).
+        self._stderr_buf: list[str] = []
+        self._stderr_buf_max = 200  # keep last ~200 lines for diagnostics
+        self._stderr_thread: threading.Thread | None = None
+
+    def _drain_stderr_loop(self) -> None:
+        if self.proc is None or self.proc.stderr is None:
+            return
+        for line in self.proc.stderr:
+            self._stderr_buf.append(line)
+            if len(self._stderr_buf) > self._stderr_buf_max:
+                # Drop oldest in batch to keep buffer bounded.
+                del self._stderr_buf[: len(self._stderr_buf) - self._stderr_buf_max]
+
+    def _stderr_tail(self) -> str:
+        return "".join(self._stderr_buf[-50:])
 
     async def start(self) -> None:
         cmd = [
@@ -122,6 +144,11 @@ class SidecarClient:
             text=True, bufsize=1, encoding="utf-8",
             env=child_env,
         )
+        # Daemon-drain stderr so the pipe never fills.
+        self._stderr_thread = threading.Thread(
+            target=self._drain_stderr_loop, daemon=True
+        )
+        self._stderr_thread.start()
         # Wait for "ready" event (blocks the event loop briefly during
         # startup; that's fine — the server isn't accepting requests yet).
         loop = asyncio.get_running_loop()
@@ -129,8 +156,9 @@ class SidecarClient:
         while loop.time() < deadline:
             line = await loop.run_in_executor(None, self.proc.stdout.readline)
             if not line:
-                stderr_tail = self.proc.stderr.read() if self.proc.stderr else ""
-                raise RuntimeError(f"sidecar died before ready: {stderr_tail}")
+                raise RuntimeError(
+                    f"sidecar died before ready: {self._stderr_tail()}"
+                )
             line = line.strip()
             if not line:
                 continue
