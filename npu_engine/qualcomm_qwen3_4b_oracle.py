@@ -283,10 +283,20 @@ def build_wrapper(part_cfg: dict, wrapper_path: Path) -> None:
     onnx.save(model, str(wrapper_path))
 
 
-def load_session(wrapper_path: Path) -> ort.InferenceSession:
-    backend = Path(ort.__file__).parent / "capi" / "QnnHtp.dll"
+def load_session(wrapper_path: Path, backend_path: Path | str | None = None) -> ort.InferenceSession:
+    """Load an EPContext-wrapped QNN binary.
+
+    `backend_path` overrides the QnnHtp.dll location. Default: the venv-
+    bundled DLL (matches QAIRT version that built the 4B w4a16 bundle —
+    QAIRT 2.42 in ORT 1.24.4). Override needed for bundles built by a
+    different QAIRT (e.g. the Qwen2.5-7B w8a16 bundle was AI-Hub-built
+    against QAIRT 2.45 and won't load with the venv DLL — pass the
+    system QAIRT 2.45 DLL explicitly).
+    """
+    if backend_path is None:
+        backend_path = Path(ort.__file__).parent / "capi" / "QnnHtp.dll"
     provider_options = {
-        "backend_path": str(backend),
+        "backend_path": str(backend_path),
         "htp_performance_mode": "burst",
         "soc_model": SOC_MODEL,
         "htp_arch": HTP_ARCH,
