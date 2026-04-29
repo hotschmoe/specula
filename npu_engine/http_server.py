@@ -236,13 +236,159 @@ sidecar: SidecarClient | None = None
 tokenizer: Tokenizer | None = None
 
 
+class ConversationState:
+    """Tracks the active server-side stream and its known token history.
+
+    Single-tenant: one stream for the whole server. `history` is the full
+    token-id sequence currently sitting in the NPU's KV cache (prompt
+    tokens for the first turn + everything the model has decoded since,
+    including any EOS tokens). When a new chat-completion request comes
+    in, we tokenize its rendered ChatML and find the longest common
+    prefix with `history`:
+      * lcp == len(history) and len(new) >  lcp  → stream_append delta
+      * lcp == len(history) and len(new) == lcp  → no ingest needed
+      * lcp <  len(history)                      → truncate then append
+      * stream_id is None (fresh server)          → stream_open(new)
+    """
+
+    def __init__(self, stream_id: str = "http"):
+        self.stream_id = stream_id
+        self.opened = False
+        self.history: list[int] = []
+
+    def reset(self):
+        self.opened = False
+        self.history = []
+
+
+conv_state: ConversationState | None = None
+
+
+def _longest_common_prefix(a: list[int], b: list[int]) -> int:
+    n = min(len(a), len(b))
+    for i in range(n):
+        if a[i] != b[i]:
+            return i
+    return n
+
+
+async def _stream_reopen(prompt_ids: list[int]) -> tuple[str, float]:
+    """Close any existing stream, then stream_open with the full prompt.
+    Used for fresh conversations and lcp=0 divergences — AR128 prefill is
+    much faster than AR1 append for big ingests."""
+    if conv_state.opened:
+        await sidecar.request("stream_close", stream_id=conv_state.stream_id)
+        conv_state.reset()
+    t = time.perf_counter()
+    rsp = await sidecar.request(
+        "stream_open", stream_id=conv_state.stream_id,
+        prompt_ids=prompt_ids,
+        force_ar128=(len(prompt_ids) >= 128),
+    )
+    if not rsp.get("ok"):
+        raise HTTPException(500, detail=f"stream_open: {rsp.get('error')}")
+    elapsed = time.perf_counter() - t
+    conv_state.history = list(prompt_ids)
+    conv_state.opened = True
+    return ("open", elapsed)
+
+
+async def _sync_stream_to_prompt(prompt_ids: list[int]) -> dict:
+    """Bring the server-side persistent stream in sync with `prompt_ids`.
+    Returns dict with `stream_op`, `lcp`, `n_new`, and timings.
+    Caller must hold `sidecar.lock`."""
+    info = {"stream_op": None, "lcp": None, "n_new": 0,
+            "prefill_s": 0.0, "truncate_s": 0.0, "append_s": 0.0}
+
+    if not conv_state.opened:
+        op, elapsed = await _stream_reopen(prompt_ids)
+        info["stream_op"] = op
+        info["prefill_s"] = elapsed
+        info["n_new"] = len(prompt_ids)
+        return info
+
+    lcp = _longest_common_prefix(conv_state.history, prompt_ids)
+    info["lcp"] = lcp
+    delta_len = len(prompt_ids) - lcp
+
+    if lcp == len(conv_state.history) and delta_len == 0:
+        info["stream_op"] = "nochange"
+        return info
+
+    # Crossover analysis (Qwen3-4B NPU CL=2048):
+    #   AR1 append cost   ≈ delta_len / 24 t/s
+    #   AR128 reopen cost ≈ 22 s mode swap + delta_len / 1500 t/s
+    # → AR128 wins only when delta > ~540 tokens. For typical chat
+    # deltas (tens-to-hundreds of tokens), AR1-append always wins.
+    # Threshold raised to 1024 to be safe; below this, prefer AR1.
+    REOPEN_DELTA_THRESHOLD = 1024
+    history_useful = lcp / max(len(conv_state.history), 1)
+    if history_useful < 0.25 and delta_len >= REOPEN_DELTA_THRESHOLD:
+        op, elapsed = await _stream_reopen(prompt_ids)
+        info["stream_op"] = "reopen"
+        info["prefill_s"] = elapsed
+        info["n_new"] = len(prompt_ids)
+        return info
+
+    if lcp < len(conv_state.history):
+        # Edge: client re-sent a strict prefix of the cached state (lcp ==
+        # len(prompt_ids) but < len(history)). After a plain truncate
+        # the stream has no `next_token` (unknown post-step prediction),
+        # so the next stream_decode would fail. Truncate to lcp-1 then
+        # re-feed the last common token: net effect is position back at
+        # lcp with fresh logits available for decoding.
+        empty_delta = (lcp == len(prompt_ids))
+        truncate_to = (lcp - 1) if (empty_delta and lcp >= 1) else lcp
+        t = time.perf_counter()
+        rsp = await sidecar.request(
+            "stream_truncate", stream_id=conv_state.stream_id,
+            new_position=truncate_to,
+        )
+        if not rsp.get("ok"):
+            raise HTTPException(500, detail=f"stream_truncate: {rsp.get('error')}")
+        info["truncate_s"] = time.perf_counter() - t
+        conv_state.history = conv_state.history[:truncate_to]
+        if empty_delta and lcp >= 1:
+            t = time.perf_counter()
+            rsp = await sidecar.request(
+                "stream_append", stream_id=conv_state.stream_id,
+                append_ids=[prompt_ids[lcp - 1]],
+            )
+            if not rsp.get("ok"):
+                raise HTTPException(500, detail=f"stream_append: {rsp.get('error')}")
+            info["append_s"] = time.perf_counter() - t
+            conv_state.history.append(prompt_ids[lcp - 1])
+            info["n_new"] = 1
+            info["stream_op"] = "truncate+refeed"
+            return info
+
+    delta = prompt_ids[lcp:]
+    if delta:
+        t = time.perf_counter()
+        rsp = await sidecar.request(
+            "stream_append", stream_id=conv_state.stream_id,
+            append_ids=delta,
+        )
+        if not rsp.get("ok"):
+            raise HTTPException(500, detail=f"stream_append: {rsp.get('error')}")
+        info["append_s"] = time.perf_counter() - t
+        conv_state.history.extend(delta)
+        info["n_new"] = len(delta)
+        info["stream_op"] = "truncate+append" if info["truncate_s"] > 0 else "append"
+    else:
+        info["stream_op"] = "truncate"
+
+    return info
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global sidecar, tokenizer
+    global sidecar, tokenizer, conv_state
     if not TOKENIZER_PATH.exists():
         raise RuntimeError(f"bundle tokenizer not found: {TOKENIZER_PATH}")
     tokenizer = Tokenizer.from_file(str(TOKENIZER_PATH))
     sidecar = SidecarClient(ctx_tier=int(os.environ.get("NPU_CTX_TIER", "2048")))
+    conv_state = ConversationState(stream_id="http")
     print(f"[http_server] starting NPU sidecar (ctx_tier={sidecar.ctx_tier})...",
           flush=True)
     t0 = time.perf_counter()
@@ -275,8 +421,30 @@ async def list_models():
 async def health():
     if sidecar is None or sidecar.proc is None or sidecar.proc.poll() is not None:
         raise HTTPException(503, detail="sidecar not running")
-    return {"status": "ok", "ctx_tier": sidecar.ctx_tier,
-            "startup": sidecar.startup_info}
+    return {
+        "status": "ok",
+        "ctx_tier": sidecar.ctx_tier,
+        "startup": sidecar.startup_info,
+        "stream_opened": conv_state.opened if conv_state else False,
+        "history_len": len(conv_state.history) if conv_state else 0,
+    }
+
+
+@app.post("/debug/reset_stream")
+async def reset_stream():
+    """Drop the active conversation stream. Next chat-completion request
+    will open a fresh one. Useful for testing — most clients will just
+    rely on LCP-divergence to do this implicitly."""
+    if conv_state is None:
+        raise HTTPException(503, detail="server not initialized")
+    if sidecar.lock.locked():
+        raise HTTPException(503, detail="busy")
+    async with sidecar.lock:
+        if conv_state.opened:
+            await sidecar.request(
+                "stream_close", stream_id=conv_state.stream_id)
+        conv_state.reset()
+    return {"status": "reset"}
 
 
 def _resolve_stop_token_seqs(stop: list[str] | str | None) -> list[list[int]]:
@@ -320,16 +488,11 @@ _OPENAI_FINISH = {"eos": "stop", "stop": "stop", "max_new_tokens": "length"}
 async def _do_chat_streaming(prompt_ids, max_new, stop_seqs, model: str):
     """Async generator yielding SSE-formatted lines for /v1/chat/completions.
 
-    OpenAI's streaming protocol: each chunk is `data: {json}\\n\\n`,
-    final marker is `data: [DONE]\\n\\n`. The first chunk's delta carries
-    role=assistant; subsequent chunks carry incremental content; the
-    final chunk carries finish_reason and an empty delta.
-
-    Token-to-text decoding is incremental: we decode the whole
-    accumulated buffer each step and emit only the suffix that's
-    grown. This is the canonical way to handle BPE tokens whose
-    decoded form depends on neighbours (multi-byte UTF-8 split
-    across tokens, leading-space markers, etc.).
+    Uses the stateful stream API: brings the persistent stream in sync
+    with `prompt_ids` (truncate+append delta, or full re-open if the
+    history diverges) before invoking stream_decode_stream. The KV
+    state on the NPU is preserved across requests so multi-turn chats
+    only ingest new tokens between turns.
     """
     created = int(time.time())
     completion_id = f"chatcmpl-npu-{created}"
@@ -350,23 +513,25 @@ async def _do_chat_streaming(prompt_ids, max_new, stop_seqs, model: str):
 
     yield chunk({"role": "assistant", "content": ""})
 
-    buffer_ids: list[int] = []
-    emitted_text = ""
-
     async with sidecar.lock:
+        # Bring stream in sync with the new prompt
+        sync_info = await _sync_stream_to_prompt(prompt_ids)
+
+        buffer_ids: list[int] = []
+        emitted_text = ""
         async for evt in sidecar.stream_request(
-            "chat_stream",
-            prompt_ids=prompt_ids,
-            max_new_tokens=max_new,
+            "stream_decode_stream",
+            stream_id=conv_state.stream_id,
+            max_new=max_new,
             eos_ids=DEFAULT_EOS_IDS,
             stop_token_seqs=stop_seqs,
-            force_ar128=(len(prompt_ids) >= 128),
         ):
             if evt.get("event") == "token":
-                buffer_ids.append(evt["token_id"])
+                tok = evt["token_id"]
+                buffer_ids.append(tok)
                 # Decode-the-whole-buffer is O(N) per step but N is
-                # small (≤ max_new_tokens), and BPE decoding is fast.
-                # Robust to multi-byte UTF-8 chars split across tokens.
+                # small (≤ max_new_tokens). Robust to multi-byte UTF-8
+                # chars split across tokens.
                 full_text = tokenizer.decode(buffer_ids)
                 if len(full_text) > len(emitted_text):
                     delta_text = full_text[len(emitted_text):]
@@ -374,10 +539,13 @@ async def _do_chat_streaming(prompt_ids, max_new, stop_seqs, model: str):
                     emitted_text = full_text
             elif evt.get("event") == "chat_done":
                 if not evt.get("ok"):
-                    # Sidecar-side error mid-stream
                     yield chunk({}, finish="stop")
                     yield "data: [DONE]\n\n"
                     return
+                # Authoritative generated ids INCLUDE any final EOS;
+                # mirror them into history so next-turn LCP matches the
+                # NPU's KV state.
+                conv_state.history.extend(evt.get("generated_ids", []))
                 stop_reason = evt.get("stop_reason", "stop")
                 finish = _OPENAI_FINISH.get(stop_reason, "stop")
                 yield chunk({}, finish=finish)
@@ -413,13 +581,13 @@ async def chat_completions(req: ChatCompletionRequest):
     # Non-streaming path
     async with sidecar.lock:
         t0 = time.perf_counter()
+        sync_info = await _sync_stream_to_prompt(prompt_ids)
         rsp = await sidecar.request(
-            "chat",
-            prompt_ids=prompt_ids,
-            max_new_tokens=max_new,
+            "stream_decode",
+            stream_id=conv_state.stream_id,
+            max_new=max_new,
             eos_ids=DEFAULT_EOS_IDS,
             stop_token_seqs=stop_seqs,
-            force_ar128=(len(prompt_ids) >= 128),
         )
         wall_s = time.perf_counter() - t0
 
@@ -427,6 +595,7 @@ async def chat_completions(req: ChatCompletionRequest):
         raise HTTPException(500, detail=f"sidecar: {rsp.get('error')}")
 
     raw_ids: list[int] = rsp["generated_ids"]
+    conv_state.history.extend(raw_ids)
     visible_ids = _strip_trailing_eos(raw_ids)
     text = tokenizer.decode(visible_ids)
 
@@ -443,18 +612,23 @@ async def chat_completions(req: ChatCompletionRequest):
             "finish_reason": finish_reason,
         }],
         "usage": {
-            "prompt_tokens": rsp.get("n_prompt", len(prompt_ids)),
-            "completion_tokens": rsp.get("n_generated", len(raw_ids)),
-            "total_tokens": rsp.get("n_prompt", len(prompt_ids)) + rsp.get("n_generated", len(raw_ids)),
+            "prompt_tokens": len(prompt_ids),
+            "completion_tokens": len(raw_ids),
+            "total_tokens": len(prompt_ids) + len(raw_ids),
         },
         "specula_npu": {
             "wall_s": wall_s,
-            "swap_s": rsp.get("swap_s"),
-            "pp_compute_s": rsp.get("pp_compute_s"),
-            "tg_compute_s": rsp.get("tg_compute_s"),
-            "pp_tps": rsp.get("pp_tps"),
-            "tg_tps": rsp.get("tg_tps"),
+            "stream_op": sync_info["stream_op"],
+            "lcp": sync_info["lcp"],
+            "n_new_ingested": sync_info["n_new"],
+            "prefill_s": sync_info["prefill_s"],
+            "truncate_s": sync_info["truncate_s"],
+            "append_s": sync_info["append_s"],
+            "decode_s": rsp.get("compute_s"),
+            "decode_tps": rsp.get("tps"),
             "stop_reason": rsp.get("stop_reason"),
+            "stream_position": rsp.get("position"),
+            "history_len": len(conv_state.history),
         },
     }
     return JSONResponse(response)

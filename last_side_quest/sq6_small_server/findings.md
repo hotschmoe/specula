@@ -265,6 +265,18 @@ sessions need stateful streams.
   quantified: 70-token prompt re-prefill = 2.93 s; 1500-token
   conversation extrapolates to ~62 s per turn — headline argument
   for Phase B.
+- **2026-04-28** — Phase B lands. Stateful streams in sidecar +
+  HTTP server context retention. Same refactor unlocks SQ1 NPU
+  rewind op (next). Probe (`probe_stream_api.py`) confirms stateful
+  matches stateless byte-identical on the same prompt; truncate +
+  append + decode works coherently. HTTP server stateful wins
+  measured: 2.6× faster on prefix re-send, 2.3× faster on a
+  realistic 2-turn coding chat. Crossover analysis settled: stay
+  in AR1-append for deltas < 1024 tokens; AR128-reopen pays a 22 s
+  mode-swap that only amortizes above ~540 token deltas.
+  Limitation: `enable_thinking=False` causes a chat-template/KV
+  divergence that caps multi-turn LCP at ~lcp_max - 5 per prior
+  assistant turn.
 - **2026-04-28** — Phase A.5 lands. SSE streaming via OpenAI's
   standard `text/event-stream` protocol. New sidecar op
   `chat_stream` emits one `{event:"token", token_id}` line per
@@ -276,3 +288,93 @@ sessions need stateful streams.
   Smoke-tested with `curl -N` against counting / coding prompts —
   deltas flow live, `finish_reason` populates correctly on `length`
   cap, `[DONE]` always closes the stream.
+
+## Phase B landed (2026-04-28)
+
+Stateful streams in sidecar + HTTP server context retention. The
+same refactor unlocks the SQ1 NPU rewind op for spec-decode (next
+deliverable).
+
+### Sidecar additions (Phase B)
+
+`EngineState.streams: dict[str, Stream]` holds persistent KV state
+across requests. Six new ops:
+
+| op | purpose |
+|---|---|
+| `stream_open` | initial prefill, store `Stream` by `stream_id` |
+| `stream_truncate` | drop KV slots ≥ new_position; reset next_token |
+| `stream_append` | feed specific token IDs at current position (AR1 only) |
+| `stream_decode` | N greedy decode steps with EOS/stop early-stop |
+| `stream_decode_stream` | streaming variant — emits per-token events |
+| `stream_close` | drop the stream |
+
+Probe (`probe_stream_api.py`) verifies:
+- ✓ Stateful `stream_open + stream_decode` produces **byte-identical**
+  output to stateless `chat` op (same prompt, greedy)
+- ✓ `truncate + append + decode` rolls back, ingests injected tokens,
+  continues coherently
+- ✓ Closed stream returns proper error (no crash)
+
+### HTTP server stateful integration
+
+`ConversationState` tracks `(stream_id, history)`. Each chat
+completion request:
+1. Renders ChatML, tokenizes
+2. `_sync_stream_to_prompt`: longest-common-prefix vs `conv_state.history`
+   - First call → `stream_open` (AR128 prefill if ≥ 128 tokens)
+   - LCP == history len → just `stream_append(delta)` if any
+   - LCP < history len → `stream_truncate(lcp)` + `stream_append(delta)`
+   - Strict-prefix re-send → `stream_truncate(lcp-1)` + re-feed last token
+3. `stream_decode_stream` (streaming) or `stream_decode` (non-streaming)
+4. Mirror `generated_ids` (incl. EOS) into `conv_state.history` for
+   next turn's LCP
+
+`/debug/reset_stream` for testing. `/health` reports `stream_opened`
+and `history_len`.
+
+### Phase B measured wins (2026-04-28, NPU CL=2048)
+
+**Strict-prefix re-send ("send same prompt twice"):**
+- Turn 1: open (28 prompt) + decode 8 → 1.16 s wall
+- Turn 2 same prompt: truncate(12) + refeed 1 + decode → **0.45 s wall** (**2.6× faster**)
+  - prefill_s collapses 0.61 → 0.034 s
+  - **identical content** generated → rewind preserves model state correctly
+
+**Realistic 2-turn coding chat (157-token first response):**
+- Turn 1: open (system+user, 28 tok) + decode 142 → 7.7 s
+- Turn 2: continuation (same system, same user1, actual asst1, new user2):
+  - lcp=32 (limited by `<think></think>` injection — see limitations)
+  - truncate+append 145 new tokens (5.87 s in AR1) + decode 145 → **11.7 s**
+  - Phase A equivalent: AR1→AR128 swap (~14 s) + AR128 prefill + AR128→AR1 swap (~7 s) + decode = ~27 s
+  - **2.3× faster** even with suboptimal LCP
+
+**Heuristic note**: `_stream_reopen` (close + AR128-prefill-restart)
+threshold raised from delta=128 to delta=1024. Crossover analysis:
+AR128 reopen pays ~22 s mode-swap + delta/1500 t/s; AR1 append pays
+delta/24 t/s. AR128 only wins above ~540 tokens of delta. For
+typical chat continuations (tens-to-low-hundreds of tokens),
+AR1-append always beats AR128-reopen.
+
+### Phase B known limitations
+
+- **Chat-template/KV mismatch with `enable_thinking=False`.** The
+  `<think>\n\n</think>\n\n` block is injected at the assistant cue
+  for the current turn (matches upstream Qwen3 behavior). On the
+  next turn, the prior assistant content is rendered WITHOUT a
+  thinking-block (also matches upstream). This means the stream's
+  KV layout and the next-turn rendered prompt diverge at the
+  thinking-block position, capping LCP at ~lcp_max minus ~5 tokens
+  per prior assistant turn. Workaround for max LCP: don't use
+  `enable_thinking=false` in multi-turn agents — instead instruct
+  via system prompt and post-strip `<think>...</think>` on the
+  client.
+- **AR1-only ingest path.** `stream_append` always uses AR1 (one
+  decode step per appended token). For 100-token deltas at 24 t/s
+  this is ~4 s. Future optimization: switch to AR128 batched
+  ingest when delta >= 128 AND we're already in AR128 mode (i.e.,
+  during a freshly-opened stream's prefill phase). For now AR1 is
+  the simple, swap-free path.
+- **Single-tenant.** asyncio lock + 503-busy on overlap. NPU
+  concurrency past ~3 contexts is unstable
+  (`docs/qwen2_5_7b_baseline_all_backends.md`).

@@ -118,6 +118,11 @@ class EngineState:
         self.bindings = None
         self.out_bufs = None
         self.warmup_done = False  # one HMX warmup per loaded chain
+        # Persistent streams keyed by stream_id. Holds Stream objects
+        # that survive across requests so chat-server / spec-decode can
+        # ingest only the delta tokens between rounds rather than re-
+        # prefilling the full context every time.
+        self.streams: dict[str, "Stream"] = {}
 
     def _load(self, target):
         if target == "ar1":
@@ -575,6 +580,238 @@ def serve_chat_request(state, prompt_ids, max_new_tokens, eos_ids,
     }
 
 
+# ---------- Stateful stream API ----------
+#
+# These ops keep a Stream's KV cache live between requests so the next
+# round only ingests the delta tokens since the last interaction. Two
+# headline use cases:
+#
+#   1. SQ1 spec-decode (NPU rewind op):
+#        stream_open(prompt) → stream_decode(K) → ...verify on target...
+#        → stream_truncate(L+i*) + stream_append([target_token])
+#        → stream_decode(K) → ... (next round)
+#
+#   2. SQ6 chat server:
+#        stream_open(initial_prompt) → stream_decode_until_stop(...)
+#        → ...user sends new message...
+#        → stream_append(delta_tokens) → stream_decode_until_stop(...)
+#
+# Mode handling: streams are AR1-resident. stream_open prefills (AR128
+# allowed for the initial prompt), but stream_append always uses AR1
+# decode steps — large deltas (>128 tokens) are slow but functional.
+# Future optimization: AR128 batched ingest for big deltas.
+
+
+def _ensure_stream(state, stream_id: str):
+    """Return (Stream, None) if found else (None, error_dict). Non-raising
+    so the dispatch loop returns proper error JSON instead of crashing."""
+    s = state.streams.get(stream_id)
+    if s is None:
+        return None, {"ok": False,
+                      "error": f"unknown stream_id {stream_id!r}; call stream_open first"}
+    return s, None
+
+
+def serve_stream_open(state, stream_id, prompt_ids, ar128_min_tokens, force_ar128):
+    """Run prefill for a fresh stream. Replaces any existing stream of
+    the same id (idempotent for retries). Returns position + timings."""
+    if not prompt_ids:
+        return {"ok": False, "error": "prompt_ids must be non-empty"}
+    if len(prompt_ids) > state.past_len:
+        return {"ok": False, "error":
+                f"prompt {len(prompt_ids)} > CL-{state.ctx_len} cap {state.past_len}"}
+    if stream_id in state.streams:
+        del state.streams[stream_id]
+
+    t = time.perf_counter()
+    stream = prefill_only(
+        state, stream_id=stream_id, prompt_ids=list(prompt_ids),
+        ar128_min_tokens=ar128_min_tokens, force_ar128=force_ar128,
+    )
+    pp_wall_s = time.perf_counter() - t
+    state.streams[stream_id] = stream
+    return {"ok": True, "stream_id": stream_id,
+            "position": stream.position, "n_prompt": len(prompt_ids),
+            "pp_wall_s": pp_wall_s}
+
+
+def serve_stream_truncate(state, stream_id, new_position):
+    """Drop KV slots at positions >= new_position. Slot data past .t is
+    unattended (mask-controlled) so we don't bother zeroing it. After
+    truncate, `next_token` and `last_logits` are stale; caller must
+    `stream_append` before `stream_decode`."""
+    stream, err = _ensure_stream(state, stream_id)
+    if err:
+        return err
+    if new_position < 0 or new_position > stream.position:
+        return {"ok": False, "error":
+                f"new_position {new_position} out of range "
+                f"(stream is at {stream.position})"}
+    stream.kv.t = new_position
+    stream.position = new_position
+    stream.next_token = None
+    stream.last_logits = None
+    # Drop the corresponding tail of decoded[] so the stream's notion
+    # of what's been decoded matches its KV state.
+    n_keep = new_position - len(stream.prompt_ids)
+    if n_keep < 0:
+        n_keep = 0
+    if len(stream.decoded) > n_keep:
+        stream.decoded = stream.decoded[:n_keep]
+    return {"ok": True, "stream_id": stream_id, "position": new_position}
+
+
+def serve_stream_append(state, stream_id, append_ids, ar128_min_tokens, force_ar128):
+    """Ingest each token in append_ids at the stream's current position.
+    Uses AR1 decode steps (no AR128 batching today — TODO for big deltas).
+    Updates stream.last_logits + stream.next_token after the final token."""
+    stream, err = _ensure_stream(state, stream_id)
+    if err:
+        return err
+    if not append_ids:
+        return {"ok": True, "stream_id": stream_id,
+                "position": stream.position, "n_appended": 0,
+                "compute_s": 0.0}
+    if stream.position + len(append_ids) > state.past_len:
+        return {"ok": False, "error":
+                f"append would overrun KV ({stream.position} + "
+                f"{len(append_ids)} > {state.past_len})"}
+    state.ensure_mode("ar1")
+    _maybe_warmup(state, stream.prompt_ids)
+
+    t = time.perf_counter()
+    last_logits = None
+    for tok in append_ids:
+        logits, _ = _step(
+            state.sessions, state.bindings, state.out_bufs,
+            stream.kv, stream.position, int(tok), state.scales_ar1,
+        )
+        stream.decoded.append(int(tok))
+        stream.position += 1
+        last_logits = logits
+    compute_s = time.perf_counter() - t
+
+    stream.last_logits = last_logits
+    stream.next_token = int(np.argmax(last_logits)) if last_logits is not None else None
+    return {"ok": True, "stream_id": stream_id,
+            "position": stream.position,
+            "n_appended": len(append_ids),
+            "compute_s": compute_s,
+            "tps": len(append_ids) / compute_s if compute_s > 0 else 0.0}
+
+
+def _decode_loop(state, stream, max_new, eos_ids, stop_token_seqs, on_token=None):
+    """Shared decode loop for stream_decode + stream_decode_stream.
+
+    `on_token`: optional callback invoked with each newly decoded token
+    after it's committed to KV. Used by the streaming variant to emit
+    per-token events.
+
+    Returns (generated_ids, stop_reason, compute_s).
+    """
+    if stream.next_token is None:
+        raise RuntimeError("stream has no next_token; stream_append before stream_decode")
+    state.ensure_mode("ar1")
+    _maybe_warmup(state, stream.prompt_ids)
+
+    eos_set = set(eos_ids or [])
+    stop_seqs = [list(s) for s in (stop_token_seqs or []) if s]
+    generated: list[int] = []
+    stop_reason = "max_new_tokens"
+
+    t = time.perf_counter()
+    for i in range(max_new):
+        if stream.position >= state.past_len:
+            stop_reason = "ctx_full"
+            break
+        logits, _ = _step(
+            state.sessions, state.bindings, state.out_bufs,
+            stream.kv, stream.position, stream.next_token, state.scales_ar1,
+        )
+        token = stream.next_token
+        stream.decoded.append(token)
+        stream.position += 1
+        stream.last_logits = logits
+        stream.next_token = int(np.argmax(logits))
+        generated.append(token)
+        if on_token is not None and token not in eos_set:
+            on_token(token)
+
+        if token in eos_set:
+            stop_reason = "eos"
+            break
+        for seq in stop_seqs:
+            if len(generated) >= len(seq) and generated[-len(seq):] == seq:
+                stop_reason = "stop"
+                break
+        if stop_reason == "stop":
+            break
+    compute_s = time.perf_counter() - t
+    return generated, stop_reason, compute_s
+
+
+def serve_stream_decode(state, stream_id, max_new, eos_ids, stop_token_seqs):
+    """Run up to max_new greedy decode steps with optional early-stop on
+    EOS / stop-sequence. Returns the generated token IDs."""
+    stream, err = _ensure_stream(state, stream_id)
+    if err:
+        return err
+    if max_new <= 0:
+        return {"ok": False, "error": "max_new must be > 0"}
+    if stream.next_token is None:
+        return {"ok": False, "error":
+                "stream has no next_token; stream_append before stream_decode"}
+    generated, stop_reason, compute_s = _decode_loop(
+        state, stream, max_new, eos_ids, stop_token_seqs)
+    return {
+        "ok": True, "stream_id": stream_id,
+        "generated_ids": generated,
+        "stop_reason": stop_reason,
+        "position": stream.position,
+        "n_generated": len(generated),
+        "compute_s": compute_s,
+        "tps": len(generated) / compute_s if compute_s > 0 else 0.0,
+    }
+
+
+def serve_stream_decode_stream(state, req_id, stream_id, max_new,
+                               eos_ids, stop_token_seqs):
+    """Streaming variant: emits {event:"token",token_id} per decoded token,
+    concludes with chat_done summary."""
+    stream, err = _ensure_stream(state, stream_id)
+    if err:
+        emit({"id": req_id, "event": "chat_done", **err})
+        return
+    if stream.next_token is None:
+        emit({"id": req_id, "event": "chat_done", "ok": False,
+              "error": "stream has no next_token; stream_append before stream_decode"})
+        return
+
+    def on_token(tok):
+        emit({"id": req_id, "event": "token", "token_id": tok})
+
+    generated, stop_reason, compute_s = _decode_loop(
+        state, stream, max_new, eos_ids, stop_token_seqs, on_token=on_token)
+    emit({
+        "id": req_id, "event": "chat_done", "ok": True,
+        "stream_id": stream_id,
+        "stop_reason": stop_reason,
+        "position": stream.position,
+        "n_generated": len(generated),
+        # Includes EOS if present — caller mirrors this into its own
+        # history tracker so longest-common-prefix between turns sees
+        # the same prefix the NPU's KV holds.
+        "generated_ids": generated,
+        "compute_s": compute_s,
+        "tps": len(generated) / compute_s if compute_s > 0 else 0.0,
+    })
+
+
+def serve_stream_close(state, stream_id):
+    state.streams.pop(stream_id, None)
+    return {"ok": True, "stream_id": stream_id}
+
+
 def emit(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
     sys.stdout.flush()
@@ -789,6 +1026,43 @@ def cmd_serve(args):
             # serve_chat_stream_request emits its own chat_done; skip the
             # generic emit at the bottom of the loop.
             continue
+        elif op == "stream_open":
+            result = serve_stream_open(
+                state, stream_id=str(req["stream_id"]),
+                prompt_ids=list(req["prompt_ids"]),
+                ar128_min_tokens=int(req.get("ar128_min_tokens", args.ar128_min_tokens)),
+                force_ar128=bool(req.get("force_ar128", False)),
+            )
+        elif op == "stream_truncate":
+            result = serve_stream_truncate(
+                state, stream_id=str(req["stream_id"]),
+                new_position=int(req["new_position"]),
+            )
+        elif op == "stream_append":
+            result = serve_stream_append(
+                state, stream_id=str(req["stream_id"]),
+                append_ids=list(req["append_ids"]),
+                ar128_min_tokens=int(req.get("ar128_min_tokens", args.ar128_min_tokens)),
+                force_ar128=bool(req.get("force_ar128", False)),
+            )
+        elif op == "stream_decode":
+            result = serve_stream_decode(
+                state, stream_id=str(req["stream_id"]),
+                max_new=int(req["max_new"]),
+                eos_ids=req.get("eos_ids", []),
+                stop_token_seqs=req.get("stop_token_seqs", []),
+            )
+        elif op == "stream_decode_stream":
+            serve_stream_decode_stream(
+                state, req_id=req.get("id"),
+                stream_id=str(req["stream_id"]),
+                max_new=int(req["max_new"]),
+                eos_ids=req.get("eos_ids", []),
+                stop_token_seqs=req.get("stop_token_seqs", []),
+            )
+            continue
+        elif op == "stream_close":
+            result = serve_stream_close(state, stream_id=str(req["stream_id"]))
         else:
             emit({"id": req.get("id"), "ok": False, "error": f"unknown op: {op}"})
             continue
