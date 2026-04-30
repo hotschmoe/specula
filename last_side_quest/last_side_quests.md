@@ -396,7 +396,7 @@ Suggested sequence (each ≤ 1 session unless noted):
 | **SQ1 NPU rewind** | ✅ **landed 2026-04-28** | Path C STATEFUL (`demo_path_c_stateful.py`) uses the SQ6 stateful stream API. NPU re-prefill share collapses to 0; JSON K=8 r=4 runs in 5.96 s wall (vs 21.70 stateless), spec-decode 5.53 t/s (vs 1.52), **2.37× speedup vs same-host baseline** — first-ever cross of 1.0×. 91% accept byte-identical to stateless. CSV `results/csv/sq1_path_c_stateful_2026-04-28.csv`. Native ARM64 llama-cpp-python build remains the only outstanding follow-up (cross-arch drift on free-form prompts). |
 | **SQ2** | ✅ **closed POSITIVE 2026-04-28** | aimet_torch v2 + SEQ_MSE/AdaScale work locally on Prism + WSL2 ARM64; aimet_onnx + qai_hub_models wrapper still cloud-only; basic-PTQ Qwen3-0.6B end-to-end demo lands negative-but-expected (cos -0.065 = V/O collapse repro) |
 | **SQ3-small** | ✅ **closed POSITIVE 2026-04-28** (Granite-MoE branch + 3 follow-ups) | Granite-3.0-1B-A400M ran AIMET basic-PTQ end-to-end on Prism CPU; cos +0.656 (per-tensor experts) → +0.712 (per-channel experts, "A1" champion). SEQ_MSE-4 regressed (0.640); SEQ_MSE-16 partially recovered (0.682) — **A1 wins on Prism budget**. OLMoE-1B-7B failed end-to-end across 3 iterations — per-expert dispatch architecturally hostile to AIMET v2 (Granite's fused-experts + Qwen3-MoE's hit-filter both avoid this). AIMET 2.29 has no granitemoe adapter; written in ~80 LOC. **Qwen3-30B-A3B remains cloud-only** (corrected math: 30B FP32 = 120 GB, BF16 = 60 GB — neither fits 48 GB DRAM). |
-| SQ4 | ⏳ writeup pending | partially fed by SQ2/SQ3. New prior: rent on demand, not by default — local AIMET unblocks design iteration on ≤4B; cloud only for production blessed bundles. Qwen3-30B-A3B remains cloud-only (FP32 120 GB / BF16 60 GB doesn't fit 48 GB DRAM). |
+| SQ4 | 🚀 **plan committed 2026-04-29, M1 pending** | scope expanded from "sizing writeup" to "execute the cloud pipeline." Plan: `last_side_quest/sq4_cloud_adventure/findings.md`. Five milestones M1→M5 (Qwen3-0.6B → 4B → 14B → Qwen3.6-27B dense → Qwen3.6-35B-A3B MoE). Hardware: RunPod A40 48 GB at $0.44/hr for M1-M3; A100 80 GB for M4-M5. Validation anchor: `models/qualcomm-qwen3-4b-ref/` for M2 byte-/argmax-comparison. Total budget $50-75. |
 | **SQ5** | ✅ **closed POSITIVE 2026-04-27** | engine generalized cl=512..4096; coding-asst contexts viable up through 4K at 20 t/s |
 | **SQ6** | ✅ **Phases A→E landed 2026-04-28..29** | OpenAI-compat NPU HTTP server (`npu_engine/http_server.py`). A stateless + A.5 SSE + B stateful KV-LCP streams (2.3-2.6× speedup) + C real-world pi A/B (NPU silent-island UX wins; throughput tied with OpenCL; Vulkan-4B chat broken at this commit) + D daily-driver Q3.6-35B-A3B CPU 32 t/s comparator + E Qwen2.5-7B-NPU sidecar generalization. Phase F follow-ups open: tool-call parser + 7B AR1↔AR128 swap fix. |
 
@@ -507,13 +507,24 @@ worth one more session each if budget allows.
 - Per-expert axis-0-only weight quant variant as deployment middle
   ground.
 
-**SQ4 — cloud-sizing writeup** (the only fully-pending SQ)
-- Compose SQ2 + SQ3 results into a `$/VRAM/recipe` table; slot into
-  `docs/one_pipeline_cloud_gpu.md` §Budget.
-- Document the new prior: rent only for **production blessed bundles**,
-  not iteration — local AIMET unblocks design loop ≤4B.
-- Qwen3-30B-A3B remains cloud-only (FP32 120 GB / BF16 60 GB doesn't
-  fit 48 GB DRAM).
+**SQ4 — cloud pipeline execution** (scope expanded 2026-04-29 from
+"sizing writeup" to "actually run the rentals"). Full plan in
+`last_side_quest/sq4_cloud_adventure/findings.md`. Execution order:
+- **M1** Qwen3-0.6B w4a16 NPU bundle (~$1, A40 48 GB) — decisive test
+  of whether SEQ_MSE+AdaScale closes SQ2's V/O collapse (cos -0.065 →
+  ≥0.95 target).
+- **M2** Qwen3-4B w4a16 NPU bundle (~$3-5, A40 48 GB) — gold-reference
+  reproduction vs `models/qualcomm-qwen3-4b-ref/`. Target: 46/46
+  argmax agreement on 46-token oracle (matches Qualcomm's shipping
+  bundle).
+- **M3** Qwen3-14B w4a16 NPU bundle (~$3-15, A40 or A100) — first
+  novel artifact, no Qualcomm reference exists.
+- **M4** Qwen3.6-27B dense (~$13-15, A100 80 GB) — first cross-
+  generation; tokenizer incompat per memory; may need ~80 LOC AIMET
+  adapter if `qwen3_6` not blessed.
+- **M5** Qwen3.6-35B-A3B MoE (~$25-35, A100 80 GB or 2×) — production
+  target, headline deliverable. Validates AIMET MoE quantsim + QAIRT
+  MoE compile + HTP MoE routing end-to-end.
 
 **SQ5b — long-context NPU tail**
 - Battery J/tok at cl=4096 (current numbers are AC).
@@ -637,3 +648,13 @@ Qwen3.5/3.6.
   KV-LCP, tool-call protocol gap. Outstanding follow-ups
   consolidated as a new section. SQ4 confirmed as the only fully-
   pending umbrella deliverable.
+- **2026-04-29** — SQ4 scope expanded from "sizing writeup" to
+  "execute the cloud pipeline." New workspace
+  `last_side_quest/sq4_cloud_adventure/` with unified plan doc
+  (`findings.md`). Five milestones M1→M5 (Qwen3-0.6B → 4B → 14B →
+  Qwen3.6-27B dense → Qwen3.6-35B-A3B MoE). Hardware: RunPod A40
+  48 GB at $0.44/hr for M1-M3; A100 80 GB for M4-M5. Validation
+  anchor for M2 is `models/qualcomm-qwen3-4b-ref/` (Qualcomm's
+  shipping bundle on disk; target: 46/46 argmax match). Total
+  budget $50-75. M1 pre-rent checklist in plan; first rent not
+  started.
