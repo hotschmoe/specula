@@ -28,6 +28,74 @@ from .cal import cal_iter
 from .rope import build_rope_cache
 
 
+def _patch_onnx2torch_reduce_mean_v18() -> None:
+    """Register a v18 ReduceMean handler in onnx2torch's converter registry.
+
+    aimet_onnx 2.26's `experimental.adascale.onnx2torch_ext` only
+    registers ReduceMean v1/v11/v13 — the optimum-cli export emits
+    opset 18 where ReduceMean's `axes` moved from attribute to optional
+    input (mirroring what ReduceSum did at v13). Without this patch,
+    `apply_adascale` crashes with:
+
+        NotImplementedError: Converter is not implemented (
+          OperationDescription(domain='', operation_type='ReduceMean',
+          version=18))
+
+    The handler below mirrors onnx2torch's existing ReduceSum v13
+    implementation: read `axes` from input[1] when it's a constant
+    initializer (which it is for Qwen3's RMSNorm — fixed `[ -1 ]`),
+    reuse `OnnxReduceStaticAxes` for the actual reduction.
+    """
+    try:
+        from onnx2torch.node_converters.registry import (
+            add_converter, OperationDescription, _CONVERTER_REGISTRY,
+        )
+        from onnx2torch.onnx_node import OnnxNode
+        from onnx2torch.onnx_graph import OnnxGraph
+        from onnx2torch.utils.common import (
+            OperationConverterResult, OnnxMapping, onnx_mapping_from_node,
+        )
+        from onnx2torch.node_converters.reduce import OnnxReduceStaticAxes
+        from onnx2torch.utils.common import get_const_value
+    except Exception as e:
+        print(f"[adascale-patch] WARNING: cannot import onnx2torch internals "
+              f"({e}); skipping ReduceMean v18 patch")
+        return
+
+    from onnx import defs as onnx_defs
+    desc = OperationDescription(
+        domain=onnx_defs.ONNX_DOMAIN,
+        operation_type="ReduceMean",
+        version=18,
+    )
+    if desc in _CONVERTER_REGISTRY:
+        return  # already patched
+
+    @add_converter(operation_type="ReduceMean", version=18)
+    def _reduce_mean_v18(node: OnnxNode, graph: OnnxGraph) -> OperationConverterResult:
+        keepdims: int = node.attributes.get("keepdims", 1)
+        # noop_with_empty_axes attr was added at v18 too; default 0.
+        # Resolve `axes` from input[1] if present + constant; else None.
+        axes = None
+        if len(node.input_values) >= 2 and node.input_values[1]:
+            try:
+                axes_t = get_const_value(node.input_values[1], graph)
+                axes = axes_t.tolist()
+            except (KeyError, AttributeError):
+                axes = None
+        return OperationConverterResult(
+            torch_module=OnnxReduceStaticAxes(
+                operation_type="ReduceMean", axes=axes, keepdims=keepdims,
+            ),
+            onnx_mapping=OnnxMapping(
+                inputs=(node.input_values[0],),
+                outputs=node.output_values,
+            ),
+        )
+
+    print("[adascale-patch] registered ReduceMean v18 handler")
+
+
 def _detect_vo_proj_weight_tensors(model: onnx.ModelProto) -> list[str]:
     """Find every initializer name that looks like attn V or O proj weight.
 
@@ -216,6 +284,9 @@ def run_aimet(
     # ---- 6. AdaScale (optional, run BEFORE compute_encodings) ----
     if use_ada_scale:
         t0 = time.time()
+        # Patch onnx2torch's registry to support ReduceMean v18 (Qwen3
+        # RMSNorm) before AdaScale runs its onnx-to-torch conversion.
+        _patch_onnx2torch_reduce_mean_v18()
         from aimet_onnx.experimental.adascale.adascale_optimizer import (
             apply_adascale, AdaScaleModelConfig,
         )
