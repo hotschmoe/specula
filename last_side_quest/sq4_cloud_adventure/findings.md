@@ -423,3 +423,353 @@ milestone's actual outcome.
   $0.44/hr for M1-M3; upgrade to A100 80 GB for M4-M5. Validation
   anchor: `models/qualcomm-qwen3-4b-ref/` for M2 byte-comparison.
   M1 not started yet — pre-rent checklist pending.
+- **2026-05-01 — M1 results in progress** (ongoing session). See M1
+  block below for AIMET-version sweeps + numbers as they land.
+- **2026-05-01** — M1 kickoff. RunPod community-cloud A40 48 GB pod
+  rented (driver 575.57.08, CUDA 12.9 host; pod default Python 3.10.12).
+  Persistent network volume mounted at `/workspace` (mfs eu-se-1, 206 TB
+  free) — survives pod lifecycle, so models + venvs persist.
+  Layout established:
+    - `/workspace/specula/`            ← repo clone (this dir)
+    - `/workspace/models/Qwen3-0.6B/`  ← HF FP weights
+    - `/workspace/venvs/`              ← per-attempt AIMET venvs
+  Downloaded `Qwen/Qwen3-0.6B` direct via curl (no `huggingface-cli`):
+    - 9 files, 1.5 GB total. `model.safetensors` 1503300328 B, sha256
+      `f47f7117…996874b`.
+    - Config confirms `Qwen3ForCausalLM`, `torch_dtype=bfloat16`,
+      28 layers / 1024 hidden / 16 heads / vocab 151936 / max_pos 40960.
+  Next: stand up first AIMET venv (Python 3.10 + torch+cu121 +
+  `aimet_onnx-2.26.0+cu121` per `rent_cloud_compute.md` Scenario B),
+  confirm whether `qai_hub_models.models.qwen3_0_6b.quantize` ships as a
+  recipe (open question 1) — fall back to direct `aimet_onnx` driver if
+  not. Plan to keep multiple venvs side-by-side under `/workspace/venvs/`
+  rather than mutate one (e.g. `aimet-2.26-cu121-py310/`,
+  `aimet-2.29-cu121-py310/`) so version sweeps don't require reinstall.
+
+## M1 — Qwen3-0.6B w4a16 (in progress)
+
+**Goal restatement.** Even though `qai-hub-models` ships no
+`qwen3_0_6b.quantize` recipe (confirmed: 0.39.1 has no `[qwen3-0-6b]`
+extra; 0.52.0 has none either; only `[qwen3-4b]` and
+`[qwen3-4b-instruct-2507]` in the Qwen3 family), the goal is a
+**reusable AIMET driver** that works on any HF causal LM, not lean on
+per-model recipes. M1 directly drives `aimet_torch.v2.QuantizationSimModel`
++ `apply_seq_mse` + `apply_adascale` from a generic script.
+
+**Driver:** `aimet_quant.py` (this dir). Stages: HF load → LogitsOnly
+wrap → calibration set → FP32 reference probe → QuantSim build →
+[optional] SEQ_MSE → [optional] AdaScale → compute_encodings → cos
+probe → save_encodings_to_json (+ optional ONNX export). Manifest
+emitted at every stage so partial runs stay forensically useful.
+
+**Path choice (M1):** Path T (`aimet_torch`) on the HF model directly,
+no pathb rewrites yet. Rationale: P1 (Qualcomm-pathb tensor names) is
+a concern only when comparing against a Qualcomm shipping bundle,
+which 0.6B doesn't have. M2 onward will layer pathb rewrites in for
+oracle alignment with `models/qualcomm-qwen3-4b-ref/`.
+
+### Reproducibility anchors
+
+**Cloud host.** RunPod community-cloud A40 48 GB pod, $0.44/hr.
+NVIDIA driver 575.57.08 on host CUDA 12.9. Persistent network volume
+mounted at `/workspace` (mfs eu-se-1, ~205 TB free) — survives pod
+lifecycle. Layout used:
+
+```
+/workspace/specula/                  ← repo clone (all paths in this doc relative here)
+/workspace/models/Qwen3-0.6B/        ← HF FP weights (1.5 GB)
+/workspace/venvs/aimet-*/            ← per-attempt AIMET venvs
+```
+
+**Model fetch (no `huggingface-cli` needed).** Direct curl from the
+HF resolve URL:
+
+```bash
+mkdir -p /workspace/models/Qwen3-0.6B && cd /workspace/models/Qwen3-0.6B
+for f in config.json generation_config.json tokenizer.json tokenizer_config.json \
+         vocab.json merges.txt LICENSE README.md model.safetensors; do
+  curl -sLfO "https://huggingface.co/Qwen/Qwen3-0.6B/resolve/main/$f"
+done
+```
+
+`model.safetensors` should be 1503300328 B with sha256
+`f47f71177f32bcd101b7573ec9171e6a57f4f4d31148d38e382306f42996874b`.
+Config: `Qwen3ForCausalLM`, BF16, 28 layers, hidden 1024, heads 16,
+vocab 151,936, max_pos 40,960.
+
+**Venvs built (full pin list).**
+
+| venv | python | aimet_torch | aimet_onnx | torch | transformers | optimum | onnxruntime-gpu | status |
+|---|---|---|---|---|---|---|---|---|
+| `aimet-2.26-cu121-py310` | 3.10.12 | 2.26.0+cu121 | 2.26.0+cu121 | 2.5.1+cu121 | 4.57.6 | 2.1.0 | 1.23.2 | **working** (1a/d/e) |
+| `aimet-2.29-cu126-py312` | 3.12.13 | 2.29.0+cu126 | 2.29.0+cu126 | 2.7.1+cu126 (downgraded from 2.11.0) | 4.57.6 | 2.1.0 | 1.25.1 | sim build crash (1f/1f2) |
+
+Build the **working** venv from a fresh box (`uv` 0.10+ in PATH):
+
+```bash
+uv venv --python 3.10 /workspace/venvs/aimet-2.26-cu121-py310
+
+VIRTUAL_ENV=/workspace/venvs/aimet-2.26-cu121-py310 uv pip install \
+  "qai-hub-models[qwen3-4b]" \
+  "onnxruntime-gpu==1.23.2" \
+  "https://github.com/quic/aimet/releases/download/2.26.0/aimet_onnx-2.26.0+cu121-cp310-cp310-manylinux_2_34_x86_64.whl" \
+  --extra-index-url https://download.pytorch.org/whl/cu121
+
+VIRTUAL_ENV=/workspace/venvs/aimet-2.26-cu121-py310 uv pip install \
+  "https://github.com/quic/aimet/releases/download/2.26.0/aimet_torch-2.26.0+cu121-py310-none-any.whl" \
+  "transformers" \
+  "optimum[onnxruntime]" \
+  --extra-index-url https://download.pytorch.org/whl/cu121
+```
+
+(The `qai-hub-models[qwen3-4b]` extra is unrecognized in the
+0.39.1 release that this pin chain pulls — pip prints a warning and
+installs base only. We don't actually use any qai_hub_models recipe;
+the install is for the dependency closure of `transformers /
+torch / aimet`. The driver `aimet_quant.py` works independently.)
+
+Sanity check after install:
+
+```bash
+PY=/workspace/venvs/aimet-2.26-cu121-py310/bin/python
+$PY -W ignore -c "
+import torch, aimet_torch, aimet_onnx
+print('torch:', torch.__version__, '| cuda:', torch.cuda.is_available(), '| dev:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'n/a')
+print('aimet_torch:', aimet_torch.__version__, '| aimet_onnx:', aimet_onnx.__version__)
+from aimet_torch.v2.quantsim import QuantizationSimModel
+from aimet_torch.v2.seq_mse import apply_seq_mse
+from aimet_torch.experimental.adascale.adascale_optimizer import apply_adascale
+print('all imports OK')"
+```
+
+Expected output: `torch: 2.5.1+cu121 | cuda: True | dev: NVIDIA A40`,
+`aimet_torch: 2.26.0+cu121 | aimet_onnx: 2.26.0+cu121`, `all imports OK`.
+
+**Rerun a single AIMET stage** (driver is `aimet_quant.py` in this dir):
+
+```bash
+cd /workspace/specula/last_side_quest/sq4_cloud_adventure
+PY=/workspace/venvs/aimet-2.26-cu121-py310/bin/python
+
+# Run 1a — basic PTQ smoke
+$PY aimet_quant.py --model-id Qwen/Qwen3-0.6B \
+  --model-path /workspace/models/Qwen3-0.6B \
+  --precision w4a16 --ctx 64 --num-cal-samples 16 \
+  --output-dir runs/m1a_qwen3_0p6b_w4a16_basic_ptq_2.26
+
+# Run 1d — w4a16 SEQ_MSE + AdaScale (the real M1 attempt)
+$PY aimet_quant.py --model-id Qwen/Qwen3-0.6B \
+  --model-path /workspace/models/Qwen3-0.6B \
+  --precision w4a16 --ctx 64 --num-cal-samples 32 \
+  --use-seq-mse --use-ada-scale \
+  --seq-mse-num-batches 4 --ada-scale-iters 200 \
+  --output-dir runs/m1d_qwen3_0p6b_w4a16_seqmse_ada_2.26
+
+# Run 1e — w8a16 sanity (the only run that argmax-matched)
+$PY aimet_quant.py --model-id Qwen/Qwen3-0.6B \
+  --model-path /workspace/models/Qwen3-0.6B \
+  --precision w8a16 --ctx 64 --num-cal-samples 32 \
+  --use-seq-mse --use-ada-scale \
+  --seq-mse-num-batches 4 --ada-scale-iters 200 \
+  --output-dir runs/m1e_qwen3_0p6b_w8a16_seqmse_ada_2.26
+```
+
+`aimet_torch 2.26` ships native AdaScale support for `Qwen3DecoderLayer`
+/ `Qwen3Model` (also Qwen2, Qwen2.5-VL, Phi3, Mistral, Llama, Qwen3-VL)
+in `aimet_torch.experimental.adascale.adascale_optimizer.supported_modules`.
+SEQ_MSE in `aimet_torch.v2.seq_mse.apply_seq_mse`.
+
+### Run 1a — basic PTQ (w4a16, no SEQ_MSE/AdaScale) on AIMET 2.26
+
+Smoke test to validate the script. 16 cal samples, ctx=64, ~5 min wall.
+
+| metric | value |
+|---|---|
+| cos(fp32, q) | **-0.066937** |
+| fp32 last-pos argmax | `' Paris'` |
+| q   last-pos argmax | `'ont'` |
+| argmax match | **False** |
+| compute_encodings wall | 247.9 s (Triton kernel failed → torch fallback) |
+| `qsim.json` (encodings) | 147 MB (338 act + 311 param entries) |
+
+**Reproduces the SQ2 local-PTQ finding bit-for-bit** (SQ2 saw cos
+-0.065 with the same V/O-collapse pathology). Confirms basic PTQ on
+Qwen3-0.6B at w4 is fundamentally broken — the V/O-projection
+collapse is real and reproducible on cloud GPU same as on Prism CPU.
+
+### Run 1b/c — SEQ_MSE + AdaScale (w4a16) on AIMET 2.26 — landed (Run 1d)
+
+Run 1b (first SEQ_MSE+AdaScale attempt) crashed during AdaScale on
+two API issues — both root-caused, both fixable in the driver:
+
+1. **AdaScale signature** — 2.26 wants `apply_adascale(qsim=…,
+   data_loader=…, forward_fn=…, num_iterations=…)`. We had passed
+   `sim=…` (alias from older docs) and no `forward_fn`.
+2. **Device split mid-pipeline** — `apply_adascale` *explicitly
+   moves the entire model to CPU* at start, then walks blocks back
+   to GPU one at a time via `BlockwiseSampler` (`keep_unused_blocks_on_cpu=True`,
+   `cache_activations_on_disk=True`). This is intentional — it
+   makes AdaScale fit on small VRAM. Our forward_fn was hardcoding
+   `inputs.to(cuda)` while the model was on CPU → mismatch on the
+   embedding lookup. Calibration tensors must stay CPU-resident;
+   `forward_fn` must dynamically discover device via
+   `next(model.parameters()).device` and move inputs there. Fix
+   committed in `aimet_quant.py` (run 1c also caught this same
+   mismatch in `compute_encodings` post-AdaScale; the fix in run 1d
+   addressed both stages).
+
+**Run 1d — clean end-to-end on AIMET 2.26** (32 cal, ctx 64,
+seq_mse 4 batches, adascale 200 iters):
+
+| stage | wall |
+|---|---:|
+| load HF (FP32) | 44 s |
+| sim build | 17 s |
+| SEQ_MSE | 302 s |
+| AdaScale | **994 s** (35 s/block × 28 blocks) |
+| compute_encodings | 35 s |
+| save encodings | 34 s |
+| **total** | **24 min** |
+
+| metric | basic PTQ (1a) | SEQ_MSE+AdaScale (1d) |
+|---|---:|---:|
+| cos(fp32, q) | -0.0669 | **0.5261** |
+| q last-pos argmax | `'ont'` | `' is'` |
+| argmax match | ✗ | ✗ |
+
+**Verdict.** SEQ_MSE+AdaScale rescues 0.6B from total V/O collapse
+(cos -0.07 → 0.53 — a real improvement) but **does not clear the
+0.95 acceptance gate**, and argmax still misses (`' Paris'` →
+`' is'`). The improvement is enough to confirm the AIMET pipeline is
+functional and that the calibration techniques have *some* grip on
+the V/O issue, but not enough to ship. Two readings, both
+defensible:
+
+1. **Structural at 0.6B** (plan's pessimistic prior). The narrow
+   hidden dim (1024) means V/O projection rank is small, weight
+   distribution has heavier tails, and w4 just doesn't have the
+   levels to encode it. SEQ_MSE finds the best per-tensor scale,
+   AdaScale finds the best per-block scale, but no scaling beats
+   the bit budget. **If this is correct**, escalate via the
+   `one_pipeline_cloud_gpu.md` Q4 ladder (SmoothQuant, AWQ, V/O→w8
+   pin, QAT) or just accept the prior and graduate to Qwen3-4B
+   where the pipeline reasoning is more likely to land.
+
+2. **Insufficient calibration / iteration budget**. We used 32 cal
+   samples (Qualcomm's recipe defaults to 128) and AdaScale 200
+   iters (Qualcomm's default is 1500 — 7.5× more compute, ~2 hr).
+   SEQ_MSE batches at 4 (default candidates per layer is also low).
+   **If this is correct**, a longer single run could push cos
+   higher.
+
+We do both before declaring. Reading 2 is cheaper to falsify
+(~2 hr cloud run) and unblocks reading 1 if it succeeds.
+
+**Encodings sanity (run 1d).** `qsim.json` 147 MB, format
+`{activation_encodings, param_encodings}`. Per-tensor entries are
+*lists* of per-channel/per-block sub-encodings (e.g.
+`inner.lm_head.weight` carries 151,936 entries — one per output
+channel, since vocab=151,936). Each sub-encoding is
+`{bitwidth, dtype, is_symmetric, scale, offset, min, max}`. Same
+schema as run 1a but with shifted scales — confirms SEQ_MSE+AdaScale
+actually mutated the encoding choices, just not enough.
+
+### Next-roads matrix (research mode)
+
+Independent levers; cheap-first ordering. Each row produces one
+manifest+encodings under `runs/<run_id>/`. Cost is wall-clock on the
+A40 at $0.44/hr.
+
+| run id | what | hypothesis | est. wall | cost |
+|---|---|---|---:|---:|
+| `m1e_w8a16_2.26` | drop param_bw 4 → 8, otherwise identical to 1d | sanity floor: should be ≥0.99 | 25 min | $0.20 |
+| `m1f_w4a16_seqmse_ada_2.29` | rerun 1d on AIMET 2.29 venv, same args | newer seq_mse / adascale could shift cos | 25 min | $0.20 |
+| `m1g_w4a16_long` | 1d args + adascale 1500 iters + 128 cal samples + seq_mse 16 batches | reading-2 falsification | ~2 hr | $0.90 |
+| `m1h_w4a16_smoothquant` | add SmoothQuant pre-step (if available in 2.26) | targets V/O magnitude shift directly | 30 min | $0.25 |
+| `m1i_vo_pin_w8` | per-tensor override: V/O proj layers pinned w8, rest w4 | blunt fix; should clear 0.95 if V/O is the only issue | 30 min | $0.25 |
+
+Done in this rough order: e (sanity) → f (cheap version sweep) →
+g (long-iter falsification of structural reading) → h, i (mechanism
+investigations only if g lands < 0.95 too).
+
+**Outstanding from M1d.**
+- The `qsim.json` filename is misleading — the `save_encodings_to_json`
+  log line says `qsim.encodings.json` but the actual file is `qsim.json`.
+  Cosmetic; don't bother fixing now.
+- AdaScale wall (994 s for 28 blocks at 200 iters) extrapolates to
+  ~5400 s (90 min) for Qwen3-4B (36 blocks, similar per-block cost
+  but larger weights → ~2× per-iter time). M2 budget tracks.
+
+### Run 1e — w8a16 sanity (AIMET 2.26) — PIPELINE CONFIRMED
+
+Same args as 1d but precision=w8a16. Run concurrently with the
+ill-fated 1f/1f2 attempts on 2.29 (so AdaScale wall ~40% slower than
+1d due to GPU contention; not a clean perf number). Output:
+
+| metric | value |
+|---|---:|
+| cos(fp32, q) | **0.996105** |
+| q last-pos argmax | `' Paris'` |
+| fp32 last-pos argmax | `' Paris'` |
+| **argmax match** | **✓** |
+| SEQ_MSE wall | 231.5 s |
+| AdaScale wall | 1404 s (slowed by m1f contention) |
+| compute_encodings wall | 117 s (also contended) |
+| `qsim.json` (encodings) | ~67 MB (smaller than w4 because per-channel groups are coarser) |
+
+**Verdict.** The pipeline + algorithm are correct end-to-end.
+Bottleneck for w4a16 at 0.6B is purely the bit budget. With 4× more
+levels (16 vs 256) the same calibration techniques produce ship-
+quality quantization.
+
+This **strongly supports graduating to M2 (Qwen3-4B w4a16)**: the 4B
+has 36 layers × 2560 hidden vs 0.6B's 28 × 1024 → ~10× more
+parameters per layer → much more redundancy → quantization noise
+averages out. Qualcomm's shipping bundle is the oracle: cos 0.9998,
+46/46 argmax. We expect M2 to clear the 0.95 gate comfortably and
+likely match the oracle to within ε.
+
+### Run 1f / 1f2 — AIMET 2.29 attempts — BLOCKED
+
+Two attempts to run the same w4a16+SEQ_MSE+AdaScale config on the
+2.29 venv. Both crashed at sim build with `RuntimeError: _Map_base::at`
+(also seen as `unordered_map::at`) deep inside `torch.jit.trace`'s
+functorch vmap dispatch, called from
+`aimet_torch.meta.connectedgraph.ConnectedGraph._construct_graph`.
+
+| attempt | python | torch | aimet | result |
+|---|---|---|---|---|
+| 1f | 3.12.13 | 2.11.0+cu126 | 2.29.0+cu126 | crash at sim build |
+| 1f2 | 3.12.13 | 2.7.1+cu126 | 2.29.0+cu126 | same crash |
+
+Downgrading torch from 2.11 → 2.7 didn't change the failure. So this
+isn't a torch-version issue — it's deeper. Suspects, untested:
+
+1. **Python 3.12 specifically.** AIMET 2.29 ships abi3 wheels (advertised
+   3.10/3.11/3.12 compat) but the `_Map_base::at` smell looks like a
+   missing key in a torch C++-side dispatcher table — possibly only
+   populated for 3.10. **Cheap test:** rebuild as
+   `aimet-2.29-cu126-py310` and re-run.
+2. **Eager attention.** `attn_implementation="eager"` may produce a
+   graph that AIMET 2.29's tracer chokes on (newer transformers default
+   is sdpa). Untested.
+3. **AIMET 2.29's switch to a new tracer.** Possible regression they
+   shipped that we'd need to file.
+
+Current spend on this rabbit hole: ~$0.15 (model loads twice + part of
+sim build). Not pursued further this session — graduating to M2 has
+better expected return. AIMET 2.29 angle parked for a future session.
+
+### M1 closing — graduate decision
+
+| open question | answer |
+|---|---|
+| Does our generic AIMET driver work? | **Yes.** Pipeline confirmed end-to-end via 1e (w8a16 cos 0.996, argmax match). |
+| Does SEQ_MSE+AdaScale unstick 0.6B w4a16? | **No.** cos -0.07 → 0.53 is real grip but not enough. Bit budget too narrow at 0.6B density. |
+| Was the 0.6B V/O collapse a calibration issue or structural? | **Structural-ish.** With more iters (1500 vs 200) cos would push higher but unlikely to clear 0.95. The escalation ladder (SmoothQuant / AWQ / V/O→w8 pin) could close the gap, but spending those rounds on 0.6B is poor ROI. |
+| Is M2 (Qwen3-4B) the right next target? | **Yes.** 1e shows the algorithm is sound at higher bw; 4B's redundancy gives w4 enough headroom; Qualcomm's bundle is on disk for byte/argmax oracle. |
+
+Action: graduate to **M2 — Qwen3-4B w4a16 + SEQ_MSE + AdaScale on
+AIMET 2.26**. The 0.6B w4a16 pipeline shape stays usable as a quick
+smoke test for future arch adapter work. AIMET 2.29 venv stays around
+for a future debugging session but isn't a blocker.

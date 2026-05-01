@@ -1,0 +1,56 @@
+{
+  "model_id": "Qwen/Qwen3-0.6B",
+  "model_path": "/workspace/models/Qwen3-0.6B",
+  "precision": "w4a16",
+  "ctx": 64,
+  "num_cal_samples": 32,
+  "use_seq_mse": true,
+  "use_ada_scale": true,
+  "started_at": "2026-05-01T05:30:49Z",
+  "stages": {
+    "start": {
+      "t": "05:30:49"
+    },
+    "load_hf": {
+      "t": "05:32:03",
+      "seconds": 59.42
+    },
+    "calibration_built": {
+      "t": "05:32:04",
+      "n": 32,
+      "shape": [
+        1,
+        64
+      ]
+    },
+    "fp32_probe": {
+      "t": "05:32:04",
+      "argmax": " Paris"
+    },
+    "sim_built": {
+      "t": "05:32:21",
+      "seconds": 17.71,
+      "param_bw": 4,
+      "output_bw": 16
+    },
+    "seq_mse": {
+      "t": "05:37:13",
+      "seconds": 291.77,
+      "num_batches": 4
+    },
+    "ada_scale_failed": {
+      "t": "05:37:16",
+      "error": "RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cpu and cuda:0! (when checking argument for argument index in method wrapper_CUDA__index_select)"
+    }
+  },
+  "device": "cuda",
+  "gpu": "NVIDIA A40",
+  "gpu_vram_gb": 47.7,
+  "model_arch": [
+    "Qwen3ForCausalLM"
+  ],
+  "model_layers": 28,
+  "model_hidden": 1024,
+  "load_seconds": 59.42,
+  "fp32_argmax": " Paris"
+}

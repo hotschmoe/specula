@@ -1,0 +1,68 @@
+{
+  "model_id": "Qwen/Qwen3-0.6B",
+  "model_path": "/workspace/models/Qwen3-0.6B",
+  "precision": "w4a16",
+  "ctx": 64,
+  "num_cal_samples": 16,
+  "use_seq_mse": false,
+  "use_ada_scale": false,
+  "started_at": "2026-05-01T05:09:43Z",
+  "stages": {
+    "start": {
+      "t": "05:09:43"
+    },
+    "load_hf": {
+      "t": "05:10:51",
+      "seconds": 52.78
+    },
+    "calibration_built": {
+      "t": "05:10:51",
+      "n": 16,
+      "shape": [
+        1,
+        64
+      ]
+    },
+    "fp32_probe": {
+      "t": "05:10:53",
+      "argmax": " Paris"
+    },
+    "sim_built": {
+      "t": "05:11:18",
+      "seconds": 25.31,
+      "param_bw": 4,
+      "output_bw": 16
+    },
+    "compute_encodings": {
+      "t": "05:15:26",
+      "seconds": 247.9
+    },
+    "probe": {
+      "t": "05:15:26",
+      "cos": -0.066937,
+      "q_argmax": "ont",
+      "argmax_match": false
+    },
+    "save_encodings": {
+      "t": "05:15:57",
+      "seconds": 31.03
+    },
+    "done": {
+      "t": "05:15:57"
+    }
+  },
+  "device": "cuda",
+  "gpu": "NVIDIA A40",
+  "gpu_vram_gb": 47.7,
+  "model_arch": [
+    "Qwen3ForCausalLM"
+  ],
+  "model_layers": 28,
+  "model_hidden": 1024,
+  "load_seconds": 52.78,
+  "fp32_argmax": " Paris",
+  "q_argmax": "ont",
+  "cos_fp32_vs_q": -0.066937,
+  "argmax_match": false,
+  "finished_at": "2026-05-01T05:15:57Z"
+}

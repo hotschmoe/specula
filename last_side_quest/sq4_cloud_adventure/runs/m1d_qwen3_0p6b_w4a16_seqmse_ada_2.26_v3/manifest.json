@@ -1,0 +1,78 @@
+{
+  "model_id": "Qwen/Qwen3-0.6B",
+  "model_path": "/workspace/models/Qwen3-0.6B",
+  "precision": "w4a16",
+  "ctx": 64,
+  "num_cal_samples": 32,
+  "use_seq_mse": true,
+  "use_ada_scale": true,
+  "started_at": "2026-05-01T05:42:59Z",
+  "stages": {
+    "start": {
+      "t": "05:42:59"
+    },
+    "load_hf": {
+      "t": "05:43:52",
+      "seconds": 44.42
+    },
+    "calibration_built": {
+      "t": "05:43:53",
+      "n": 32,
+      "shape": [
+        1,
+        64
+      ]
+    },
+    "fp32_probe": {
+      "t": "05:43:53",
+      "argmax": " Paris"
+    },
+    "sim_built": {
+      "t": "05:44:11",
+      "seconds": 17.54,
+      "param_bw": 4,
+      "output_bw": 16
+    },
+    "seq_mse": {
+      "t": "05:49:13",
+      "seconds": 302.36,
+      "num_batches": 4
+    },
+    "ada_scale": {
+      "t": "06:05:48",
+      "seconds": 994.71,
+      "iters": 200
+    },
+    "compute_encodings": {
+      "t": "06:06:22",
+      "seconds": 34.63
+    },
+    "probe": {
+      "t": "06:06:23",
+      "cos": 0.526143,
+      "q_argmax": " is",
+      "argmax_match": false
+    },
+    "save_encodings": {
+      "t": "06:06:56",
+      "seconds": 33.53
+    },
+    "done": {
+      "t": "06:06:56"
+    }
+  },
+  "device": "cuda",
+  "gpu": "NVIDIA A40",
+  "gpu_vram_gb": 47.7,
+  "model_arch": [
+    "Qwen3ForCausalLM"
+  ],
+  "model_layers": 28,
+  "model_hidden": 1024,
+  "load_seconds": 44.42,
+  "fp32_argmax": " Paris",
+  "q_argmax": " is",
+  "cos_fp32_vs_q": 0.526143,
+  "argmax_match": false,
+  "finished_at": "2026-05-01T06:06:56Z"
+}

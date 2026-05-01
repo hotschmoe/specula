@@ -54,3 +54,15 @@ _qnn.log
 
 # Cleanup staging — large artifacts pending hard delete
 marked_for_deletion/
+
+# SQ4 cloud-adventure run artifacts:
+#  - qsim.json (AIMET v2 encodings, 60-150 MB each, regeneratable from
+#    aimet_quant.py + the HF model + the cal prompts)
+#  - run logs (raw stdout; signal lives in findings.md)
+# Manifests (manifest.json) are small and ARE tracked — they are the
+# reproducibility anchor.
+last_side_quest/sq4_cloud_adventure/runs/*/qsim.json
+last_side_quest/sq4_cloud_adventure/runs/*/qsim.encodings.json
+last_side_quest/sq4_cloud_adventure/runs/*.log
+last_side_quest/sq4_cloud_adventure/runs/*/qsim_model.onnx
+last_side_quest/sq4_cloud_adventure/runs/*/qsim_model.data

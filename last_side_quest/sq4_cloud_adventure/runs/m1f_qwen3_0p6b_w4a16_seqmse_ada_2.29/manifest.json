@@ -1,0 +1,41 @@
+{
+  "model_id": "Qwen/Qwen3-0.6B",
+  "model_path": "/workspace/models/Qwen3-0.6B",
+  "precision": "w4a16",
+  "ctx": 64,
+  "num_cal_samples": 32,
+  "use_seq_mse": true,
+  "use_ada_scale": true,
+  "started_at": "2026-05-01T06:17:35Z",
+  "stages": {
+    "start": {
+      "t": "06:17:35"
+    },
+    "load_hf": {
+      "t": "06:18:39",
+      "seconds": 53.54
+    },
+    "calibration_built": {
+      "t": "06:18:39",
+      "n": 32,
+      "shape": [
+        1,
+        64
+      ]
+    },
+    "fp32_probe": {
+      "t": "06:18:41",
+      "argmax": " Paris"
+    }
+  },
+  "device": "cuda",
+  "gpu": "NVIDIA A40",
+  "gpu_vram_gb": 47.7,
+  "model_arch": [
+    "Qwen3ForCausalLM"
+  ],
+  "model_layers": 28,
+  "model_hidden": 1024,
+  "load_seconds": 53.54,
+  "fp32_argmax": " Paris"
+}
