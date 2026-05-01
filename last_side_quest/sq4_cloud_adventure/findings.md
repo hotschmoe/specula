@@ -1250,3 +1250,147 @@ For M2 (Qwen3-4B), the entire chain is reusable; only changes:
 - AIMET wall ~2.5x (36 layers vs 28, 2560 hidden vs 1024).
 - qnn-context partition strategy: 4B may need 4-way split; if so
   `rewrite_halfdim_cos_sin.py` becomes relevant.
+
+## M1 quality lap — `end-to-end/` orchestrator + the AdaScale fight
+
+**Status as of 2026-05-01 21:15.** End-to-end orchestrator
+(`end-to-end/quantize_to_npu.py`) lands; smoke recipe artifact
+proves the chain. Full Qualcomm quality recipe (SEQ_MSE +
+AdaScale, 128 cal samples) is now running with a hand-rolled
+ReduceMean v18 monkey-patch — first AdaScale-on-Qwen3 attempt
+in this stack.
+
+### What the orchestrator does
+
+ONE entry script (`end-to-end/quantize_to_npu.py`) drives the
+full chain with idempotent stages (each drops a `done.json`
+marker; re-running with the same `--workdir` resumes; use
+`--force-stage N` to re-run from N onward):
+
+```
+1. optimum-cli export onnx --task text-generation-with-past
+2. scripts/rewrite_qwen3_htp.py --mode stage
+3. scripts/rewrite_qwen3_htp.py --mode fold-pathbmask
+4. scripts/rewrite_qwen3_pathb.py        (rotary hoist)
+5. scripts/pin_shapes_qwen3_4b.py        (pin AR=1, ctx=N)
+6. AIMET aimet_onnx PTQ + SEQ_MSE + AdaScale (+ optional V/O w8 pin)
+7. qairt-converter ONNX+encodings → DLC
+8. qnn-context-binary-generator DLC → HTP context .bin (v75)
+9. Bundle .bin + tokenizer + metadata, tar
+```
+
+Defaults are MAX-QUALITY (full Qualcomm recipe): 128 cal samples,
+SEQ_MSE 20 candidates, AdaScale 1500 iters/block, V/O w8 pin
+auto-on for w4a16. Uses subprocess for the existing pathb scripts;
+imports aimet_onnx directly for the AIMET stage.
+
+### Three new gotchas hit and resolved during the M1 quality lap
+
+**(a) `apply_seq_mse` requires `quant_scheme=min_max`.** aimet_onnx
+2.26's seq_mse asserts `sim._quant_scheme in (QuantScheme.min_max,)`
+with the message "Use TF quant-scheme with sequential MSE." Default
+`post_training_tf_enhanced` fails the assertion immediately. Fix:
+when `--use-seq-mse` is on, force `quant_scheme=min_max` and warn.
+Side effect: activations use plain min/max instead of histogram-
+based observation, which is one reason SEQ_MSE-only landed cos
+0.613 (worse than the basic-PTQ smoke at cos 0.656 with
+`tf_enhanced` activations).
+
+**(b) AdaScale asserts cal-dict keys match graph input order
+exactly.** `apply_adascale` checks
+`list(inputs[0].keys()) == [i.name for i in sim.session.get_inputs()]`
+verbatim. Our cal generator built dicts as
+`{input_ids, position_ids, attention_bias, cos, sin, past_key_values.*}`
+but the optimum-exported pathb graph orders them as
+`{input_ids, position_ids, past_key_values.*, attention_bias, cos, sin}`.
+Fix: re-order each yielded feeds dict to match graph input order
+in `lib/cal.py`. SEQ_MSE doesn't have this assertion so it ran fine.
+
+**(c) AdaScale's onnx2torch lacks a ReduceMean v18 handler.**
+Optimum-cli emits the graph at opset 18; Qwen3 RMSNorm uses
+ReduceMean (113 instances); aimet_onnx 2.26's
+`experimental.adascale.onnx2torch_ext` only registers
+ReduceMean v1/11/13. AdaScale crashes mid-conversion with:
+
+  `NotImplementedError: Converter is not implemented (
+    OperationDescription(domain='', operation_type='ReduceMean',
+    version=18))`
+
+Fix: monkey-patch onnx2torch's converter registry from inside
+`lib/aimet.py:_patch_onnx2torch_reduce_mean_v18()` BEFORE calling
+`apply_adascale`. The handler resolves `axes` from input[1] when
+constant (always true for Qwen3's `[-1]` reduction) and reuses the
+existing `OnnxReduceStaticAxes`. ~30 LOC, idempotent (returns early
+if v18 is already in the registry). In-code, not venv mutation, so
+fresh VMs running `quantize_to_npu.py` get it automatically.
+
+### Quality landing zone, walled by AdaScale
+
+| recipe | precision | cal | SEQ_MSE | AdaScale | quant_scheme | cos(fp,q) | argmax |
+|---|---|---:|---|---|---|---:|---|
+| smoke (m1_pathb) | w8a16 | 16 | off | off | tf_enhanced | 0.656 | ✗ ('') |
+| this lap (SEQ_MSE only) | w8a16 | 128 | on (20 cand) | off (crashed) | min_max | **0.613** | ✗ ('The') |
+| **this lap (SEQ_MSE + AdaScale)** | w8a16 | 128 | on | **on (1500 iters, patched)** | min_max | **— pending** | — |
+| reference m1e (aimet_torch) | w8a16 | 32 | on (4 batches) | on (200 iters) | min_max | 0.996 | ✓ |
+
+Hypothesis under test: if AdaScale on aimet_onnx with the
+ReduceMean v18 patch behaves the same as aimet_torch's AdaScale,
+we should land cos > 0.99 — clearing the M1 acceptance gate at 0.95.
+
+### Run-time pacing observed (aimet_onnx 2.26 on A40, Qwen3-0.6B)
+
+| stage | smoke (16 cal) | full (128 cal) |
+|---|---:|---:|
+| optimum export | 154 s | 154 s (skipped on resume) |
+| pathb chain (stages 2-5) | ~30 s | ~30 s (skipped on resume) |
+| AIMET tokenizer + RoPE | 30 s | 30 s |
+| FP session build | 2-15 s | 15 s |
+| cal sample gather | 2 s | 18 s |
+| QSM build | 22-29 s | 25 s |
+| SEQ_MSE | n/a | 587 s (~10 min, 113 ops) |
+| AdaScale (1500 iters × 28 blocks) | n/a | **TBD — first attempt of this stack** |
+| compute_encodings | 293 s (16 cal) | **21 s** (128 cal) |
+| sim.export | 14 s | 27 s |
+| qairt-converter | 80 s | 96 s |
+| qnn-context-binary-generator | 22 s | 160 s |
+| bundle + tar | 15 s | ~30 s |
+
+Surprise: with SEQ_MSE+min_max, `compute_encodings` is 21s (not
+the 293s the smoke saw with tf_enhanced). SEQ_MSE pre-populates
+all weight encodings; the post-SEQ_MSE compute_encodings only has
+to observe activations, and min_max activation observation just
+reads min/max in one pass per sample. That's a 14× speedup vs the
+histogram-based path.
+
+### Disk hygiene
+
+Per-run workdir bloats to ~26 GB before pruning. Once the bundle
+.tar is preserved, intermediate stage dirs are safe to delete:
+
+| keep | delete (cheap to regenerate) |
+|---|---|
+| `01_optimum/` (optimum export, ~3 GB, 3 min to regenerate) | `02_staged/`, `03_pathbmask/`, `04_pathb/` (each ~3 GB; together regenerate in ~30 s) |
+| `05_pathb_ctx512/` (input to AIMET, ~3 GB) | `06_aimet_*/` if you have the bundle.tar already |
+| `09_bundle_*/qwen3-...-x2e.tar` (the artifact) | `06_aimet_*/`, `07_dlc_*/`, `08_bin_*/` once tar exists |
+
+Cleanup landed 2026-05-01: 32 GB freed (16 GB old smoke pathb
+dirs + 9 GB redundant intermediate stages + ephemeral
+`/root/sq4_intermediates`). SEQ_MSE-only bundle saved as
+`/workspace/runs/qwen3-0p6b-w8a16-seqmse-only-cos0p613.tar` for
+post-AdaScale comparison.
+
+### Current run state (2026-05-01 21:15)
+
+PID 4070757 detached (PPID=init), workdir
+`/workspace/runs/qwen3_0p6b_w8a16_full`, recipe:
+`--precision w8a16 --use-seq-mse --use-ada-scale --ada-scale-iters 1500`.
+Stages 1+5 already had `done.json` from the earlier SEQ_MSE-only
+run; 2/3/4/6/7/8/9 are regenerating (rebuild stages 2-4 in ~30 s,
+then SEQ_MSE ~10 min, then AdaScale [unknown wall], then
+compute_encodings + qairt + qnn-context + bundle).
+
+If AdaScale crashes despite the v18 patch (e.g. on a different
+op version we haven't enumerated), the orchestrator's idempotent
+design means stages 1-5 stay marked done and only stage 6 needs
+to retry — costs ~12 min per fresh attempt. If it succeeds and
+clears cos ≥ 0.95, this is the artifact we ship for M1.
