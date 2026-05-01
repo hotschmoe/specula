@@ -176,23 +176,32 @@ def run_aimet(
         param_type, activation_type = "int4", "int16"
     else:
         raise ValueError(f"unknown precision {precision}")
+    # apply_seq_mse asserts the sim was built with the min_max scheme
+    # ("Use TF quant-scheme with sequential MSE"). Force when needed.
+    effective_quant_scheme = quant_scheme
+    if use_seq_mse and quant_scheme != "min_max":
+        _log(f"[aimet 4] WARNING: forcing quant_scheme=min_max because SEQ_MSE "
+             f"requires it (you asked for {quant_scheme})")
+        effective_quant_scheme = "min_max"
     quant_scheme_map = {
         "min_max": QuantScheme.min_max,
         "post_training_tf_enhanced": QuantScheme.post_training_tf_enhanced,
         "post_training_percentile": QuantScheme.post_training_percentile,
     }
     _log(f"[aimet 4] building QuantSim "
-         f"param={param_type} activation={activation_type} scheme={quant_scheme}")
+         f"param={param_type} activation={activation_type} scheme={effective_quant_scheme}")
     model_proto = onnx.load(str(src_dir / "model.onnx"), load_external_data=True)
     sim = QuantizationSimModel(
         model_proto,
         param_type=param_type, activation_type=activation_type,
-        quant_scheme=quant_scheme_map[quant_scheme],
+        quant_scheme=quant_scheme_map[effective_quant_scheme],
         providers=providers,
     )
     _log(f"[aimet 4] QuantSim built ({time.time() - t0:.1f}s)")
     info["stages"]["4_qsim_build"] = {"wall_s": time.time() - t0,
-                                       "param_type": param_type, "activation_type": activation_type}
+                                       "param_type": param_type,
+                                       "activation_type": activation_type,
+                                       "effective_quant_scheme": effective_quant_scheme}
 
     # ---- 5. SEQ_MSE (optional, run BEFORE compute_encodings) ----
     if use_seq_mse:
