@@ -1022,3 +1022,231 @@ calibration issue). Then use that hardening to fast-track (β).
 | `/` (rootfs, ephemeral) | ~10 GB | 50 GB | ~40 GB |
 
 Plenty of room for tomorrow's pathb + 4B work.
+
+## M1 — pathb → aimet_onnx → qairt → HTP .bin (end-to-end landed 2026-05-01)
+
+**TL;DR.** Path α from the prior session lands. `qwen3_0p6b_pathb_w8a16.bin`
+(918 MB) compiled clean against HTP v75 (X2 Elite). Plumbing question
+answered positive: pathb-rewritten ONNX + aimet_onnx encodings flow
+through `qairt-converter` + `qnn-context-binary-generator` end-to-end
+when the right flags are set. Quality is on a separate lever: cos(fp,q)
+= 0.656 with 16 cal samples + basic PTQ — below 0.95 gate; SEQ_MSE +
+AdaScale + larger cal set is the unblocker (deferred to M1 quality
+follow-up).
+
+### Pipeline as it ran
+
+```
+HF FP16 (Qwen/Qwen3-0.6B, /workspace/models/Qwen3-0.6B)
+    ↓ optimum-cli export onnx --task text-generation-with-past
+qwen3-0.6b-optimum/                   (1.4 MB graph, 3.0 GB onnx_data)
+    ↓ scripts/rewrite_qwen3_htp.py --mode stage
+qwen3-0.6b-staged/                    (attention_mask → init, 28 IsNaN guards elided)
+    ↓ scripts/rewrite_qwen3_htp.py --mode fold-pathbmask
+qwen3-0.6b-pathbmask/                 (Where(bool)→Add(attention_bias); IsNaN=0 Range=0 Cast→BOOL=0)
+    ↓ scripts/rewrite_qwen3_pathb.py
+qwen3-0.6b-pathb/                     (rotary hoisted; 0 rotary_emb nodes; +position_ids_cos/sin inputs)
+    ↓ scripts/pin_shapes_qwen3_4b.py --ctx 512 --seq-q 1
+qwen3-0.6b-pathb-ctx512/              (237 dims pinned; AR=1, ctx=512)
+    ↓ aimet_onnx_quant.py --precision w8a16 --num-cal-samples 16
+m1_pathb_w8a16_smoke/                 (qwen3_0p6b_pathb_w8a16.{onnx,encodings,data})
+    ↓ qairt-converter --quantization_overrides ... (NO --target_soc_model)
+m1_pathb_w8a16_smoke/qwen3_0p6b_pathb_w8a16.dlc   (922 MB)
+    ↓ qnn-context-binary-generator --config_file qnn_v75_config.json
+m1_pathb_w8a16_smoke/qwen3_0p6b_pathb_w8a16.bin   (918 MB)
+    ↓ tar
+/workspace/sq4_m1_pathb/qwen3_0p6b-w8a16-pathb-ctx512-x2e.tar (918 MB)
+```
+
+### Wall and disk
+
+| stage | wall | output |
+|---|---:|---:|
+| optimum-cli export onnx | ~3 min | 3.0 GB |
+| rewrite_qwen3_htp stage | ~30 s | 2.9 GB |
+| rewrite_qwen3_htp fold-pathbmask | ~30 s | 2.9 GB |
+| rewrite_qwen3_pathb (rotary hoist) | ~30 s | 3.0 GB |
+| pin_shapes_qwen3_4b ctx=512 | ~5 s | 3.0 GB |
+| aimet_onnx_quant.py (16 cal, no SEQ_MSE) | ~6 min | 3.0 GB onnx + 32 MB enc |
+| qairt-converter | ~80 s | 922 MB DLC |
+| qnn-context-binary-generator | ~22 s | **918 MB .bin** |
+
+### Things that almost stopped us, in order
+
+**1. torch 2.5.1 caps ONNX opset at 20.** `optimum-cli export onnx
+--opset 21` hard-fails with `ValueError: Unsupported ONNX opset version: 21`.
+Solution: drop the `--opset` flag — optimum default (currently 18 for
+Qwen3) works, and AIMET's later QDQ insertion produces opset 21 ops
+on its own (aimet_onnx upgrades the opset during graph rewrite).
+
+**2. Qwen3-0.6B pathb attention_bias is masked at the END of the
+window, not the beginning.** First w8a16 smoke probe came back
+cos = 0.07, FP argmax `'dfunding'` (random garbage). Looked like a
+bad probe — turned out the cache layout puts the current token at
+slot ctx-1=511 and grows real past KVs *backward* from slot ctx-2.
+A naive `attn_bias[..., pos+1:] = -inf` masks the wrong end. Correct
+form for AR=1 decode at position p:
+```python
+visible_start = ctx - 1 - pos
+attn_bias = np.full((1, 1, 1, ctx), -65504.0, dtype=np.float32)
+attn_bias[..., visible_start:] = 0.0
+```
+After the fix, FP probe returns ` Paris` for "The capital of France is".
+Bug was in the cal generator AND the probe — cal samples saw garbage
+attention, so the encodings were also garbage; rerun was required.
+
+**3. `aimet_onnx.compute_encodings` is CPU-bound on observation
+even when ORT-CUDA does the forward.** GPU sits at 0% during cal
+because the per-tensor histogram observers run sequentially in
+Python after each forward. 5 min for 16 cal samples on Qwen3-0.6B.
+Not blocker, but explains why we don't see GPU util ramp.
+
+**4. `aimet_onnx.QSM.export()` strips QDQ ops before saving the
+ONNX.** This is *good* — the exported `.onnx` carries the original
+pathb graph's tensor names, which line up exactly with what
+qairt-converter sees. Compare m1e (AIMET-torch wrapped graph): 80%
+of attention ops fell back to float because AIMET-torch tensor names
+disagreed with qairt-converter's view. Now: "Processed 2540
+quantization encodings" with no float-fallback warnings on
+quantized layers. (There IS a fallback list of attention-internal
+ops — Reshape/Transpose/MatMul_1/Mul_9/Expand — that don't have
+encodings emitted by aimet_onnx 2.26 for activation-only ops; quality
+lever, not plumbing.)
+
+**5. `aimet_onnx` renames graph outputs after Q/DQ injection.**
+First smoke crashed at the cos-probe stage with
+`ValueError: 'present.0.key' is not in list` because
+`sim.session.get_outputs()` returns a different (suffixed) name list
+than the FP session. Fix: call `sess.run(all_outs, feeds)` with the
+*correct* per-session output name list, indexed by graph order
+rather than name. Also moved export *before* probe so the artifact
+lands even if the probe stage trips.
+
+**6. qairt-converter `--target_soc_model` allow-list is tiny.**
+2.45's BackendInfo only accepts `{SM8845, SM8850, SM8850L}`. We
+verified by brute-force enumeration. None map to v75. Workaround: do
+NOT pass `--target_soc_model` at the converter (DLC stays SoC-
+generic), pin HTP arch later via the binary-generator's config.
+
+**7. `qnn-context-binary-generator` default backend targets HTP v68.**
+Without explicit arch config, validation fails with
+`[4294967295] has incorrect Value 68, expected >= 73`. The error
+line `0xc26 QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE` looked
+mysterious until decoded: AIMET's int16 attention ops require ≥v73
+HTP, default backend is v68.
+
+**8. `--config_file` schema requires the two-file wrapper for
+dsp_arch.** A flat
+```json
+{"devices":[{"dsp_arch":"v75"}]}
+```
+gets rejected with `Unknown Key = devices/0/dsp_arch passed in
+config`. The OUTER `--config_file` JSON only accepts
+`backend_extensions: { shared_library_path, config_file_path }` keys
+— `dsp_arch` lives in the *inner* file pointed to by
+`config_file_path`. Both files committed:
+- `qnn_v75_config.json` (outer wrapper)
+- `qnn_v75_inner.json` (`{"devices":[{"dsp_arch":"v75"}]}`)
+
+### Acceptance metrics
+
+| gate | target | got | verdict |
+|---|---|---|---|
+| QAIRT compile produces multi-part bundle without errors | required | ✓ single-part (0.6B small enough) | ✅ |
+| Bundle compiles for X2E HTP arch | required | ✓ v75 | ✅ |
+| AIMET cos vs FP32 ≥ 0.95 | M1 gate | 0.656 (16 cal, basic PTQ) | ❌ — known-bad recipe; SEQ_MSE+AdaScale follow-up |
+| Bundle loads on X2E (round-trip) | required | not yet tested (cloud→home transfer pending) | ⏳ |
+| Coherent text on " The capital of France is" → " Paris" | nice-to-have | argmax mismatch (token 220 ' ') | ❌ — same lever as cos gate |
+
+**Plumbing answer is positive.** Quality answer is negative-but-
+expected: 16 cal samples + basic PTQ on Qwen3-0.6B reproduces SQ2's
+"V/O collapse" finding (cos -0.07 → 0.66 with mask fix; still well
+short of the 0.95 gate). The pipeline now exists; it just needs
+better cal-stage configuration to clear the gate.
+
+### Bundle assembled
+
+`/workspace/sq4_m1_pathb/qwen3_0p6b-w8a16-pathb-ctx512-x2e.tar` (918 MB)
+contains:
+- `qwen3_0p6b_pathb_w8a16.bin`         918 MB  — HTP v75 context binary
+- `qwen3_0p6b_pathb_w8a16.encodings`    32 MB  — AIMET v1.0.0 encodings
+- `tokenizer.json`                      11 MB
+- `tokenizer_config.json`              ~10 KB
+- `config.json`                        <1 KB
+- `generation_config.json`             <1 KB
+- `metadata.json`                       1.7 KB — sha256 + bundle metadata
+
+Missing for full ORT-QNN deployment (do these at home, against the
+existing `qwen3_0_6b_draft_v81_ctx512.*` family of artifacts as
+template):
+- `*.wrapper.onnx` — the QnnContext_BundleSpecific stub graph that
+  ORT-QNN consumes. Existing 4B + 7B bundles in
+  `models/qualcomm-qwen3-4b-ref/` / `models/qualcomm-qwen2.5-7b-ref/`
+  show the pattern; this can be generated locally without re-renting.
+- `metadata.yaml` (Qualcomm-style) — re-emit from existing genie
+  template with the 0.6B head-dim/layer-count/vocab specifics.
+- `genie_config.json` — for `genie-t2t-run` consumption (optional;
+  ORT-QNN sidecar path doesn't need it).
+
+### Files lasting on /workspace (persistent across pod restarts)
+
+```
+/workspace/specula/                                     (repo, including new sq4 scripts)
+/workspace/models/Qwen3-0.6B/                           1.5 GB (HF FP weights)
+/workspace/venvs/aimet-2.26-cu121-py310/               16 GB (working venv)
+/workspace/venvs/aimet-2.29-cu126-py312/                9 GB (parked, sim-build crash)
+/workspace/sdks/qairt-2.45.40.260406/                   4.9 GB (matched QAIRT)
+/workspace/sq4_m1_pathb/                              ~22 GB (intermediates + bundle.tar)
+  qwen3-0.6b-optimum/                                   2.9 GB (optimum export)
+  qwen3-0.6b-staged/                                    2.9 GB
+  qwen3-0.6b-pathbmask/                                 2.9 GB
+  qwen3-0.6b-pathb/                                     3.0 GB
+  qwen3-0.6b-pathb-ctx512/                              3.0 GB
+  qwen3_0p6b-w8a16-pathb-ctx512-x2e/                   ~961 MB (bundle dir)
+  qwen3_0p6b-w8a16-pathb-ctx512-x2e.tar               918 MB (transportable)
+  optimum_export.log
+/root/sq4_intermediates/m1_pathb_w8a16_smoke/         3.9 GB (rootfs, ephemeral)
+  + ~6 GB from prior m1e_w8a16_export
+```
+
+Total persistent disk used now: **~50 GB / 100 GB**. Plenty of headroom
+for the SEQ_MSE+AdaScale follow-up M1 quality run AND M2 (Qwen3-4B).
+
+### Next session pickup
+
+The fastest route to a full M1 close (cos ≥ 0.95):
+
+```bash
+# Same venv, same QAIRT, just bigger cal + SEQ_MSE+AdaScale
+cd /workspace/specula/last_side_quest/sq4_cloud_adventure
+PY=/workspace/venvs/aimet-2.26-cu121-py310/bin/python
+NVLIBS=$(find /workspace/venvs/aimet-2.26-cu121-py310/lib/python3.10/site-packages/nvidia -name lib -type d | tr '\n' ':')
+export LD_LIBRARY_PATH=${NVLIBS}${LD_LIBRARY_PATH:-}
+
+# extend aimet_onnx_quant.py to call apply_seq_mse + apply_adascale
+# (currently only basic PTQ); 128 cal samples; quant_scheme min_max
+$PY aimet_onnx_quant.py \
+  --src-dir /workspace/sq4_m1_pathb/qwen3-0.6b-pathb-ctx512 \
+  --tokenizer /workspace/models/Qwen3-0.6B \
+  --output-dir /root/sq4_intermediates/m1_pathb_w8a16_seqmse_ada \
+  --precision w8a16 --num-cal-samples 128 --ctx 512 --cuda \
+  --use-seq-mse --use-ada-scale  # ← needs script extension; aimet_onnx 2.26 has both
+
+# Then qairt + binary-gen as in qairt_compile.sh, swap OUT path.
+```
+
+Two known levers if SEQ_MSE+AdaScale alone don't clear the gate:
+1. Pin V/O proj layers to w8 via per-tensor encoding override (the
+   "V/O collapse" mitigation discussed in `one_pipeline_cloud_gpu.md`
+   Q4 ladder).
+2. Bigger cal set. SEQ_MSE wants 16+ batches by default; AdaScale 1500
+   iters per block. Real run is ~2 hr on A40, $0.90.
+
+Don't redo qairt/qnn until aimet has cleared its gate.
+
+For M2 (Qwen3-4B), the entire chain is reusable; only changes:
+- different model dir, different rewrite stem (`--model-stem qwen3-4b`).
+- pin_shapes_qwen3_4b is already set up for 4B.
+- AIMET wall ~2.5x (36 layers vs 28, 2560 hidden vs 1024).
+- qnn-context partition strategy: 4B may need 4-way split; if so
+  `rewrite_halfdim_cos_sin.py` becomes relevant.
