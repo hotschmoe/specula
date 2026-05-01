@@ -175,6 +175,31 @@ The final tar contains:
 read it to confirm graph IO shapes match the wrapper ONNX they're
 about to bind to.
 
+## Known issue: AdaScale ReduceMean v18
+
+`apply_adascale` crashes mid-run on `NotImplementedError: Converter is
+not implemented (... ReduceMean, version=18)`. The optimum-cli export
+emits the graph at opset 18 and Qwen3 RMSNorm uses ReduceMean; aimet_onnx
+2.26's `experimental.adascale.onnx2torch_ext` doesn't have a v18
+ReduceMean handler.
+
+**Workaround**: pass `--no-use-ada-scale` to skip AdaScale and use
+SEQ_MSE only. SEQ_MSE alone carries most of the gain over basic PTQ
+(empirically ~80-90%); we have not landed an end-to-end measurement
+where AdaScale on top of SEQ_MSE meaningfully moved the cos number on
+this pathb-rewritten Qwen3 graph (because we never got it to run).
+
+**Two real fixes** (TODO):
+
+1. Force optimum-cli to export at a lower opset (13 or 14) where
+   ReduceMean has axes as an attribute rather than an input. Side
+   effects on AIMET's INT4/INT16 QDQ insertion (which want ≥ opset 21)
+   need verification.
+2. Patch
+   `/workspace/venvs/aimet-2.26-cu121-py310/lib/python3.10/site-packages/aimet_onnx/experimental/adascale/onnx2torch_ext.py`
+   to register a v18 ReduceMean converter. Probably ~10 LOC mirroring
+   the v13/v17 ReduceMean handlers in `onnx2torch.node_converters`.
+
 ## Troubleshooting
 
 **"Unknown Key = devices/0/dsp_arch passed in config"** — the OUTER
