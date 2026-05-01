@@ -396,7 +396,7 @@ Suggested sequence (each ≤ 1 session unless noted):
 | **SQ1 NPU rewind** | ✅ **landed 2026-04-28** | Path C STATEFUL (`demo_path_c_stateful.py`) uses the SQ6 stateful stream API. NPU re-prefill share collapses to 0; JSON K=8 r=4 runs in 5.96 s wall (vs 21.70 stateless), spec-decode 5.53 t/s (vs 1.52), **2.37× speedup vs same-host baseline** — first-ever cross of 1.0×. 91% accept byte-identical to stateless. CSV `results/csv/sq1_path_c_stateful_2026-04-28.csv`. Native ARM64 llama-cpp-python build remains the only outstanding follow-up (cross-arch drift on free-form prompts). |
 | **SQ2** | ✅ **closed POSITIVE 2026-04-28** | aimet_torch v2 + SEQ_MSE/AdaScale work locally on Prism + WSL2 ARM64; aimet_onnx + qai_hub_models wrapper still cloud-only; basic-PTQ Qwen3-0.6B end-to-end demo lands negative-but-expected (cos -0.065 = V/O collapse repro) |
 | **SQ3-small** | ✅ **closed POSITIVE 2026-04-28** (Granite-MoE branch + 3 follow-ups) | Granite-3.0-1B-A400M ran AIMET basic-PTQ end-to-end on Prism CPU; cos +0.656 (per-tensor experts) → +0.712 (per-channel experts, "A1" champion). SEQ_MSE-4 regressed (0.640); SEQ_MSE-16 partially recovered (0.682) — **A1 wins on Prism budget**. OLMoE-1B-7B failed end-to-end across 3 iterations — per-expert dispatch architecturally hostile to AIMET v2 (Granite's fused-experts + Qwen3-MoE's hit-filter both avoid this). AIMET 2.29 has no granitemoe adapter; written in ~80 LOC. **Qwen3-30B-A3B remains cloud-only** (corrected math: 30B FP32 = 120 GB, BF16 = 60 GB — neither fits 48 GB DRAM). |
-| SQ4 | 🚀 **plan committed 2026-04-29, M1 pending** | scope expanded from "sizing writeup" to "execute the cloud pipeline." Plan: `last_side_quest/sq4_cloud_adventure/findings.md`. Five milestones M1→M5 (Qwen3-0.6B → 4B → 14B → Qwen3.6-27B dense → Qwen3.6-35B-A3B MoE). Hardware: RunPod A40 48 GB at $0.44/hr for M1-M3; A100 80 GB for M4-M5. Validation anchor: `models/qualcomm-qwen3-4b-ref/` for M2 byte-/argmax-comparison. Total budget $50-75. |
+| SQ4 | 🚀 **M1 plumbing CLOSED 2026-05-01** (quality lever pending) | Five milestones M1→M5; M1 (Qwen3-0.6B w8a16 pathb→AIMET→qairt→.bin) now lands end-to-end on RunPod A40 48 GB. 918 MB HTP v75 binary built clean from HF FP weights through optimum-export → pathb rewrite (rotary hoist + additive mask) → aimet_onnx (basic PTQ, 16 cal samples) → qairt-converter → qnn-context-binary-generator. Cos(fp,q) = 0.656 below the 0.95 acceptance gate; SEQ_MSE+AdaScale + larger cal set is the unblocker (~2 hr / $0.90 follow-up). Bundle at `/workspace/sq4_m1_pathb/qwen3_0p6b-w8a16-pathb-ctx512-x2e.tar`. Eight gotchas captured in `last_side_quest/sq4_cloud_adventure/findings.md` so M2 (Qwen3-4B) reuses the chain wholesale. |
 | **SQ5** | ✅ **closed POSITIVE 2026-04-27** | engine generalized cl=512..4096; coding-asst contexts viable up through 4K at 20 t/s |
 | **SQ6** | ✅ **Phases A→E landed 2026-04-28..29** | OpenAI-compat NPU HTTP server (`npu_engine/http_server.py`). A stateless + A.5 SSE + B stateful KV-LCP streams (2.3-2.6× speedup) + C real-world pi A/B (NPU silent-island UX wins; throughput tied with OpenCL; Vulkan-4B chat broken at this commit) + D daily-driver Q3.6-35B-A3B CPU 32 t/s comparator + E Qwen2.5-7B-NPU sidecar generalization. Phase F follow-ups open: tool-call parser + 7B AR1↔AR128 swap fix. |
 
@@ -658,3 +658,22 @@ Qwen3.5/3.6.
   shipping bundle on disk; target: 46/46 argmax match). Total
   budget $50-75. M1 pre-rent checklist in plan; first rent not
   started.
+- **2026-05-01** — SQ4 M1 plumbing closes. End-to-end pathb →
+  `aimet_onnx` → `qairt-converter` → `qnn-context-binary-generator`
+  lands on Qwen3-0.6B w8a16 (smoke recipe: 16 cal samples, basic
+  PTQ, no SEQ_MSE/AdaScale). 918 MB HTP context binary
+  `qwen3_0p6b_pathb_w8a16.bin` (`dspArch: 75`, 1 graph, 61 inputs /
+  57 outputs) compiles cleanly. Plumbing is unblocked; the cos =
+  0.656 quality result is the same V/O-collapse signal SQ2 saw on
+  Prism — SEQ_MSE + AdaScale + larger cal is the lever, not new
+  pipeline work. Two fresh-VM-blocking gotchas worth surfacing here:
+  (1) qairt-converter 2.45's `--target_soc_model` only accepts
+  {SM8845/SM8850/SM8850L}, none mapping to v75 — don't pin SoC at
+  the converter; (2) qnn-context-binary-generator default backend
+  targets HTP v68, fails AIMET int16 attention ops with "Value 68,
+  expected >= 73"; fix is the documented two-file
+  `backend_extensions` config (outer `qnn_v75_config.json` →
+  `shared_library_path: libQnnHtpNetRunExtensions.so`,
+  `config_file_path: qnn_v75_inner.json`; inner sets
+  `devices[].dsp_arch = "v75"`). Both committed under
+  `last_side_quest/sq4_cloud_adventure/`.
