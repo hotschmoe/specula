@@ -773,3 +773,252 @@ Action: graduate to **M2 — Qwen3-4B w4a16 + SEQ_MSE + AdaScale on
 AIMET 2.26**. The 0.6B w4a16 pipeline shape stays usable as a quick
 smoke test for future arch adapter work. AIMET 2.29 venv stays around
 for a future debugging session but isn't a blocker.
+
+## End-to-end NPU pipeline attempt on Qwen3-0.6B w8a16 — partial
+
+After landing run 1e (cos 0.996, argmax match), we tried to push the
+encodings all the way through the QAIRT chain to a HTP context binary
+(`.bin`) we could ship to the X2E. **Made it through ONNX export and
+DLC, blocked at qnn-context-binary-generator.** Documenting precisely
+where, why, and exactly what's needed to unblock so the next session
+picks up cold.
+
+### What worked
+
+#### Step A — ONNX export from existing AIMET encodings
+
+`export_onnx_from_encodings.py` (this dir): rebuilds the sim from the
+HF model + dummy input, calls `sim.load_encodings(qsim.json)`, then
+`aimet_torch.onnx.export(sim, dummy_input, path, opset_version=21)`.
+Skips re-running SEQ_MSE+AdaScale. ~6 min wall.
+
+```bash
+PY=/workspace/venvs/aimet-2.26-cu121-py310/bin/python
+OUT=/root/sq4_intermediates/m1e_w8a16_export   # ephemeral; rootfs is fine
+mkdir -p $OUT
+$PY export_onnx_from_encodings.py \
+  --model-id Qwen/Qwen3-0.6B \
+  --model-path /workspace/models/Qwen3-0.6B \
+  --encodings runs/m1e_qwen3_0p6b_w8a16_seqmse_ada_2.26/qsim.json \
+  --precision w8a16 --ctx 64 \
+  --output-dir $OUT \
+  --filename-prefix qwen3_0p6b_w8a16
+```
+
+Output:
+- `qwen3_0p6b_w8a16.onnx` — graph proto only (5 MB; opset 21)
+- `qwen3_0p6b_w8a16_encodings.json` — per-tensor encodings (148.8 MB)
+- 367 sibling weight tensors as ONNX external data (~3.0 GB total)
+
+ONNX summary: 6,661 nodes, 254 MatMul, **2,364 QDQ pairs** (full
+coverage), input shape `[1, 64]`, output `[1, 64, 151936]`. Note: AIMET
+requires `opset_version >= 21` for INT4/INT16 QDQ ops (smoke-tested
+with 17 first; failed loudly).
+
+#### Step B — QAIRT 2.45 SDK install (persistent on /workspace)
+
+URL pattern: replace version segment to fetch newer/older releases.
+
+```bash
+# Download (~1.55 GB)
+curl -sL -A "Mozilla/5.0" \
+  -o /tmp/qairt-2.45.zip \
+  "https://softwarecenter.qualcomm.com/api/download/software/sdks/Qualcomm_AI_Runtime_Community/All/2.45.40.260406/v2.45.40.260406.zip"
+
+# Extract → persistent location
+unzip -q /tmp/qairt-2.45.zip -d /tmp/qairt
+mv /tmp/qairt/qairt/2.45.40.260406 /workspace/sdks/qairt-2.45.40.260406
+rm -rf /tmp/qairt /tmp/qairt-2.45.zip
+
+# System libs the bundled libDl*.so links against (libc++ + libunwind);
+# Ubuntu 22.04 base image is missing these.
+apt-get install -y libc++1 libc++abi1 libunwind8
+
+# QAIRT-required Python deps (the SDK's check-python-dependency lists
+# these; we only install what's actually missing in the AIMET 2.26 venv)
+VIRTUAL_ENV=/workspace/venvs/aimet-2.26-cu121-py310 uv pip install \
+  aenum dash invoke lxml mako mock optuna paramiko pathlib2 \
+  plotly pytest scikit-optimize xlsxwriter
+```
+
+Set the env up for *every* QAIRT command (or put in a sourced
+`activate-qairt.sh`):
+
+```bash
+export QAIRT_SDK_ROOT=/workspace/sdks/qairt-2.45.40.260406
+export PATH=$QAIRT_SDK_ROOT/bin/x86_64-linux-clang:$VIRTUAL_ENV/bin:$PATH
+export LD_LIBRARY_PATH=$QAIRT_SDK_ROOT/lib/x86_64-linux-clang:$LD_LIBRARY_PATH
+export PYTHONPATH=$QAIRT_SDK_ROOT/lib/python:$PYTHONPATH
+export VIRTUAL_ENV=/workspace/venvs/aimet-2.26-cu121-py310
+```
+
+Verify:
+```bash
+qairt-converter --version  # any non-crash output is fine
+```
+
+**Why 2.45 and not 2.42**, per `docs/npu_ort_qnn_version_match.md`:
+the X2E currently runs `onnxruntime-qnn 2.1.0` which bundles
+**QAIRT 2.45.40.260406**. A binary compiled against 2.42 would fail
+on load with `LoadCachedQnnContextFromBuffer Error 5000`. Match the
+runtime exactly.
+
+#### Step C — qairt-converter: ONNX+QDQ → DLC
+
+```bash
+qairt-converter \
+  --input_network $OUT/qwen3_0p6b_w8a16.onnx \
+  --output_path $OUT/qwen3_0p6b_w8a16.dlc \
+  --quantization_overrides $OUT/qwen3_0p6b_w8a16_encodings.json \
+  --preserve_io_datatype
+```
+
+Result: **`INFO_CONVERSION_SUCCESS`**, ~6 min wall, 1.35 GB DLC.
+Default `--target_backend` is `HTP` (don't need to pass it).
+
+Two warning classes that matter for diagnosis:
+
+1. **`Only numerical type cast is supported. The cast op: ... will be
+   interpreted at conversion time`** — *every* `Cast` in the graph
+   triggers this. Implies they're not converted to native QNN ops.
+2. **"Following OPs fallback to float"** — long list of MatMul /
+   Mul / Softmax / Sigmoid / RMS-norm ops. The `--quantization_overrides`
+   encoding tensor names didn't line up with the converted graph's
+   tensor names for ~80% of ops, so they fell back to FP. (Known P1
+   from `one_pipeline_cloud_gpu.md`.)
+
+Despite the fallbacks the DLC is structurally well-formed; Qualcomm's
+toolchain happily produced it. The compile-stage validator is what
+catches the deeper issue, next step.
+
+### What didn't work — the wall
+
+#### Step D (BLOCKED) — qnn-context-binary-generator: DLC → .bin
+
+```bash
+qnn-context-binary-generator \
+  --backend $QAIRT_SDK_ROOT/lib/x86_64-linux-clang/libQnnHtp.so \
+  --dlc_path $OUT/qwen3_0p6b_w8a16.dlc \
+  --binary_file $OUT/qwen3_0p6b_w8a16 \
+  --output_dir $OUT
+```
+
+Failed at HTP op-config validation:
+
+```
+[ ERROR ] Failed to validate op /inner/model/Cast with error 0xc26
+[ ERROR ] Validate OpConfig failed: QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE
+[ ERROR ] Failed to successfully compose graph
+[ ERROR ] ComposeGraphs Failed with error = 1
+```
+
+The ops listed just before the validator gave up have dtype combos HTP
+won't accept:
+- `QNN_DATATYPE_FLOAT_32 → QNN_DATATYPE_INT_32` (Cast for position-id math)
+- `QNN_DATATYPE_BOOL_8 → QNN_DATATYPE_FLOAT_16` (Cast for attention mask)
+- `QNN_DATATYPE_INT_32 → QNN_DATATYPE_FLOAT_16` (Cast for index conversion)
+
+These are emitted by HuggingFace's standard transformers attention
+implementation (`attn_implementation="eager"` and friends). HTP's op
+package validator rejects them. The compiler can produce a DLC with
+them; the runtime composer cannot bind them to HTP ops.
+
+### Why this happened — root cause
+
+We deliberately ran the **shortest possible path** through M1:
+**HF causal LM → AIMET → ONNX with QDQ → QAIRT**.
+
+The full Qualcomm/specula path adds a `pathb` rewrite stage between
+the HF export and AIMET — see `docs/qualcomm_reproduction_4b.md` and
+the existing scripts in `scripts/`:
+
+```
+HF (transformers) → optimum-export → ONNX
+                  → rewrite_qwen3_htp.py     (HTP-friendly ops)
+                  → rewrite_qwen3_pathb.py   (additive mask, rotary hoist)
+                  → pin_shapes_qwen3_*b.py   (static shape pin per ctx)
+                  → AIMET QuantSim + SEQ_MSE + AdaScale
+                  → QAIRT chain
+                  → .bin
+```
+
+The rewrite scripts **specifically** delete / replace the Cast op
+patterns that block us at Step D — that's their entire point. They
+also fold the multiplicative attention mask into an additive mask
+(HTP wants one big additive `Add` rather than `Where + Mul`),
+hoist rotary embedding multiplications out of decoder blocks,
+and pin shapes to fixed `(B, T)` so the HTP backend can plan kernels.
+
+Skipping pathb saved an hour today. Cost: the .bin compile step is
+unreachable. Predictable from the design doc; we made a conscious
+trade-off and documented the wall.
+
+### Tomorrow's next-session plan (concrete)
+
+Pick exactly one of two starts:
+
+**(α) Fix the 0.6B compile by running pathb** — 1-2 sessions.
+Re-uses the 1e w8a16 encodings as oracle (we know cos 0.996 is
+achievable on this model with these techniques). Concrete:
+
+1. Run `optimum-cli export onnx Qwen/Qwen3-0.6B onnx-optimum/` to get
+   a clean exported ONNX (no AIMET wrapper, no QDQ).
+2. Run `python scripts/rewrite_qwen3_htp.py --model-stem qwen3_0_6b
+   --input onnx-optimum/ --output onnx-htp/`.
+3. Run `python scripts/rewrite_qwen3_pathb.py --model-stem qwen3_0_6b
+   --input onnx-htp/ --output onnx-pathb/`.
+4. Run `python scripts/pin_shapes_qwen3_4b.py
+   (or generalized variant) --model-stem qwen3_0_6b --ctx 256
+   --input onnx-pathb/ --output onnx-pathb-ctx256/`.
+5. Switch from `aimet_torch` (graph-tracer-based) to **`aimet_onnx`**
+   (already installed; `aimet-onnx 2.26.0+cu121` in the venv).
+   `aimet_onnx.QuantSimModel` consumes the rewritten ONNX directly,
+   avoiding the tensor-name mismatch (P1) that caused 80%
+   float-fallback in this session's converter run.
+6. Save encodings, run qairt-converter against the rewritten ONNX
+   (no more Cast issues), then qnn-context-binary-generator.
+7. Bundle: `.bin` + `tokenizer.json` + a wrapper ONNX for ORT-QNN
+   (per `models/qualcomm-qwen3-4b-ref/` shape).
+8. tar + scp / rclone home.
+
+**(β) Skip the 0.6B compile, graduate to Qwen3-4B** — 1 session. The
+4B has the Qualcomm shipping bundle as oracle and is the actual
+production target. The pathb chain is needed for 4B too, so the
+session-1 work transfers wholesale. The only thing skipping costs:
+no end-to-end on-NPU validation of an artifact we made. We'd land
+that on the 4B run anyway.
+
+**Recommended: (α) tomorrow**, because it is research-pure (we know
+the answer for 0.6B w8a16 already at the encodings level — cos 0.996
+— so any failure on the X2E load is a pipeline issue, not a
+calibration issue). Then use that hardening to fast-track (β).
+
+### What to keep, what to clean up
+
+**Keep on `/workspace` (persistent across pod restarts):**
+
+- `/workspace/specula/` — repo (this commit lands here)
+- `/workspace/models/Qwen3-0.6B/` — 1.5 GB; will reuse next session
+- `/workspace/venvs/aimet-2.26-cu121-py310/` — 16 GB; the working venv
+- `/workspace/sdks/qairt-2.45.40.260406/` — 4.9 GB; the matched QAIRT
+
+**Stage for cleanup (regeneratable from script + commands above):**
+
+- `/workspace/specula/last_side_quest/sq4_cloud_adventure/runs/m1[abcdef].../qsim.json`
+  (~600 MB combined). The encoding *is* the artifact, but it's
+  re-emitted in 25 min and the manifest carries the result. Defer
+  cleanup until the 0.6B work is fully closed at end of pathb session.
+- `/workspace/venvs/aimet-2.29-cu126-py312/` — 9 GB; broken at sim
+  build. Keep until we either succeed in fixing it (rebuild as
+  py310) or formally park the 2.29 angle in a roadmap doc.
+- `/root/sq4_intermediates/` — 6 GB on ephemeral rootfs; auto-clears
+  on pod restart. No action needed.
+
+**Disk budget headroom (after this session):**
+
+| location | used | limit | free |
+|---|---:|---:|---:|
+| `/workspace` (RunPod NV quota) | ~32 GB | 100 GB | ~68 GB |
+| `/` (rootfs, ephemeral) | ~10 GB | 50 GB | ~40 GB |
+
+Plenty of room for tomorrow's pathb + 4B work.

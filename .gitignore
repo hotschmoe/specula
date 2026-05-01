@@ -66,3 +66,8 @@ last_side_quest/sq4_cloud_adventure/runs/*/qsim.encodings.json
 last_side_quest/sq4_cloud_adventure/runs/*.log
 last_side_quest/sq4_cloud_adventure/runs/*/qsim_model.onnx
 last_side_quest/sq4_cloud_adventure/runs/*/qsim_model.data
+
+# Symlink to ephemeral build dir (pointed at /root/sq4_intermediates on
+# the cloud pod). Never commit — points outside the repo and the target
+# disappears with the VM.
+last_side_quest/sq4_cloud_adventure/_intermediates
