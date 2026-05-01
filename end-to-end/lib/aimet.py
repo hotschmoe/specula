@@ -28,6 +28,157 @@ from .cal import cal_iter
 from .rope import build_rope_cache
 
 
+def _patch_apply_adascale_for_pathb_kv() -> None:
+    """Override AdaScale.apply_adascale to recognize HF-style past_kv naming.
+
+    aimet_onnx 2.26's apply_adascale matches block KV inputs by substring:
+
+        if (
+            f"past_key_{idx}_in" in name
+            or f"past_value_{idx}_in" in name
+        ):
+            block_kv_tensor_names.append(name)
+
+    But optimum-cli exports Qwen3 past KVs as `past_key_values.{idx}.key`
+    and `past_key_values.{idx}.value`. With the original substring check,
+    block_kv_tensor_names is empty for every block, so the extracted
+    onnx subgraph for the block is missing past_kv inputs — and onnx2torch
+    later sees them as `ValueType.UNKNOWN`, crashing with
+    `RuntimeError: Got unexpected input value type (ValueType.UNKNOWN)`.
+
+    This patch swaps the substring check to match `past_key_values.{idx}.`
+    which catches both .key and .value in one filter. Idempotent.
+    """
+    import aimet_onnx.experimental.adascale.adascale_optimizer as ao_mod
+    if getattr(ao_mod.AdaScale, "_pathb_kv_patched", False):
+        return
+
+    # Imports the original function uses.
+    import contextlib, copy, gc, os, tempfile
+    from pathlib import Path
+    import numpy as np
+    import torch
+    import onnx
+    from aimet_onnx.experimental.adascale.adascale_optimizer import (
+        AdaScale, AdaScaleModelConfig, _logger,
+    )
+    from aimet_onnx.experimental.adascale.find_blocks import (
+        get_decoder_blocks_end_points,
+    )
+    from aimet_onnx.experimental.adascale.activation_sampler import ActivationSampler
+    from aimet_onnx.utils import get_torch_device
+    from aimet_onnx.quantsim import QuantizationSimModel
+
+    @classmethod
+    def apply_adascale_pathb(cls, sim, inputs, adascale_model_config, num_iterations=1500):
+        """Verbatim copy of upstream apply_adascale with one fix:
+        block_kv_tensor_names matches `past_key_values.{idx}.` instead of
+        `past_key_{idx}_in` / `past_value_{idx}_in`."""
+        with cls._disable_activation_quantizers(sim):
+            sim._compute_param_encodings(overwrite=False)
+
+            blocks_end_points = get_decoder_blocks_end_points(
+                sim, adascale_model_config.model_type
+            )
+            device = get_torch_device(sim.session)
+            graph_input_names = [inp.name for inp in sim.session.get_inputs()]
+            if graph_input_names != list(inputs[0].keys()):
+                raise ValueError(
+                    "Graph input names do not match the keys in the provided inputs."
+                )
+
+            common_input_names = []
+            for name in graph_input_names:
+                if "attention" in name:
+                    common_input_names.append(name)
+                if "position" in name:
+                    common_input_names.append(name)
+
+            del sim.session
+            gc.collect()
+            torch.cuda.empty_cache()
+
+            with tempfile.TemporaryDirectory() as tempdir:
+                fp32_model = copy.deepcopy(sim.model.model)
+                fp32_model = QuantizationSimModel.remove_quantizers(fp32_model)
+                model_path = os.path.join(tempdir, "model.onnx")
+                onnx.save_model(
+                    fp32_model, model_path,
+                    save_as_external_data=True,
+                    all_tensors_to_one_file=True,
+                    location=Path(model_path).name + ".data",
+                )
+
+                for idx in range(len(blocks_end_points)):
+                    _logger.info("Optimizing block: %d", idx)
+                    block_kv_tensor_names = []
+                    # ---- PATCH: HF-optimum naming for past KVs ----
+                    for name in graph_input_names:
+                        if f"past_key_values.{idx}." in name:
+                            block_kv_tensor_names.append(name)
+                    # ----------------------------------------------
+                    block_input_names = list(common_input_names)  # fresh copy per block
+                    if len(block_kv_tensor_names) > 0:
+                        if len(block_kv_tensor_names) != 2:
+                            raise RuntimeError(
+                                f"Unable to find both past_key and past_value for block {idx}. "
+                                f"Got {block_kv_tensor_names!r}"
+                            )
+                        block_input_names.extend(block_kv_tensor_names)
+
+                    qsim_sess = ActivationSampler(
+                        blocks_end_points[idx][0].inputs[0].name,
+                        sim.model.model,
+                        sim.providers,
+                    )
+                    fp_inputs, qsim_inputs = [], []
+                    for input_ in inputs:
+                        qsim_inputs.append(qsim_sess.sample_acts(input_))
+                    qsim_sess.restore_graph()
+                    del qsim_sess
+
+                    fp32_sampler = ActivationSampler(
+                        blocks_end_points[idx][0].inputs[0].name,
+                        model_path, sim.providers, tempdir,
+                    )
+                    for input_ in inputs:
+                        fp_inputs.append(fp32_sampler.sample_acts(input_))
+                    fp32_sampler.restore_graph()
+                    del fp32_sampler
+
+                    fp_input_list = []
+                    qsim_input_list = []
+                    for i in range(len(fp_inputs)):
+                        fp_list, qsim_list = [], []
+                        fp_list.append(fp_inputs[i])
+                        qsim_list.append(qsim_inputs[i])
+                        for name in block_input_names:
+                            fp_list.append(inputs[i][name])
+                            qsim_list.append(inputs[i][name])
+                        fp_input_list.append(fp_list)
+                        qsim_input_list.append(qsim_list)
+
+                    block_input_output_names = AdaScale.get_block_start_end_name(
+                        blocks_end_points, idx, block_input_names
+                    )
+                    AdaScale.optimize_adascale_block(
+                        sim, fp_input_list, qsim_input_list,
+                        block_input_output_names,
+                        adascale_model_config.beta_gamma_lr,
+                        adascale_model_config.scales_lr,
+                        num_iterations, device,
+                    )
+                    del fp_input_list, qsim_input_list, fp_inputs, qsim_inputs
+                    gc.collect()
+                    torch.cuda.empty_cache()
+
+                sim._rebuild_session()
+
+    ao_mod.AdaScale.apply_adascale = apply_adascale_pathb
+    ao_mod.AdaScale._pathb_kv_patched = True
+    print("[adascale-patch] overrode AdaScale.apply_adascale for HF-style past_key_values.{i}.{key,value} naming")
+
+
 def _patch_onnx2torch_reduce_mean_v18() -> None:
     """Register a v18 ReduceMean handler in onnx2torch's converter registry.
 
@@ -284,9 +435,14 @@ def run_aimet(
     # ---- 6. AdaScale (optional, run BEFORE compute_encodings) ----
     if use_ada_scale:
         t0 = time.time()
-        # Patch onnx2torch's registry to support ReduceMean v18 (Qwen3
-        # RMSNorm) before AdaScale runs its onnx-to-torch conversion.
+        # Two patches required to make AdaScale work on optimum-cli's
+        # Qwen3 export:
+        #   (a) onnx2torch needs a ReduceMean v18 handler (RMSNorm).
+        #   (b) AdaScale's KV-input-name matching expects Qualcomm
+        #       qai_hub naming (`past_key_{idx}_in`); optimum-cli uses
+        #       HF naming (`past_key_values.{idx}.{key,value}`).
         _patch_onnx2torch_reduce_mean_v18()
+        _patch_apply_adascale_for_pathb_kv()
         from aimet_onnx.experimental.adascale.adascale_optimizer import (
             apply_adascale, AdaScaleModelConfig,
         )
