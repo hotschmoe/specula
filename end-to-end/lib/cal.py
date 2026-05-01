@@ -94,6 +94,9 @@ def cal_iter(
         f"input/output KV mismatch: {len(past_names)} vs {len(present_names)}"
     )
     kv_shape = _kv_input_shapes(sess)
+    # AdaScale checks `list(inputs[0].keys()) == graph_input_names` exactly,
+    # so we must yield dicts in the graph's input order, not insertion order.
+    graph_input_order = [i.name for i in sess.get_inputs()]
     yielded = 0
 
     for prompt in prompts:
@@ -113,14 +116,19 @@ def cal_iter(
             attn_bias[..., ctx - 1 - pos:] = 0.0
             cos_step = rope_cos[pos: pos + 1][None, ...].astype(np.float32)
             sin_step = rope_sin[pos: pos + 1][None, ...].astype(np.float32)
-            feeds: dict[str, np.ndarray] = {
+            raw: dict[str, np.ndarray] = {
                 "input_ids": input_ids,
                 "position_ids": position_ids,
                 "attention_bias": attn_bias,
                 "position_ids_cos": cos_step,
                 "position_ids_sin": sin_step,
             }
-            feeds.update(past)
+            raw.update(past)
+            # Re-order to match the ONNX graph's input order. AdaScale's
+            # apply_adascale asserts list(inputs[0].keys()) == [inp.name
+            # for inp in sim.session.get_inputs()] verbatim, so insertion
+            # order matters.
+            feeds = {n: raw[n] for n in graph_input_order}
             yield feeds
             yielded += 1
             outs = sess.run(present_names, feeds)
