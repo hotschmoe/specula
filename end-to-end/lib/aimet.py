@@ -456,11 +456,28 @@ def run_aimet(
         _patch_onnx2torch_reduce_mean_v18()
         _patch_apply_adascale_for_pathb_kv()
         import aimet_onnx.experimental.adascale.adascale_optimizer as _ao_mod
-        weight_bw = 8 if precision == "w8a16" else 4
+        # Derive the actual weight bw from the QSM rather than parsing
+        # `precision` — single source of truth, future-proofs against
+        # any new precision mode we add (w16a16, mixed, etc.) and
+        # catches drift where `precision` and the QSM were configured
+        # inconsistently. Walk qc_quantize_op_dict and grab the bw from
+        # any quantizer that's tied to a graph initializer (=> a param).
+        init_names = {init.name for init in sim.model.model.graph.initializer}
+        weight_bw = None
+        for name, q in sim.qc_quantize_op_dict.items():
+            if name in init_names and hasattr(q, "bitwidth"):
+                weight_bw = int(q.bitwidth)
+                break
+        if weight_bw is None:
+            # Defensive fallback — shouldn't happen for a working QSM.
+            weight_bw = 8 if precision == "w8a16" else 4
+            _log(f"[adascale-patch] WARNING: could not derive weight bw from QSM "
+                 f"(no quantizer found over an initializer); falling back to {weight_bw} "
+                 f"based on --precision {precision}")
         prev_bw = _ao_mod.AdaScale.ADASCALE_PARAM_BW
         _ao_mod.AdaScale.ADASCALE_PARAM_BW = weight_bw
         _log(f"[adascale-patch] AdaScale.ADASCALE_PARAM_BW = {weight_bw} "
-             f"(was {prev_bw}; matches QSM weight bw for {precision})")
+             f"(was {prev_bw}; derived from QSM, matches --precision {precision})")
         from aimet_onnx.experimental.adascale.adascale_optimizer import (
             apply_adascale, AdaScaleModelConfig,
         )

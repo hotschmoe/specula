@@ -1520,6 +1520,25 @@ The same four patches apply unchanged. Wall scales:
   argmax. We have a known reference for Qwen3-4B unlike 0.6B,
   so M2 has a sharper success criterion.
 
+### Patches we are carrying — upstream-fix watch list
+
+The four monkey-patches in `end-to-end/lib/aimet.py` are workarounds
+for things that should be fixed upstream in aimet_onnx. When we
+upgrade aimet_onnx (today: 2.26), check whether each is still
+necessary. Drop the patcher when upstream behaves correctly.
+
+| # | what | upstream symptom | check by |
+|---|---|---|---|
+| 1 | `onnx2torch` ReduceMean v18 handler | `NotImplementedError: Converter is not implemented (... ReduceMean, version=18)` during `apply_adascale` on opset-18 graphs (Qwen3 RMSNorm) | grep `aimet_onnx/experimental/adascale/onnx2torch_ext.py` for `version=18` registrations of ReduceMean — if absent, patch still needed |
+| 2 | HF-style `past_key_values.{i}.{key,value}` matching | block_kv_tensor_names empty → onnx2torch ValueType.UNKNOWN on past_kv inputs | grep `aimet_onnx/experimental/adascale/adascale_optimizer.py` for `past_key_{idx}_in` — if still that exact substring, patch still needed |
+| 3 | Module-level `apply_adascale` rebind | classmethod patch shadowed by `apply_adascale = AdaScale.apply_adascale` at module load | grep last lines of `adascale_optimizer.py` for `apply_adascale = AdaScale.apply_adascale` — if it still binds at module-load, our patcher must keep rebinding it |
+| 4 | `ADASCALE_PARAM_BW` matching QSM weight bw | qairt-converter `offset must be 0 or -2^(bw-1)` and major cos regression for w8 weights | grep `class AdaScale:` for `ADASCALE_PARAM_BW = 4` literal + the `# TODO remove this temporary solution` comment — if either is gone, the hardcode might be properly addressed; verify before removing patch |
+
+Recommended cadence: re-check on each aimet_onnx version bump
+(typically quarterly). The patcher is idempotent and isolated to
+`lib/aimet.py:_patch_*` functions — easy to disable individually
+once upstream catches up.
+
 ### Why we can't trivially reuse the m1e cos 0.996 result
 
 The prior-session m1e run reached cos 0.996 on Qwen3-0.6B w8a16
