@@ -441,14 +441,26 @@ def run_aimet(
     # ---- 6. AdaScale (optional, run BEFORE compute_encodings) ----
     if use_ada_scale:
         t0 = time.time()
-        # Two patches required to make AdaScale work on optimum-cli's
+        # Three patches required to make AdaScale work on optimum-cli's
         # Qwen3 export:
         #   (a) onnx2torch needs a ReduceMean v18 handler (RMSNorm).
         #   (b) AdaScale's KV-input-name matching expects Qualcomm
         #       qai_hub naming (`past_key_{idx}_in`); optimum-cli uses
         #       HF naming (`past_key_values.{idx}.{key,value}`).
+        #   (c) AdaScale.ADASCALE_PARAM_BW is hardcoded to 4 (with a
+        #       literal TODO comment in the source). For w8a16 this
+        #       writes `offset=-8` into bw=8 encoding slots, which
+        #       qairt-converter rejects ("offset must be 0 or
+        #       -2^(bw-1)") AND tunes weights with the wrong bw budget
+        #       (cos regression 0.613 → 0.510 vs SEQ_MSE-only).
         _patch_onnx2torch_reduce_mean_v18()
         _patch_apply_adascale_for_pathb_kv()
+        import aimet_onnx.experimental.adascale.adascale_optimizer as _ao_mod
+        weight_bw = 8 if precision == "w8a16" else 4
+        prev_bw = _ao_mod.AdaScale.ADASCALE_PARAM_BW
+        _ao_mod.AdaScale.ADASCALE_PARAM_BW = weight_bw
+        _log(f"[adascale-patch] AdaScale.ADASCALE_PARAM_BW = {weight_bw} "
+             f"(was {prev_bw}; matches QSM weight bw for {precision})")
         from aimet_onnx.experimental.adascale.adascale_optimizer import (
             apply_adascale, AdaScaleModelConfig,
         )
