@@ -176,7 +176,13 @@ def _patch_apply_adascale_for_pathb_kv() -> None:
 
     ao_mod.AdaScale.apply_adascale = apply_adascale_pathb
     ao_mod.AdaScale._pathb_kv_patched = True
-    print("[adascale-patch] overrode AdaScale.apply_adascale for HF-style past_key_values.{i}.{key,value} naming")
+    # The module also binds `apply_adascale = AdaScale.apply_adascale` at
+    # module-load time (line 441 of adascale_optimizer.py). Replacing the
+    # classmethod alone leaves the module-level free function pointing at
+    # the original; we have to rebind that too.
+    ao_mod.apply_adascale = ao_mod.AdaScale.apply_adascale
+    print("[adascale-patch] overrode AdaScale.apply_adascale + module-level apply_adascale "
+          "for HF-style past_key_values.{i}.{key,value} naming")
 
 
 def _patch_onnx2torch_reduce_mean_v18() -> None:
