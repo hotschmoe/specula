@@ -1394,3 +1394,128 @@ op version we haven't enumerated), the orchestrator's idempotent
 design means stages 1-5 stay marked done and only stage 6 needs
 to retry — costs ~12 min per fresh attempt. If it succeeds and
 clears cos ≥ 0.95, this is the artifact we ship for M1.
+
+### M1 AdaScale fight log (2026-05-01 → 02 night)
+
+The ReduceMean v18 patch unblocked the *first* AdaScale call but
+revealed two more incompatibilities in aimet_onnx 2.26's AdaScale
+when run against an optimum-cli + pathb Qwen3 graph. Each crash
+manifested as the same generic onnx2torch error
+`RuntimeError: Got unexpected input value type (ValueType.UNKNOWN)`,
+which made it slow to diagnose. Three monkey-patches required;
+chronicled in commit messages
+`33ad19a`, `04f1709`, `1b31a4e`.
+
+#### Patch 1 — onnx2torch ReduceMean v18 handler (commit 33ad19a)
+
+Symptom: `apply_adascale` crashed before AdaScale block 0 with
+`NotImplementedError: Converter is not implemented (...
+ReduceMean, version=18)`. aimet_onnx 2.26 ships only ReduceMean
+v1/v11/v13 converters; opset 18 changed `axes` from attribute to
+optional input. Qwen3 RMSNorm has 113 ReduceMean instances.
+Fix: register a v18 handler in `onnx2torch`'s converter registry
+that resolves `axes` from `input[1]` when it's a constant initializer
+(always true for RMSNorm's `[-1]`) and reuses the existing
+`OnnxReduceStaticAxes`. ~30 LOC, idempotent.
+
+#### Patch 2 — HF-style past_kv naming match (commit 04f1709)
+
+Symptom: post-Patch-1, AdaScale entered block 0 then crashed in
+onnx2torch.convert with `ValueType.UNKNOWN`. Diagnosis:
+`apply_adascale` matches block KV inputs by substring
+`past_key_{idx}_in` / `past_value_{idx}_in` (Qualcomm qai_hub
+naming convention). Optimum-cli uses HF naming
+`past_key_values.{idx}.{key,value}`, so `block_kv_tensor_names`
+was `[]` for every block. The extracted onnx subgraph then
+omitted past_kv as graph inputs; their references in attention
+nodes became dangling, hence UNKNOWN.
+
+Fix: monkey-patch `AdaScale.apply_adascale` with a verbatim copy
+of the original modulo the KV-name match, which now reads
+`if f"past_key_values.{idx}." in name`. This catches both `.key`
+and `.value` in one filter. ~150 LOC patch (including the surrounding
+context that wraps the matching).
+
+#### Patch 3 — module-level apply_adascale rebind (commit 1b31a4e)
+
+**The load-bearing fix.** Symptom: post-Patch-2, AdaScale STILL
+crashed in block 0 with the same UNKNOWN error. The KV match
+appeared to do nothing.
+
+Diagnosis (via instrumented `get_pt_block` repro in
+`/tmp/debug_apply_adascale.py`): the patched
+`AdaScale.apply_adascale` was being shadowed at runtime because
+`adascale_optimizer.py` line 441 binds:
+
+```python
+apply_adascale = AdaScale.apply_adascale
+```
+
+at *module-load time*. Our patch replaces `AdaScale.apply_adascale =
+patched_classmethod` but the module-level free function still
+points at the original. The orchestrator does
+`from aimet_onnx.experimental.adascale.adascale_optimizer
+  import apply_adascale`
+which gets the **stale binding**. So our patched logic never ran;
+`block_kv_tensor_names` stayed `[]`; `block_input_names` came in at
+length 5 (missing past_kv) instead of 7.
+
+Fix: also rebind `ao_mod.apply_adascale = ao_mod.AdaScale.apply_adascale`
+inside the patcher, after replacing the classmethod. One extra
+line; the difference between "still crashing" and "all 28 blocks
+optimize cleanly."
+
+Verified end-to-end on a 16-cal / 10-iter scaled-down run before
+committing 1500 iters / 128 cal of GPU time:
+
+```
+[adascale-patch] registered ReduceMean v18 handler
+[adascale-patch] overrode AdaScale.apply_adascale + module-level
+                 apply_adascale for HF-style past_key_values.{i}.{key,value}
+[Optimizing block 0]  block_input_names (7): [..., past_key_values.0.key,
+                                              past_key_values.0.value]
+[Optimizing block 1] ... [Optimizing block 27] ...
+SUCCESS
+```
+
+#### Pacing observed at 1500 iters / 128 cal (Qwen3-0.6B w8a16, A40)
+
+| sub-stage | wall |
+|---|---:|
+| stages 1-5 (skipped, done.json) | 0 s |
+| AIMET 1-4 (tokenizer + cal + QSM) | ~100 s |
+| AIMET 5 (SEQ_MSE 113 ops) | ~590 s (10 min) |
+| AIMET 6 (AdaScale, per-block) | ~3:25 / block × 28 = **95 min** |
+| AIMET 7 (compute_encodings) | ~30 s (SEQ_MSE pre-pop) |
+| AIMET 10 (sim.export) | ~30 s |
+| stage 7 (qairt-converter) | ~90 s |
+| stage 8 (qnn-context-binary-generator) | ~160 s |
+| stage 9 (bundle + tar) | ~30 s |
+| **total stage 6+ wall** | **~110 min** |
+
+Per-block AdaScale breaks down as: 1500 iters × ~110 ms each =
+~165 s + ~30 s setup (activation sampling × 128 samples through
+the FP and qsim graphs) + ~10 s teardown = ~205 s = 3:25.
+
+#### Disk / RAM during AdaScale
+
+- Persistent: `/workspace/runs/qwen3_0p6b_w8a16_full/` ~6 GB
+  (01_optimum 3 GB + 05_pathb_ctx512 3 GB; 02/03/04/06/07/08/09
+  recreate per-attempt).
+- Ephemeral: `tempfile.TemporaryDirectory()` used by AdaScale
+  to stage the FP32 model (3 GB ONNX + 3 GB external data) for
+  the per-block FP activation sampler. Cleaned automatically.
+- Resident: ~6 GB GPU + ~12 GB host RAM at AdaScale peak; well
+  below A40's 48 GB / pod's 32 GB host RAM.
+
+#### Implications for M2 (Qwen3-4B)
+
+The same three patches apply unchanged. Wall scales:
+- 36 layers × ~3:25 / block × (4B/0.6B params per block ratio
+  ≈ 2.5×) → ~5 hours just for AdaScale at 1500 iters.
+- For first M2 run, recommend `--ada-scale-iters 500` first
+  (≈100 min AdaScale), then full 1500 only if 500 doesn't clear
+  the cos gate. Saves ~3 hours / $1.50 of GPU time per attempt.
+- Pre-Qualcomm-bundle reproduction target: cos ≥ 0.998, 46/46
+  argmax. We have a known reference for Qwen3-4B unlike 0.6B,
+  so M2 has a sharper success criterion.
