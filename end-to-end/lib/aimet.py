@@ -332,6 +332,7 @@ def run_aimet(
     cuda: bool,
     log_path: Path,
     export_prefix: str,
+    model_info=None,  # lib.model_config.ModelInfo (optional for back-compat)
 ) -> dict:
     """Run the AIMET stage. Returns a dict of metrics + paths."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -481,8 +482,15 @@ def run_aimet(
         from aimet_onnx.experimental.adascale.adascale_optimizer import (
             apply_adascale, AdaScaleModelConfig,
         )
-        _log(f"[aimet 6] AdaScale model_type=qwen3 iters={ada_scale_iters} samples={len(cal_samples)} ...")
-        adascale_cfg = AdaScaleModelConfig(model_type="qwen3")
+        # AdaScale model_type: pull from family config when ModelInfo
+        # is available, fall back to "qwen3" for callers that haven't
+        # passed it (back-compat for the Qwen3-only e2e legacy path).
+        adascale_model_type = "qwen3"
+        if model_info is not None:
+            adascale_model_type = model_info.family.aimet_adascale_model_type
+        _log(f"[aimet 6] AdaScale model_type={adascale_model_type} "
+             f"iters={ada_scale_iters} samples={len(cal_samples)} ...")
+        adascale_cfg = AdaScaleModelConfig(model_type=adascale_model_type)
         apply_adascale(sim, cal_samples, adascale_cfg, num_iterations=ada_scale_iters)
         _log(f"[aimet 6] AdaScale done ({time.time() - t0:.1f}s)")
         info["stages"]["6_ada_scale"] = {"wall_s": time.time() - t0,

@@ -63,6 +63,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from lib import stages, aimet, qairt, bundle  # noqa: E402
+from lib.model_config import load_model_info, summary_str  # noqa: E402
 
 
 REPO_ROOT = HERE.parent
@@ -78,6 +79,9 @@ def parse_args() -> argparse.Namespace:
                    help="HF model id (e.g. Qwen/Qwen3-0.6B). Stamped into metadata.")
     p.add_argument("--model-path", type=Path, default=None,
                    help="Local model dir (HF safetensors). Defaults to /workspace/models/<basename>.")
+    p.add_argument("--model-family", type=str, default=None,
+                   help="Override family resolution. One of {qwen3, qwen2, qwen2_5, llama, ...}. "
+                        "Default: inferred from config.json architectures + model-id.")
     p.add_argument("--workdir", type=Path, required=True,
                    help="Per-run workspace; all stage outputs land under here.")
     p.add_argument("--precision", choices=("w4a16", "w8a16"), default="w8a16")
@@ -135,6 +139,21 @@ def main() -> int:
     if not venv_python.exists():
         print(f"FATAL: venv python missing: {venv_python}", file=sys.stderr)
         return 2
+
+    # Resolve model attributes from config.json (single source of truth
+    # for layer count, head dim, rope_theta, family, etc).
+    model_info = load_model_info(
+        model_id=args.model_id, model_path=args.model_path,
+        family_override=args.model_family, precision=args.precision,
+    )
+    if not model_info.family.pathb_supported:
+        print(f"FATAL: family {model_info.family.name!r} is not flagged "
+              f"pathb_supported. The pathb scripts (rewrite_qwen3_*) are "
+              f"Qwen3-specific. Either extend pathb to this family or "
+              f"pick a different model.", file=sys.stderr)
+        return 2
+    print("\n[model-info]")
+    print(summary_str(model_info))
 
     # Stage paths.
     s1_dir = args.workdir / "01_optimum"
@@ -197,6 +216,7 @@ def main() -> int:
             quant_scheme=args.quant_scheme,
             cuda=args.cuda, log_path=log_path,
             export_prefix=export_prefix,
+            model_info=model_info,
         )
         with open(aimet_done_marker, "w") as f:
             json.dump(info, f, indent=2, default=str)
