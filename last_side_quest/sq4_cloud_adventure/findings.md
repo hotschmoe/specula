@@ -1702,3 +1702,217 @@ reasons (HTP HMX accelerates {int4,int8} × {int16,fp16}; int16
 weights fall back to scalar tensor units, ~10× slower) and
 doubles bundle size. Pure diagnostic; deferred unless we exhaust
 other options.
+
+## M2 attempt 1 — Qwen3-4B w4a16, 2026-05-02 night, OOM at QSM build
+
+**Outcome: process killed mid-stage-6.** 4B w4a16 SEQ_MSE+AdaScale
+plumbing landed end-to-end through stage 5 (pinned pathb ONNX
+ready), but the AIMET QSM build phase ran the host RAM cap to
+exhaustion and the container's OOM-killer reaped the process.
+Workspace state through stage 5 survives — re-runs skip the first
+five stages on resume.
+
+### Plumbing fixes shipped this session (kept)
+
+Three independent bugs were blocking 4B+ from even reaching AIMET.
+All three are fixed and committed; future model-family work inherits
+them.
+
+1. **`optimum-cli export onnx` 2 GiB protobuf cap**.
+   `_jit_pass_onnx_graph_shape_type_inference` serializes the JIT
+   graph with embedded weights to a string for shape annotation; for
+   Qwen3-4B that string is ~16 GB, blowing protobuf's hard cap.
+   Fix: monkey-patch the pass to a no-op (annotations-only, doesn't
+   change the produced ONNX), then post-process to coerce the one
+   resulting fp64 Constant (`1/sqrt(head_dim)`) to fp32 so ORT
+   doesn't reject the downstream Mul.
+   Lives in `end-to-end/scripts_helper/optimum_export_4b.py`;
+   `lib/stages.stage_optimum_export` falls back to it automatically
+   when the bare optimum-cli emits the protobuf-cap RuntimeError.
+
+2. **`scripts/rewrite_qwen3_pathb.py` hardcoded 0.6B Unsqueeze names**.
+   The script asserted `LAYER0_UNSQ_COS = "/model/layers.0/self_attn/Unsqueeze_6"`,
+   which exists in 0.6B but not 4B (q_norm/k_norm shift the
+   numbering to `_12`/`_13`). Replaced with topology walks: find the
+   rotary subgraph's Cos/Sin nodes by op_type, walk downstream
+   through Mul/Cast in the rotary namespace to the terminal output,
+   then locate the unique Unsqueeze consumer of each terminal.
+   Same code now passes on both 0.6B (terminals at Cast_4/Cast_5)
+   and 4B (terminals at Cast_5/Cast_6).
+
+3. **`scripts/pin_shapes_qwen3_4b.py` missing dim_param patterns**.
+   Disabling shape inference (#1) leaves torch.onnx unable to
+   propagate inferred dim_params from inputs; the result is
+   auto-generated symbolic names like `Concatpresent.<L>.{key,value}_dim_{1,2,3}`
+   and `MatMullogits_dim_2`. Added a regex resolver mapping each
+   pattern to its config-derived value (num_kv_heads / ctx /
+   head_dim / vocab_size). 145 dims auto-resolved cleanly on 4B.
+
+### Multi-part split + Qualcomm-genie bundle (NEW, in repo)
+
+The single-bin `qnn-context-binary-generator` step that worked for
+0.6B will fail on 4B at the HTP serializer's 3.67 GB ceiling (per
+Phase 3c in `docs/qualcomm_reproduction_4b.md`). Built the missing
+piece — generic split + per-part qairt + Qualcomm-shape genie
+bundle:
+
+- `end-to-end/lib/split.py`: generalized splitter (drives off
+  `ModelInfo` so the same code handles 4B / 14B / 27B).
+- `end-to-end/lib/bundle.py:assemble_genie_bundle`: writes a
+  multi-part bundle byte-comparable to
+  `qwen3_4b-genie-w4a16-qualcomm_snapdragon_x2_elite/`
+  (genie_config.json + N .bin + htp_backend_ext_config + tokenizer
+  + sample_prompt + metadata).
+- `end-to-end/compile_split_bundle.py`: standalone post-AIMET driver.
+- `end-to-end/configs/qnn_v81_*.json`: HTP v81 / soc_model 88 (X2
+  Elite Extreme) — Qualcomm's shipping bundle uses v81, NOT v75
+  (X1 Elite). Default-arched the new path to v81.
+- `end-to-end/compare_to_qualcomm.py`: bundle audit harness — diffs
+  per-part .bin sizes, genie_config.json fields, htp_backend_ext_config,
+  tokenizer.json sha256, encoding entry counts.
+
+Smoke test on the pinned 4B pathb graph (no AIMET output yet)
+confirmed the splitter produces 4 sub-onnx with correct seam
+tensors and matches Phase 5d's reference per-part weight totals
+within ~0.01 GB:
+
+| part | nodes | inits | weights (GB) | Phase-5d ref |
+|---:|---:|---:|---:|---:|
+| 1 (embed) | 1 | 1 | 1.56 | 1.56 |
+| 2 (layers 0-11) | 3420 | 132 | 4.84 | 4.84 |
+| 3 (layers 12-23) | 3420 | 132 | 4.84 | 4.84 |
+| 4 (layers 24-35 + lm_head) | 3435 | 134 | 6.40 | 6.40 |
+
+### OOM root-cause math (the actual blocker)
+
+```
+$ cat /sys/fs/cgroup/memory/memory.limit_in_bytes
+49999998976                                       # 46.6 GiB
+```
+
+This RunPod community A40 tier has a **46.6 GiB host RAM cap**
+(cgroup-enforced), independent of the host's 503 GB total visible
+in `free -h`. AIMET QSM build for 4B w4a16:
+
+| component | bytes (GB) |
+|---|---:|
+| FP32 model_proto loaded into Python | 14.98 |
+| `aimet_onnx.QuantizationSimModel(...)` graph copy + QDQ wrap | ~14.98 |
+| ORT-CUDA InferenceSession (host-side weight backing) | ~5-10 |
+| 64 cal-sample dicts (each carries 36×2 past_kv at fp32 = 144 MB) | 8.98 |
+| Python interpreter + transformers + onnx + numpy | ~3-5 |
+| **estimated peak during QSM build** | **~48-54** |
+
+The QSM build alone runs us to ~48 GB. AdaScale (had it reached
+that stage) is worse — `apply_adascale` does
+`copy.deepcopy(sim.model.model)` which adds another ~15 GB peak
+during the FP32-sampler tempfile staging. Realistic AdaScale peak:
+**~58-65 GB**.
+
+### What we need for a successful 4B AIMET run
+
+**Host RAM** is the binding constraint. VRAM is fine — A40 48 GB
+held weights+activations comfortably during the partial run (~275
+MiB used at OOM time, since AIMET hadn't moved blocks to GPU yet).
+
+| precision | minimum host RAM | recommended | notes |
+|---|---:|---:|---|
+| 4B w4a16 SEQ_MSE+AdaScale (1500 iters / 64 cal) | **~64 GB** | **96 GB** | ~58 GB peak with margin |
+| 4B w8a16 SEQ_MSE+AdaScale (1500 iters / 64 cal) | ~64 GB | 96 GB | same — cal/deepcopy dominates |
+| 4B w4a16 SEQ_MSE-only (no AdaScale) | ~36 GB | 48 GB | skips deepcopy + tempdir FP sampler |
+| 4B basic-PTQ tf_enhanced (no SEQ_MSE) | ~32 GB | 44 GB | works on current 46.6 GB cap |
+| 14B w4a16 SEQ_MSE+AdaScale | ~144 GB | **192 GB** | 4B × 3.5x param count |
+| 27B dense w4a16 | ~256 GB | 384 GB | scaling continues |
+| 35B-A3B MoE | ~320 GB | 384 GB | MoE softens param-RAM; experts can stream |
+
+VRAM stays ~16 GB through 4B, ~28 GB through 14B (per
+`docs/one_pipeline_cloud_gpu.md` table). Even an A40 48 GB has
+headroom for 14B; the bottleneck is host RAM for the whole class.
+
+### Recommended next attempt
+
+**Move to a higher-RAM RunPod tier.** Two viable picks (RunPod
+Community/Secure as of 2026-05):
+
+| tier | GPU | host RAM | $/hr | notes |
+|---|---|---:|---:|---|
+| A40 80 GB host | A40 48 GB | **80 GB** | ~$0.55 | cheapest fit; same VRAM as today |
+| L40S 96 GB host | L40S 48 GB | **96 GB** | ~$0.85 | recommended; comfortable margin |
+| A100 80 GB SXM | A100 80 GB | **125+ GB** | ~$1.99 | overkill for 4B but unlocks 14B+ |
+
+**Don't touch the cgroup limit on the current pod** — it's a
+hardware partition, not a user-tunable. Stop the current pod and
+re-deploy on a higher-RAM tier. Persistent volume `/workspace`
+follows.
+
+If a higher-RAM tier isn't available, two stack-side levers can
+shave the 4B AIMET footprint:
+
+1. **Pre-write cal samples to disk** (~8.98 GB → ~0). Modify
+   `lib/cal.py` to write each yielded dict to a per-sample `.npz`
+   in workdir, then have AdaScale's wrapper read them back as
+   needed. Substantial code change because aimet_onnx's
+   `apply_adascale` consumes the in-memory list directly.
+2. **Skip the deepcopy in AdaScale** (~15 GB savings during AdaScale).
+   Patch `apply_adascale_pathb` to write the FP32 model to disk via
+   `onnx.save` *without* the in-memory deepcopy, then point the
+   tempdir-backed FP32 sampler at the on-disk file. Risky — the
+   monkey-patch chain is already 4 layers deep.
+
+Lever 1 has the larger savings and is easier to verify in
+isolation. Lever 2 is fragile and we'd want upstream support.
+
+### Resume command for the bigger-RAM pod
+
+`/workspace` persists across pod tear-down/restart; the model,
+venvs, QAIRT SDK, and the partial run dir are all there. After
+re-deploying on a 96 GB tier (or 80 GB minimum):
+
+```bash
+# from /workspace/specula/, on the new pod
+git pull origin master
+PY=/workspace/venvs/aimet-2.26-cu121-py310/bin/python
+NVLIBS=$(find /workspace/venvs/aimet-2.26-cu121-py310/lib/python3.10/site-packages/nvidia -name lib -type d | tr '\n' ':')
+nohup setsid env LD_LIBRARY_PATH=$NVLIBS \
+    $PY end-to-end/quantize_to_npu.py \
+    --model-id Qwen/Qwen3-4B \
+    --workdir /workspace/runs/qwen3_4b_w4a16 \
+    --precision w4a16 --ctx 512 \
+    --num-cal-samples 64 \
+    --use-seq-mse --seq-mse-candidates 20 \
+    --use-ada-scale --ada-scale-iters 1500 \
+    --vo-pin-w8 \
+    > /workspace/runs/qwen3_4b_w4a16.log 2>&1 < /dev/null &
+disown
+```
+
+(Stages 1-5 will skip — `done.json` markers are in
+`/workspace/runs/qwen3_4b_w4a16/0[1-5]_*/`.)
+
+Then post-AIMET:
+
+```bash
+$PY end-to-end/compile_split_bundle.py \
+    --workdir /workspace/runs/qwen3_4b_w4a16 \
+    --model-id Qwen/Qwen3-4B \
+    --precision w4a16 --ctx 512 \
+    --num-parts 4 --dsp-arch v81
+
+# Sanity: how do we look against Qualcomm's bundle?
+$PY end-to-end/compare_to_qualcomm.py \
+    --ours-dir /workspace/runs/qwen3_4b_w4a16/09b_bundle_w4a16/qwen3_4b_w4a16_pathb_ctx512_x2e_v81
+```
+
+### Decision gate
+
+The 4B run on a properly-sized pod is the M2 oracle. If it lands
+cos > 0.95 against FP32 and the multi-part bundle structurally
+matches Qualcomm's shipping bin sizes (~3.1 GB total), we have
+end-to-end reproduction confidence and graduate to M3 (14B).
+If cos < 0.95, the M1 conclusion holds — aimet_onnx + pathb has a
+stack-level ceiling that needs the m1e-encodings-name-translator
+escape (port the aimet_torch encodings to pathb tensor names and
+import via qairt-converter `--quantization_overrides`).
+
+Either way, we need the bigger-RAM pod first to even *measure* the
+question.
