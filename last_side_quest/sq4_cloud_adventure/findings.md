@@ -1520,6 +1520,72 @@ The same four patches apply unchanged. Wall scales:
   argmax. We have a known reference for Qwen3-4B unlike 0.6B,
   so M2 has a sharper success criterion.
 
+#### M1 closeout (2026-05-02 ~05:50)
+
+All three quality recipes attempted on aimet_onnx + pathb +
+Qwen3-0.6B + w8a16 finished. Final landing:
+
+| recipe | cal | cos(fp,q) | argmax | bundle |
+|---|---:|---:|:---:|:---:|
+| basic PTQ (tf_enhanced) — smoke | 16 | 0.6558 | ✗ | yes |
+| basic PTQ (tf_enhanced) — side probe | 128 | 0.6558 | ✗ | none |
+| SEQ_MSE (forced min_max) | 128 | 0.6127 | ✗ | yes |
+| SEQ_MSE + AdaScale (broken bw=4) | 128 | 0.5104 | ✗ | qairt rejected |
+| **SEQ_MSE + AdaScale (fixed bw=8)** | **128** | **0.4547** | ✗ | **yes (110-min run, sha 75c700e3...)** |
+
+The bw-fixed AdaScale is the *worst* result. Each "improvement"
+beyond basic-PTQ has actually moved cos backward. The 0.6558
+ceiling appears to be aimet_onnx 2.26's intrinsic limit on this
+graph; m1e (aimet_torch on the standard transformers Qwen3 graph)
+hit 0.996 with the same precision and a similar recipe, so the
+gap is in the **stack**, not the **algorithm**.
+
+**Decision: M1 closes here.** The .bin compiles cleanly through
+qairt + qnn-context-binary-generator at HTP v75 (plumbing fully
+validated, all 4 AdaScale patches working as intended); quality is
+below ship gate (cos < 0.95). 0.6B has known structural V/O
+challenges (SQ2) that compound with aimet_onnx's reduced surface.
+
+We are **not shipping a 0.6B w8a16 bundle from this stack**. The
+encodings + .bin from the final run are deleted (cleanup 2026-05-02
+06:11) along with the 0.6B optimum + pathb intermediates — they
+are not ship-worthy and we have full reproduction in commits +
+findings if anyone needs to recreate.
+
+Recovery if 0.6B becomes load-bearing later (currently it isn't):
+1. Pursue the m1e-encodings-name-translator path (~50 LOC, untested).
+2. Pursue aimet_onnx config tightening — the HTP-aware
+   `htp_quantsim_config_v75.json` ships in the venv but isn't passed
+   to QSM; might close part of the gap.
+3. Wait for an aimet_onnx upstream version that fixes the four
+   patched bugs and improves SEQ_MSE/AdaScale on Qwen3.
+
+**Graduating to M2 (Qwen3-4B) directly.** M2 has the
+`models/qualcomm-qwen3-4b-ref/` oracle (cos 0.9998, 46/46 argmax)
+on the home X2E, which lets us measure success on *byte-and-argmax-
+comparable* terms. The pipeline plumbing is M1-validated; M2
+exercises whether the same plumbing produces ship-quality at a
+larger scale.
+
+#### Plumbing facts to carry forward (validated this M1)
+
+- pathb + aimet_onnx + qairt + qnn-context-binary-generator end-
+  to-end works: 4 of 4 commits worth of patches but the .bin lands.
+- Detached process discipline: `nohup setsid` survives shell tear-
+  downs; PPID re-parents to init. This was load-bearing during
+  the user's manual reconnects.
+- 44 GB RAM allocation per container (not the 503 GB host pool).
+  AdaScale's `copy.deepcopy(sim.model.model)` doubles the QSIM in
+  RAM mid-flight and contention with anything else triggers OOM
+  reboot. Run AIMET stages alone.
+- `/tmp` accumulates AdaScale's `tempfile.TemporaryDirectory`
+  remnants when the process exits abnormally — each ~3 GB, can
+  add up to 30+ GB. `rm -rf /tmp/tmp*` on cleanup pass.
+- The 4-patch stack for aimet_onnx 2.26 + Qwen3 + AdaScale:
+  ReduceMean v18 + HF KV naming + module-level rebind +
+  `ADASCALE_PARAM_BW` (now derived from QSM, not hardcoded).
+  Watch list documented above for upstream cadence.
+
 ### Patches we are carrying — upstream-fix watch list
 
 The four monkey-patches in `end-to-end/lib/aimet.py` are workarounds
