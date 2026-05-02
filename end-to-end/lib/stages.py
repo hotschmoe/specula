@@ -40,11 +40,27 @@ def _run(cmd: list[str], cwd: Path | None = None, env: dict | None = None,
     return subprocess.run(cmd, cwd=cwd, env=env).returncode
 
 
+SCRIPTS_HELPER = Path(__file__).resolve().parents[1] / "scripts_helper"
+
+
 def stage_optimum_export(
     *, model_path: Path, out_dir: Path, force: bool = False,
     venv_python: Path,
 ) -> dict:
-    """Stage 1: HF model → optimum-cli ONNX (text-generation-with-past)."""
+    """Stage 1: HF model → optimum-cli ONNX (text-generation-with-past).
+
+    For models < ~2 GiB ONNX (< ~1B params at fp32) the bare optimum-cli path
+    works. For 4B+ models the legacy torch.onnx export hits the protobuf
+    2 GiB cap during `_jit_pass_onnx_graph_shape_type_inference`. We wrap
+    optimum-cli in `scripts_helper/optimum_export_4b.py` which monkey-
+    patches that pass to a no-op (annotations-only, no graph mutation)
+    and post-fixes any fp64 Constants the legacy path emits — together
+    those produce a model that loads cleanly in onnxruntime and matches
+    the same hierarchical naming the rewrite_qwen3_*.py scripts expect.
+
+    We try the bare optimum-cli first and fall back to the wrapper on
+    the protobuf-cap RuntimeError.
+    """
     if not force and _done(out_dir):
         print(f"[stage 1] skip (done): {out_dir}")
         return json.loads((out_dir / "done.json").read_text())
@@ -60,17 +76,42 @@ def stage_optimum_export(
     ]
     rc = _run(cmd, log_path=log)
     onnx_path = out_dir / "model.onnx"
+    method = "optimum-cli"
     if rc != 0 or not onnx_path.exists():
-        raise RuntimeError(f"optimum export failed (rc={rc}); see {log}")
+        # Inspect log for the known 2 GiB protobuf cap error.
+        try:
+            log_text = log.read_text()
+        except Exception:
+            log_text = ""
+        if "2GiB limit imposed by the protobuf" in log_text:
+            print(f"[stage 1] optimum-cli hit the 2 GiB protobuf cap "
+                  f"(model too large for the legacy onnx exporter); "
+                  f"falling back to the patched wrapper")
+            log2 = out_dir / "optimum_export_patched.log"
+            cmd2 = [
+                str(venv_python),
+                str(SCRIPTS_HELPER / "optimum_export_4b.py"),
+                "--model-path", str(model_path),
+                "--out-dir", str(out_dir),
+            ]
+            rc2 = _run(cmd2, log_path=log2)
+            if rc2 != 0 or not onnx_path.exists():
+                raise RuntimeError(
+                    f"patched optimum export ALSO failed (rc={rc2}); see {log2}"
+                )
+            method = "optimum-cli + scripts_helper/optimum_export_4b.py wrapper"
+        else:
+            raise RuntimeError(f"optimum export failed (rc={rc}); see {log}")
     info = {
         "stage": "1_optimum_export",
         "out_dir": str(out_dir),
         "wall_s": time.time() - t0,
+        "method": method,
         "model_onnx_size": onnx_path.stat().st_size,
         "data_size": sum(f.stat().st_size for f in out_dir.iterdir() if f.suffix in ("",".onnx_data") or "data" in f.name and f.is_file()),
     }
     _mark_done(out_dir, info)
-    print(f"[stage 1] done {time.time() - t0:.1f}s")
+    print(f"[stage 1] done {time.time() - t0:.1f}s ({method})")
     return info
 
 
