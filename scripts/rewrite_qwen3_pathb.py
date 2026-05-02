@@ -37,17 +37,109 @@ REPO = Path(__file__).resolve().parents[1]
 DEFAULT_STEM = "qwen3-0.6b"
 
 ROTARY_PREFIX = "/model/rotary_emb/"
-# layer-0 Unsqueeze_6/7 are the only direct consumers of the rotary
-# terminals. Rewiring them lets the entire rotary subgraph (including
-# the FP32->FP32 identity Cast_4/5) prune cleanly, leaving zero
-# rotary_emb nodes per the deliverable checklist.
-COS_TERMINAL = "/model/rotary_emb/Cast_4_output_0"
-SIN_TERMINAL = "/model/rotary_emb/Cast_5_output_0"
-LAYER0_UNSQ_COS = "/model/layers.0/self_attn/Unsqueeze_6"
-LAYER0_UNSQ_SIN = "/model/layers.0/self_attn/Unsqueeze_7"
 HEAD_DIM = 128
 COS_INPUT = "position_ids_cos"
 SIN_INPUT = "position_ids_sin"
+
+
+def _detect_rotary_cos_sin_terminals(model: onnx.ModelProto) -> tuple[str, str]:
+    """Walk the rotary_emb subgraph to find the cos and sin output tensor
+    names (whatever the optimum exporter named them).
+
+    Pattern: there's exactly one Cos op and one Sin op under
+    /model/rotary_emb/. Each feeds an identity Mul (* attention_scaling=1.0)
+    via Constant_7/Constant_8, then a Cast (the terminal). We return the
+    names of the two terminal Cast outputs.
+
+    Falls back to walking just downstream of Cos/Sin if the structure
+    differs slightly (no Mul, or no terminal Cast). Numeric Constant_7
+    values are validated separately in main().
+    """
+    out_to_node = {}
+    for n in model.graph.node:
+        for o in n.output:
+            if o:
+                out_to_node[o] = n
+
+    cos_node = sin_node = None
+    for n in model.graph.node:
+        if not n.name.startswith(ROTARY_PREFIX):
+            continue
+        if n.op_type == "Cos":
+            cos_node = n
+        elif n.op_type == "Sin":
+            sin_node = n
+    if cos_node is None or sin_node is None:
+        raise RuntimeError(
+            f"could not locate Cos/Sin nodes in rotary subgraph; "
+            f"is the export shape correct?"
+        )
+
+    def walk_terminal(start_out: str) -> str:
+        """Walk downstream as long as the next node is a Mul (scaling)
+        or a Cast and stays in the rotary namespace. Return the last
+        rotary-namespace tensor name reachable in this chain."""
+        cur_out = start_out
+        # Build consumer index lazily.
+        consumers: dict[str, list[onnx.NodeProto]] = {}
+        for n in model.graph.node:
+            for inp in n.input:
+                consumers.setdefault(inp, []).append(n)
+        while True:
+            # Find the *one* rotary-namespace consumer along the chain.
+            rotary_consumers = [
+                c for c in consumers.get(cur_out, [])
+                if c.name.startswith(ROTARY_PREFIX)
+                and c.op_type in ("Mul", "Cast")
+            ]
+            if len(rotary_consumers) != 1:
+                return cur_out
+            nxt = rotary_consumers[0]
+            cur_out = nxt.output[0]
+
+    cos_term = walk_terminal(cos_node.output[0])
+    sin_term = walk_terminal(sin_node.output[0])
+    return cos_term, sin_term
+
+
+def _detect_layer0_unsqueeze_consumers(
+    model: onnx.ModelProto, cos_term: str, sin_term: str,
+) -> tuple[onnx.NodeProto, onnx.NodeProto]:
+    """The two consumers of cos_term / sin_term should both be Unsqueeze
+    ops in layer-0's self_attn (their outputs broadcast through every
+    layer). Locate them by tensor-flow rather than hardcoded name."""
+    cos_node = sin_node = None
+    for n in model.graph.node:
+        if cos_term in n.input:
+            if n.op_type != "Unsqueeze":
+                raise RuntimeError(
+                    f"cos terminal {cos_term!r} consumed by {n.op_type} "
+                    f"({n.name}); expected Unsqueeze"
+                )
+            if cos_node is not None:
+                raise RuntimeError(
+                    f"multiple consumers of cos terminal {cos_term!r}; "
+                    f"unexpected"
+                )
+            cos_node = n
+        if sin_term in n.input:
+            if n.op_type != "Unsqueeze":
+                raise RuntimeError(
+                    f"sin terminal {sin_term!r} consumed by {n.op_type} "
+                    f"({n.name}); expected Unsqueeze"
+                )
+            if sin_node is not None:
+                raise RuntimeError(
+                    f"multiple consumers of sin terminal {sin_term!r}; "
+                    f"unexpected"
+                )
+            sin_node = n
+    if cos_node is None or sin_node is None:
+        raise RuntimeError(
+            f"could not locate Unsqueeze consumers of cos/sin terminals "
+            f"({cos_term!r}, {sin_term!r})"
+        )
+    return cos_node, sin_node
 
 
 def main() -> None:
@@ -91,22 +183,26 @@ def main() -> None:
                             "Non-identity attention_scaling — must fold into runtime cos/sin."
                         )
 
-    # 1. Rewire layer-0 Unsqueeze_6/7 to read directly from the new graph
-    #    inputs (instead of from /model/rotary_emb/Cast_4_output_0 etc.).
-    #    These two Unsqueezes are the *only* direct consumers of the
-    #    rotary terminals, and their 4D output broadcasts to every layer.
-    rewires = 0
-    for n in m.graph.node:
-        if n.name == LAYER0_UNSQ_COS:
-            assert n.input[0] == COS_TERMINAL, f"unexpected Unsqueeze_6 input: {n.input[0]}"
-            n.input[0] = COS_INPUT
-            rewires += 1
-        elif n.name == LAYER0_UNSQ_SIN:
-            assert n.input[0] == SIN_TERMINAL, f"unexpected Unsqueeze_7 input: {n.input[0]}"
-            n.input[0] = SIN_INPUT
-            rewires += 1
+    # 1. Rewire the layer-0 Unsqueeze consumers of cos/sin terminals to
+    #    read directly from the new graph inputs (instead of from
+    #    `/model/rotary_emb/Cast_*_output_0`). These two Unsqueezes are
+    #    the *only* direct consumers of the rotary terminals, and their
+    #    4D output broadcasts to every layer.
+    #
+    #    The exact Unsqueeze node names (Unsqueeze_6/_7 in 0.6B vs
+    #    _12/_13 in 4B) and Cast terminal indices vary across models due
+    #    to differing pre-attention node counts (4B has q_norm/k_norm
+    #    that 0.6B doesn't). Detect dynamically rather than hardcode.
+    cos_terminal, sin_terminal = _detect_rotary_cos_sin_terminals(m)
+    print(f"  detected cos terminal: {cos_terminal}")
+    print(f"  detected sin terminal: {sin_terminal}")
+    cos_unsq, sin_unsq = _detect_layer0_unsqueeze_consumers(m, cos_terminal, sin_terminal)
+    print(f"  detected layer-0 Unsqueeze (cos): {cos_unsq.name}")
+    print(f"  detected layer-0 Unsqueeze (sin): {sin_unsq.name}")
+    cos_unsq.input[0] = COS_INPUT
+    sin_unsq.input[0] = SIN_INPUT
+    rewires = 2
     print(f"  rewired {rewires} layer-0 Unsqueeze inputs (expected 2)")
-    assert rewires == 2
 
     # 2. Add new graph inputs after attention_bias.
     cos_input = helper.make_tensor_value_info(
