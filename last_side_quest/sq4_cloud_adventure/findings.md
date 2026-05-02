@@ -1510,7 +1510,7 @@ the FP and qsim graphs) + ~10 s teardown = ~205 s = 3:25.
 
 #### Implications for M2 (Qwen3-4B)
 
-The same three patches apply unchanged. Wall scales:
+The same four patches apply unchanged. Wall scales:
 - 36 layers × ~3:25 / block × (4B/0.6B params per block ratio
   ≈ 2.5×) → ~5 hours just for AdaScale at 1500 iters.
 - For first M2 run, recommend `--ada-scale-iters 500` first
@@ -1519,3 +1519,53 @@ The same three patches apply unchanged. Wall scales:
 - Pre-Qualcomm-bundle reproduction target: cos ≥ 0.998, 46/46
   argmax. We have a known reference for Qwen3-4B unlike 0.6B,
   so M2 has a sharper success criterion.
+
+### Why we can't trivially reuse the m1e cos 0.996 result
+
+The prior-session m1e run reached cos 0.996 on Qwen3-0.6B w8a16
+using **aimet_torch** (PyTorch surface) on the **standard
+transformers Qwen3ForCausalLM**, not the pathb-rewritten ONNX. That
+artifact failed at qnn-context-binary-generator with
+`Failed to validate op /inner/model/Cast with error 0xc26` — the
+HF transformers attention has Cast→BOOL chains (NaN guards,
+attention_mask boolean expansion) that HTP rejects. **That's
+exactly why pathb exists**: the rewrites delete those chains and
+replace `Where(bool_mask)` with `Add(attention_bias)`.
+
+Two NPU-deployable paths from m1e's high-quality encodings:
+
+1. **Run AIMET on the pathb-rewritten ONNX.** What we're doing now.
+   Aimet_onnx 2.26 has buggier optimizers than aimet_torch (we've
+   patched 4 things in AdaScale alone) and SEQ_MSE forces
+   quant_scheme=min_max which loses tf_enhanced's better activation
+   observation.
+2. **Port aimet_torch's encodings to pathb tensor names via a
+   name-translator.** A ~50-LOC mapping from torch-traced internal
+   names (e.g. `inner.model.layers.0.self_attn.q_proj.weight`) to
+   pathb-rewritten ONNX names (`onnx::MatMul_<id>`). Run AIMET on
+   the torch model (m1e recipe → cos 0.996), then post-process the
+   resulting `qsim.json` to rename keys before handing it to
+   `qairt-converter --quantization_overrides`. Open question P1
+   in `docs/one_pipeline_cloud_gpu.md` is exactly this question.
+   Untested but plausible because:
+   - The torch Q/DQ tensor names follow a regular pattern
+   - Pathb only renames the surrounding compute graph, not the
+     weight tensors themselves (initializers keep their names)
+   - The encodings are referenced by tensor name, not by op
+     position, so a bijective map should work
+
+If aimet_onnx + pathb hits a quality ceiling we can't break, path
+(2) is the documented escape hatch — we have m1e's encodings on
+disk, the pathb-rewritten ONNX on disk, and just need the mapping.
+
+### Diagnostic side runs queued
+
+- w8a16 basic PTQ with `post_training_tf_enhanced` activations
+  (no SEQ_MSE forcing min_max), 128 cal samples — tells us if
+  tf_enhanced's better activation observation alone (without
+  optimizers) closes part of the gap.
+- w16a16 — would tell us "if quantization-precision were
+  unlimited, what's the cos ceiling on this pipeline?" but
+  likely useless to ship: HTP HMX is built for {int4,int8} ×
+  {int16,fp16} weights, so int16 weights fall back to scalar units
+  (~10× slower), and bundle doubles in size. Diagnostic only.
