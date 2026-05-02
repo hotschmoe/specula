@@ -118,6 +118,7 @@ def stage_optimum_export(
 def stage_pathb_chain(
     *, optimum_dir: Path, work_root: Path, model_stem: str,
     ctx: int, force: bool = False, venv_python: Path,
+    model_info=None,  # lib.model_config.ModelInfo (optional for back-compat)
 ) -> tuple[Path, dict]:
     """Stages 2-5: rewrite_qwen3_htp stage + fold-pathbmask, then
     rewrite_qwen3_pathb (rotary hoist), then pin_shapes ctx=N.
@@ -196,14 +197,21 @@ def stage_pathb_chain(
     if force or not _done(pinned_dir):
         pinned_dir.mkdir(parents=True, exist_ok=True)
         t0 = time.time()
-        rc = _run([
+        cmd = [
             str(venv_python),
             str(SCRIPTS_DIR / "pin_shapes_qwen3_4b.py"),
             "--src-dir", str(pathb_dir),
             "--dst-dir", str(pinned_dir),
             "--ctx", str(ctx),
             "--seq-q", "1",
-        ], log_path=pinned_dir / "stage.log")
+        ]
+        if model_info is not None:
+            cmd += [
+                "--num-kv-heads", str(model_info.num_key_value_heads),
+                "--head-dim", str(model_info.head_dim),
+                "--vocab-size", str(model_info.vocab_size),
+            ]
+        rc = _run(cmd, log_path=pinned_dir / "stage.log")
         if rc != 0:
             raise RuntimeError(f"pin_shapes_qwen3_4b failed (rc={rc})")
         d = {"stage": "5_pinned", "wall_s": time.time() - t0,

@@ -192,6 +192,7 @@ def main() -> int:
         optimum_dir=s1_dir, work_root=args.workdir,
         model_stem=model_basename.lower(), ctx=args.ctx,
         force=(force_at <= 2), venv_python=venv_python,
+        model_info=model_info,
     )
     overall["stages"]["2_5_pathb"] = pathb_info
     _save()

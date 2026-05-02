@@ -16,6 +16,7 @@ expects this, and qairt-converter handles either name).
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -23,6 +24,26 @@ from pathlib import Path
 import onnx
 
 REPO = Path(__file__).resolve().parents[1]
+
+
+# torch.onnx auto-generates dim_param names like "Concatpresent.5.key_dim_1"
+# when it can't propagate inferred shapes (e.g. shape inference disabled,
+# as we do for the >2 GiB protobuf-cap workaround in optimum_export_4b.py).
+# Match each pattern and resolve to a concrete value derived from the
+# transformer config so the graph fully pins.
+def _resolve_auto_dim(name: str, *, ctx: int, num_kv_heads: int,
+                      head_dim: int, vocab_size: int) -> int | None:
+    """Returns concrete int for known auto-dim patterns, else None."""
+    # Concatpresent.<L>.{key,value}_dim_{1,2,3}: present_kv at this layer.
+    # Shape (B, num_kv_heads, ctx, head_dim).
+    m = re.match(r"Concatpresent\.\d+\.(key|value)_dim_(\d+)$", name)
+    if m:
+        idx = int(m.group(2))
+        return {1: num_kv_heads, 2: ctx, 3: head_dim}.get(idx)
+    # MatMullogits_dim_2: logits matmul output third dim = vocab_size.
+    if name == "MatMullogits_dim_2":
+        return vocab_size
+    return None
 
 
 def main() -> int:
@@ -36,6 +57,13 @@ def main() -> int:
                              "past_sequence_length is pinned to ctx-1.")
     parser.add_argument("--seq-q", type=int, default=1,
                         help="Decode-step query length (AR=1 for single-token).")
+    # Auto-dim resolution context — only consulted when the bare dim_map
+    # below misses the dim_param (i.e. for torch.onnx auto-generated names).
+    parser.add_argument("--num-kv-heads", type=int, default=8,
+                        help="Number of KV heads (8 for Qwen3-{0.6B,4B,14B}, "
+                             "consult config.json for new model families).")
+    parser.add_argument("--head-dim", type=int, default=128)
+    parser.add_argument("--vocab-size", type=int, default=151936)
     args = parser.parse_args()
 
     src_onnx = args.src_dir / "model.onnx"
@@ -80,6 +108,7 @@ def main() -> int:
 
     # Pin every symbolic dim across input / output / value_info collections.
     substituted = 0
+    auto_resolved = 0
     unresolved: set[str] = set()
     for collection in (m.graph.input, m.graph.output, m.graph.value_info):
         for vi in collection:
@@ -90,8 +119,20 @@ def main() -> int:
                         d.dim_value = int(dim_map[name])
                         substituted += 1
                     else:
-                        unresolved.add(name)
-    print(f"  pinned {substituted} symbolic dims; unresolved: {sorted(unresolved)}")
+                        # Try the auto-dim resolver (handles Concatpresent.N.*
+                        # / MatMullogits names that torch.onnx emits when
+                        # shape inference is disabled).
+                        v = _resolve_auto_dim(
+                            name, ctx=args.ctx, num_kv_heads=args.num_kv_heads,
+                            head_dim=args.head_dim, vocab_size=args.vocab_size,
+                        )
+                        if v is not None:
+                            d.dim_value = int(v)
+                            auto_resolved += 1
+                        else:
+                            unresolved.add(name)
+    print(f"  pinned {substituted} symbolic dims; auto-resolved {auto_resolved}; "
+          f"unresolved: {sorted(unresolved)}")
     if unresolved:
         print(f"FATAL: {len(unresolved)} unknown dim_params; refusing to write")
         return 2
