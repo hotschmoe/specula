@@ -1558,14 +1558,62 @@ If aimet_onnx + pathb hits a quality ceiling we can't break, path
 (2) is the documented escape hatch — we have m1e's encodings on
 disk, the pathb-rewritten ONNX on disk, and just need the mapping.
 
-### Diagnostic side runs queued
+### Diagnostic side runs
 
-- w8a16 basic PTQ with `post_training_tf_enhanced` activations
-  (no SEQ_MSE forcing min_max), 128 cal samples — tells us if
-  tf_enhanced's better activation observation alone (without
-  optimizers) closes part of the gap.
-- w16a16 — would tell us "if quantization-precision were
-  unlimited, what's the cos ceiling on this pipeline?" but
-  likely useless to ship: HTP HMX is built for {int4,int8} ×
-  {int16,fp16} weights, so int16 weights fall back to scalar units
-  (~10× slower), and bundle doubles in size. Diagnostic only.
+#### w8a16 basic PTQ tf_enhanced, 128 cal samples (2026-05-02 ~03:30)
+
+Ran while the in-progress AdaScale rerun was paused (post-OOM), to
+isolate "what does the activation observer alone give us, with no
+optimizer overhead?"
+
+| metric | value |
+|---|---|
+| recipe | w8a16, post_training_tf_enhanced, no SEQ_MSE, no AdaScale |
+| num_cal | 128 |
+| cos(fp,q) | **0.6558** |
+| fp argmax | 12095 (' Paris') |
+| q argmax | 220 (' ') |
+| argmax match | False |
+| total wall | 426 s (CPU-bound compute_encodings dominates) |
+
+The 0.656 number replicates the 16-cal smoke. **Basic PTQ
+tf_enhanced caps at ~0.656 on this stack** regardless of cal
+sample count — going from 16 to 128 doesn't move the number.
+
+Comparison table:
+
+| recipe | cal | cos | notes |
+|---|---:|---:|---|
+| smoke basic PTQ tf_enhanced | 16 | 0.656 | original M1 plumbing run |
+| **side probe basic PTQ tf_enhanced** | **128** | **0.656** | **same number** — cal saturation |
+| SEQ_MSE-only (forced min_max) | 128 | 0.613 | SEQ_MSE *hurts* (loses tf_enhanced) |
+| SEQ_MSE + AdaScale (broken bw=4) | 128 | 0.510 | bw mismatch bug, hurts further |
+| m1e (aimet_torch SEQ_MSE+AdaScale) | 32 | **0.996** | reference; on standard transformers graph (not pathb), not NPU-deployable |
+
+**Read.** The cap at 0.656 on aimet_onnx + pathb is independent of
+both cal-set size and optimizer choice (so far). Each "improvement"
+we've tried on top of basic PTQ has actually moved cos backward.
+That suggests:
+1. The aimet_onnx 2.26 default `DefaultOpInstanceConfigGenerator`
+   with `hw_version: None` may be using suboptimal per-channel/
+   per-tensor defaults vs aimet_torch v2's defaults.
+2. The HTP-aware `htp_quantsim_config_v75.json` config (already
+   shipped in the venv) is *not* being passed via `config_file=`
+   to QuantizationSimModel; using it might tighten quality.
+3. The pathb rewrite may have introduced precision-sensitive
+   operations that AIMET's observers don't capture well.
+
+The pending bw-fixed AdaScale rerun is the test of (whether option-3
+is the binding constraint). If AdaScale-with-correct-bw still lands
+≤ 0.7, then the ceiling is structural to this stack and the
+m1e-encodings-name-translator path becomes the only credible
+escape.
+
+#### w16a16
+
+Untested. Would tell us "if precision is unlimited, what's the
+cos ceiling on this pipeline?" but won't ship for performance
+reasons (HTP HMX accelerates {int4,int8} × {int16,fp16}; int16
+weights fall back to scalar tensor units, ~10× slower) and
+doubles bundle size. Pure diagnostic; deferred unless we exhaust
+other options.
