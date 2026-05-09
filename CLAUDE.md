@@ -29,7 +29,16 @@ In order:
    Qualcomm Genie bundle and the HF GGUF.
 2. **`docs/one_pipeline_cloud_gpu.md`** — one reusable cloud-GPU
    conversion pipeline (HF → NPU bundle) driven by AIMET SEQ_MSE +
-   AdaScale. Operational runbook lives in `docs/rent_cloud_compute.md`.
+   AdaScale. Strategic design + rationale.
+   - **`end-to-end/COLD_START.md`** — bootstrap a fresh RunPod pod
+     onto an empty `/workspace` (new DC, nuked volume). Full ~1-2 hr
+     setup + 0.6B/4B validation runs + comparison to Qualcomm's bundle.
+   - **`end-to-end/WARM_START.md`** — re-attach to an already-populated
+     `/workspace` (~30 sec to running). Use when network volume survived.
+   - **`end-to-end/SETUP_DEV_USER.md`** — recreate the `dev` user on
+     a fresh VM (referenced by both starts).
+   - `docs/rent_cloud_compute.md` — generic provider/scenario reference
+     (kept as backstop; superseded by the COLD_START path for our flow).
 3. **Roadmap workstreams** (CPU / GPU / heterogeneous async): W1, W2,
    W4 per `docs/roadmap.md`. Don't pivot onto these until the two
    above produce data.

@@ -1,7 +1,13 @@
-# Resume — fresh VM / new shell quickstart
+# Warm start — pod re-attached to populated `/workspace`
 
-If you just mounted a clean VM with `/workspace` attached, this is
-the fastest path back to where the M-series work left off.
+If you just mounted a clean VM with `/workspace` attached **and the
+volume already has `venvs/`, `sdks/`, `models/` populated** from a
+prior session, this is the fastest path back to where the M-series
+work left off.
+
+**If `/workspace` is empty** (network volume was nuked, new
+datacenter, first bootstrap), use `end-to-end/COLD_START.md`
+instead — that's the full ~1-2 hour bootstrap path.
 
 ## What's persistent on `/workspace`
 
@@ -33,7 +39,8 @@ pre-wired for the venv + QAIRT).
 
 If `dev` doesn't exist on a fresh VM, recreate from the recipe in
 `end-to-end/SETUP_DEV_USER.md` (~10 lines of `useradd` + bashrc
-append + gh auth mirror).
+append + gh auth mirror). If `/workspace` itself is empty too,
+you're not on a warm start — see `end-to-end/COLD_START.md`.
 
 To switch:
 

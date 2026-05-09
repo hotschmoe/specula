@@ -2,7 +2,7 @@
 
 If `/workspace` mounts onto a clean RunPod with only `root` available,
 this is the recipe to recreate the `dev` user that the e2e pipeline
-expects (per RESUME.md). Run as root.
+expects (per WARM_START.md / COLD_START.md). Run as root.
 
 ```bash
 # 1. Create the user with home, bash, sudo group.
