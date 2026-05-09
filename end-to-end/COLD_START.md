@@ -14,6 +14,47 @@ Strategic context (why this pipeline shape exists at all) lives in
 
 ---
 
+## If you are an LLM agent following this solo
+
+You are most likely Claude Code (or similar) running either ON the
+pod or via SSH from the operator's local box. Before you start,
+**verify the human operator has provided** these three secrets as
+environment variables:
+
+```bash
+echo "HF_TOKEN     length: ${#HF_TOKEN}"        # expect non-zero
+echo "AIHUB_TOKEN  length: ${#AIHUB_TOKEN}"     # expect non-zero
+echo "GH_TOKEN     length: ${#GH_TOKEN}"        # optional, only for git push
+```
+
+If any are empty, **stop and ask the operator** before continuing —
+the bootstrap depends on them at steps 5 and 7. Do not attempt
+interactive `huggingface-cli login` or `gh auth login` flows; they
+will hang the session.
+
+Where state goes:
+
+- **Repo state** (this doc, `current_status.md`, `docs/`) lives in
+  `/workspace/specula/` once cloned. Edits should be committed and
+  pushed; this is the durable record.
+- **Run state** (logs, intermediate ONNX, AIMET workdirs) lives in
+  `/workspace/runs/<run-name>/`. Not committed; tarred at teardown.
+- **Project state of record** is `current_status.md` at repo root.
+  Read it before starting (it's huge, read in chunks if needed) so
+  you understand what session you are continuing. Append a session
+  block at the end when you finish, before tearing down the pod.
+
+Polling cadence: AIMET runs are 2-8 hours. Don't poll the log every
+30 seconds — once every 5-10 minutes is plenty. Use the `grep -c
+"Optimizing block"` pattern in the watch commands below to track
+progress without flooding context.
+
+If you hit a failure not covered by this doc, check
+`end-to-end/README.md` §Troubleshooting and
+`docs/one_pipeline_cloud_gpu.md` §Pitfalls (P1-P12) before improvising.
+
+---
+
 ## Goal
 
 End the session with three artifacts on `/workspace` plus a
@@ -35,9 +76,16 @@ the next pod teardown:
 | What | Where | Why |
 |---|---|---|
 | RunPod account + ≥$30 credit | runpod.io | Pay-per-minute billing |
-| Hugging Face account + read token | huggingface.co/settings/tokens | Qwen3 weight download (no gate, but rate-limited anonymous) |
-| AI Hub token | workbench.aihub.qualcomm.com → Account → Settings | `qai-hub-models` package imports require it configured even though we don't call AI Hub itself |
-| `gh auth login` on a personal box | local | Used to mirror auth into the pod's `dev` user (per `SETUP_DEV_USER.md` step 4) |
+| Hugging Face read token (`HF_TOKEN`) | huggingface.co/settings/tokens | Qwen3 weight download (rate-limited anonymous) |
+| AI Hub token (`AIHUB_TOKEN`) | workbench.aihub.qualcomm.com → Account → Settings | `qai-hub-models` package imports require it configured even though we don't call AI Hub itself |
+| GitHub token (`GH_TOKEN`, optional) | github.com/settings/tokens | For `git push` of `current_status.md` updates from the pod |
+
+**Pod env-var injection:** at RunPod deploy time, set the three
+tokens above as **pod environment variables** (RunPod's deploy UI
+has a "Environment Variables" section). They will be available to
+both root and `dev` shells, and are the contract this doc assumes
+in step 5 (AI Hub) and step 7 (HF). Do not paste tokens into
+shell history; do not commit them to the repo.
 
 ---
 
@@ -96,10 +144,19 @@ and `/workspace/sdks/qairt-2.45.40.260406`. **Don't change those
 paths** unless you also update `SETUP_DEV_USER.md` step 6 in the
 same edit — too many other scripts hard-code them.
 
-After it runs, drop into the dev shell:
+After it runs, drop into the dev shell — **preserve the pod env
+vars** so `$HF_TOKEN`, `$AIHUB_TOKEN`, `$GH_TOKEN` carry over from
+the root context:
 
 ```bash
-su - dev      # interactive, env loaded
+sudo -u dev --preserve-env=HF_TOKEN,AIHUB_TOKEN,GH_TOKEN -i
+```
+
+Plain `su - dev` would strip those (login shell resets env). Verify
+inside the dev shell:
+
+```bash
+echo "HF=${#HF_TOKEN} AIHUB=${#AIHUB_TOKEN} GH=${#GH_TOKEN}"   # all non-zero
 ```
 
 Everything below runs as `dev`.
@@ -153,8 +210,12 @@ python -c "import aimet_onnx, onnxruntime; print(aimet_onnx.__version__, onnxrun
 
 ### 5. Configure the AI Hub token
 
+Uses `$AIHUB_TOKEN` from the preamble:
+
 ```bash
-qai-hub configure --api_token $AIHUB_TOKEN
+test -n "$AIHUB_TOKEN" || { echo "AIHUB_TOKEN unset; ask operator"; exit 1; }
+qai-hub configure --api_token "$AIHUB_TOKEN"
+qai-hub configure --api_token_query        # confirms it took
 ```
 
 Required for `qai-hub-models` package imports. AIMET itself pulls
@@ -189,9 +250,13 @@ qairt-converter --version       # expect 2.45.40.260406
 
 ### 7. Pre-fetch the HF model weights
 
-```bash
-huggingface-cli login            # paste read-scope token
+Non-interactive login using the env var from the preamble:
 
+```bash
+huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
+```
+
+```bash
 # 0.6B (~1.5 GB)
 huggingface-cli download Qwen/Qwen3-0.6B \
     --local-dir /workspace/models/Qwen3-0.6B \
@@ -207,23 +272,44 @@ huggingface-cli download Qwen/Qwen3-4B \
 persistent volume; symlinks would point into the ephemeral HF
 cache and break on next pod boot.
 
+Verify both landed:
+
+```bash
+ls -la /workspace/models/Qwen3-0.6B/model.safetensors    # ~1.5 GB
+ls -la /workspace/models/Qwen3-4B/model-*-of-*.safetensors  # ~8 GB total
+```
+
 ### 8. Pre-fetch Qualcomm's blessed Qwen3-4B bundle (for comparison)
+
+The X2 Elite-keyed bundle is one of several published in
+`huggingface.co/qualcomm/Qwen3-4B`; `release_assets.json` lists S3
+URLs per chipset. Resolve and download in one step:
 
 ```bash
 mkdir -p /workspace/reference && cd /workspace/reference
 
-# The X2 Elite-keyed bundle is one of several published in
-# qualcomm/Qwen3-4B; release_assets.json lists S3 URLs per chipset.
-# Look up the X2 Elite asset URL and download it; ~3.1 GB.
-curl -fsSL https://huggingface.co/qualcomm/Qwen3-4B/raw/main/release_assets.json \
-    | python -c "import json,sys; d=json.load(sys.stdin); [print(a['url']) for a in d['chipset_assets'] if 'x2-elite' in a.get('chipset','').lower()]"
+# Resolve the X2 Elite asset URL.
+URL=$(curl -fsSL https://huggingface.co/qualcomm/Qwen3-4B/raw/main/release_assets.json \
+      | python -c "import json,sys; d=json.load(sys.stdin); \
+          print(next(a['url'] for a in d['chipset_assets'] if 'x2-elite' in a.get('chipset','').lower()))")
+echo "Resolved bundle URL: $URL"
+test -n "$URL" || { echo "could not resolve X2 Elite bundle URL"; exit 1; }
 
-# Download the resulting URL and unpack:
-# curl -fsSL <URL> -o qwen3_4b_qualcomm.zip && unzip -q qwen3_4b_qualcomm.zip -d qwen3_4b_qualcomm/
+# Download (~3.1 GB) and unpack.
+curl -fsSL "$URL" -o qwen3_4b_qualcomm.zip
+unzip -q qwen3_4b_qualcomm.zip -d qwen3_4b_qualcomm/
+rm qwen3_4b_qualcomm.zip
+
+# Verify
+ls /workspace/reference/qwen3_4b_qualcomm/*.bin | wc -l    # expect 4 parts
+ls /workspace/reference/qwen3_4b_qualcomm/genie_config.json
 ```
 
 Lands at `/workspace/reference/qwen3_4b_qualcomm/` and stays
-there for `compare_to_qualcomm.py` (step 12).
+there for `compare_to_qualcomm.py` (step 12). If the resolver
+fails (Qualcomm reorganised `release_assets.json`), browse to
+`https://huggingface.co/qualcomm/Qwen3-4B/tree/main` in a browser
+and grab the X2 Elite zip URL manually.
 
 ---
 
@@ -257,8 +343,21 @@ free -h | head -2                                                  # RAM headroo
 ```
 
 **Gate:** the AIMET probe in stage 6 should report **cos ≥ 0.99**
-vs FP32 reference. If it does, the pipeline + venv + SDK are
-known-good and you can proceed to the 4B run with confidence.
+vs FP32 reference. Find it with:
+
+```bash
+grep -E "cos.*FP32|cosine" /workspace/runs/qwen3_0p6b_w8a16.log | tail -5
+```
+
+- **cos ≥ 0.99 →** pipeline + venv + SDK are known-good. Proceed
+  to step 10.
+- **0.95 ≤ cos < 0.99 →** marginal. Inspect the per-layer
+  breakdown in the log; usually a calibration-set issue. Document
+  in `current_status.md` and proceed cautiously.
+- **cos < 0.95 →** pipeline regression. Stop. Compare the venv +
+  SDK versions against `WARM_START.md` "What's persistent on
+  /workspace" expectations; check `end-to-end/README.md`
+  Troubleshooting. Do not proceed to 4B.
 
 Output bundle:
 `/workspace/runs/qwen3_0p6b_w8a16/09_bundle_w8a16/<bundle>.tar`.
@@ -281,12 +380,24 @@ disown
 the SQ2/m1d-derived mitigation for the V-projection collapse
 diagnosed in `docs/w4a16_investigation.md` session 17.
 
-**Gate:** AIMET cos ≥ 0.95 closes Lever C positive. If the cos
-lands in the 0.3-0.5 range like our basic-PTQ baseline, then
-SEQ_MSE + AdaScale + V/O-pin together are insufficient on
-0.6B-class models and the V/O collapse is a fundamental property
-— captured with full evidence, then graduate to Qwen3-4B+ as the
-real production target.
+**Gate:** this run is itself the experiment, not a pass/fail
+check. Both outcomes are publishable.
+
+- **cos ≥ 0.95 →** Lever C closed positive. SEQ_MSE + AdaScale +
+  V/O-pin together recover 0.6B w4a16 to ship-quality. Document
+  in `current_status.md`, append finding to
+  `docs/w4a16_investigation_continued.md`, proceed to step 11.
+- **cos in 0.3-0.6 range →** Lever C closed negative. V/O
+  collapse is a fundamental 0.6B-class property even with the
+  best calibration we have. This is itself a valuable result;
+  document with full per-layer evidence, append to
+  `docs/w4a16_investigation_continued.md`, then proceed to step 11
+  anyway — 4B is the real production target and may not exhibit
+  the same collapse.
+- **anything else (NaN, hang, OOM) →** investigate before
+  proceeding to 4B. Check `end-to-end/README.md`
+  Troubleshooting; the AdaScale ReduceMean v18 issue is a known
+  failure mode there.
 
 ### 11. Qwen3-4B w4a16 (production target, ~6-8 hr)
 
@@ -335,9 +446,60 @@ agreement, `htp_backend_ext_config.json` agreement, tokenizer
 sha256, per-part `bin_info.json` IO shapes/dtypes, per-part
 AIMET-encoding entry counts and KV bitwidth coverage.
 
-**Gate:** every section reports ✓ except possibly the bin sizes
-(small drift acceptable, large drift = different quant scheme
-applied).
+**Gate interpretation:**
+
+- **All sections ✓ →** structural reproduction achieved. Numerical
+  parity (cos vs. Qualcomm's first-decode logits) still requires
+  X2E hardware to verify; that step lives in
+  `npu_engine/qualcomm_qwen3_4b_oracle.py` on the laptop. Bundle
+  is shippable for X2E testing.
+- **Bin-size drift > ~10% →** different quant scheme was applied
+  (e.g. our V/O-pin produced larger bins than Qualcomm's
+  uniform-w4). Note in `current_status.md`; not a failure but a
+  known difference.
+- **Tokenizer sha mismatch →** stop. Means we exported from a
+  different HF revision than Qualcomm. Re-pin and re-run.
+- **`bin_info.json` IO shapes/dtypes mismatch →** stop. Means our
+  pathb rewrites diverged from Qualcomm's reference graph. Debug
+  via `scripts/rewrite_qwen3_pathb.py` against the differing
+  shape; this is the highest-signal failure mode.
+- **AIMET-encoding entry-count mismatch →** AIMET inserted/removed
+  QDQ nodes vs. Qualcomm's reference. Probably tolerable; note
+  the diff and continue.
+
+---
+
+## Before teardown — write the session entry
+
+Per `CLAUDE.md`, `current_status.md` is the project's session-level
+source of truth and is appended each session. **Do not tear down
+the pod until this is committed and pushed**, otherwise the next
+session has no record of what this run produced.
+
+Append a session block to `/workspace/specula/current_status.md`
+covering:
+
+- Date + which steps of this doc ran (e.g. "9, 10, 11, 12 all
+  green").
+- The three cos numbers (0.6B w8a16, 0.6B w4a16, 4B w4a16 vs FP32).
+- The comparison-report verdict for 4B vs. Qualcomm.
+- Any deviation from the doc (flag changes, gate failures,
+  workarounds).
+- Where the bundle tarballs were uploaded (NAS path, S3 URL, etc.)
+  so the X2E side can fetch them.
+
+Then commit + push:
+
+```bash
+cd /workspace/specula
+git add current_status.md
+git commit -m "current_status: cold-start session $(date +%Y-%m-%d) — <summary>"
+git push origin master      # uses gh credential helper from SETUP_DEV_USER step 5
+```
+
+If `GH_TOKEN` is unset and the push fails with auth errors, ask
+the operator before improvising — do not commit credentials to
+the repo.
 
 ---
 
