@@ -1,5 +1,64 @@
 # specula -- current status
 
+Last updated: 2026-05-13 (session 26 — **overnight perf sprint
+on `856c3adac` (no rebuilds). Three new records on this hardware.**
+Headline #1: **Qwen3-4B Q4_0 on `build-opencl` with `-ngl 0 -t 16` →
+PP 379 / TG 50.80 t/s** (r=5, σ_TG=0.4%). New all-time TG, beats
+NPU ORT-QNN (29.03 t/s) by +75%. Adreno backend registered but no
+layers offloaded — appears to act as a coprocessor while weights
+live on CPU. Headline #2: **same model with `-ngl 99 -t 16 -ub 512` →
+PP 586 t/s** — new non-NPU prefill record. Headline #3:
+**Qwen3.6-35B-A3B MXFP4_MOE on OpenCL `-ngl 0 -t 18` → PP ~190 /
+TG ~31** — equivalent to pure CPU on prefill, ~12% faster on TG,
+DOUBLE the GPU-offload TG; new "blended" default for 35B inference.
+Partial `-ngl` (8..56) collapses TG into a 16-19 t/s valley
+(sequential per-layer CPU↔GPU sync); `-ncmoe` hurts monotonically.
+Concurrency-4 (4 agentic streams × 512+128 toks) on OpenCL `-ngl 0`:
+4B Q4_0 hits aggregate S_TG **126.94 t/s**, 35B MXFP4 hits **65.63
+t/s** — agentic-scale TG is real on this laptop.
+
+**Other findings tonight:**
+
+- **CPU thread sweet spot:** `-t 16` (not default `-t 18`) wins for
+  Qwen3-4B Q4_K_M on `build-cpu-kleidiai` (PP 257.68 / TG 40.37); for
+  35B-A3B `-t 18` still wins. Rule of thumb: 4B = phys_cores−2,
+  35B = phys_cores.
+- **Q4_0 beats Q4_K_M for Qwen3-4B on this hardware on every
+  backend.** CPU-kleidiai: Q4_0 TG 42.55 vs Q4_K_M 31.66 (+34%);
+  OpenCL `-ngl 0`: 50.50 vs 44.60 (+13%); OpenCL `-ngl 99`: 26.84 vs
+  unstable. Migrate production target to Q4_0 (pending perplexity
+  sanity-check).
+- **Heterogeneous spec decode loses to pure-CPU spec decode.** Adreno
+  draft for Qwen3-14B CPU target = 11.97 t/s (-19% vs 14.84 baseline);
+  CPU draft + CPU target = 16.97 t/s (+14% vs baseline). Adreno's
+  small-model dispatch cost on 0.6B Q8_0 outweighs spec savings.
+  Smaller draft (0.6B) beats larger (1.7B) on CPU consistently.
+- **Vulkan TG path partly recovered:** `GGML_VK_PREFER_HOST_MEMORY=1
+  + GGML_VK_DISABLE_MMVQ=1 + GGML_VK_DISABLE_FUSION=1` gets Vulkan
+  TG to 41.09 on 4B Q4_0 (vs 38 last session). PP path still
+  broken (~7 t/s). OpenCL `-ngl 0` (TG 50.8) cleanly beats this so
+  Vulkan stays a research curiosity.
+- **xmem F16xF32 GEMM (`GGML_OPENCL_ADRENO_XMEM_GEMM=1`) doesn't help
+  MXFP4 quantized MoE** — F16xF32 path doesn't apply to quantized
+  weights. PR #22755 still valuable for dense F16 (none on disk to
+  test).
+- **MTP punted.** PR ggml-org/llama.cpp#22673 still `OPEN`. Many
+  MTP-preserved Qwen3.6 GGUFs now on HF (havenoammo / unsloth /
+  am17an / localweights) but useless without runtime support. Watch
+  the PR; re-bench `havenoammo/Qwen3.6-35B-A3B-MTP-GGUF` when it
+  merges.
+
+Full results: `docs/2026-05-13_overnight_perf_results.md` (per-track
+tables + reproducer commands). CSVs:
+`results/csv/track_{b1,b2,b,c1,c2,c3,c4,c5,c6,c_thread_sweep}_*_2026-05-13.{md,log}`.
+
+Next: perplexity comparison Q4_0 vs Q4_K_M on 4B (validate the
+production-target migration); ngram-cache spec decode via
+`llama-server` (no extra model needed); watch PR #22673; resume
+last_side_quest sequence (SQ1 / SQ2 / SQ6).
+
+---
+
 Last updated: 2026-05-12 (session 25 — **scheduled backend
 refresh + MTP/DFlash/PFlash landscape audit**. llama.cpp bumped
 `f53577432` → `856c3adac` (186 commits). NPU got ~10% faster

@@ -1094,3 +1094,48 @@ Layout follows `docs/repo_hygiene.md`:
     Companion writeup with Qwen3.6-35B-A3B probe + MTP / DFlash /
     PFlash / vLLM landscape in
     `docs/2026-05-12_sweep_and_mtp_landscape.md`.
+
+- 2026-05-13 (session 26 — overnight perf sprint, llama.cpp frozen
+  at `856c3adac`, no rebuilds). Three new records for Qwen3-4B, all
+  via knob-tuning the existing builds.
+  - **OpenCL `-ngl 0 -t 16` is now the TG king for Qwen3-4B Q4_0:
+    PP 379.23 ± 11.46 / TG 50.80 ± 0.36 (r=5).** Beats prior NPU
+    ORT-QNN record (29.03 t/s) by +75%, and beats Vulkan-host-mem
+    (38.01) by +34%. With the OpenCL backend registered but
+    `-ngl 0` (no model layers offloaded), the Adreno backend acts
+    as a coprocessor for some ops while weights live in CPU memory
+    — net 8-10% TG win over a pure-CPU build at the same thread
+    count.
+  - **OpenCL `-ngl 99 -t 16 -ub 512` is the new PP champion among
+    non-NPU paths: PP 586.28 ± 1.00 / TG 26.72** (vs 588 prior
+    session — within noise). The big finding is `-t 16` over
+    default `-t 18`; ubatch ≥ 512 is the PP floor.
+  - **CPU-kleidiai `-t 16` (not default `-t 18`) is the Q4_K_M
+    sweet spot**: PP 257.68 / TG 40.37 vs PP 252.67 / TG 38.19 at
+    `-t 18`. Thread-sweep table in
+    `docs/2026-05-13_overnight_perf_results.md` §C1.
+  - **Q4_0 dominates Q4_K_M across every backend on this hardware**
+    for Qwen3-4B: CPU-kleidiai Q4_0 TG 42.55 vs Q4_K_M 31.66 (+34%);
+    OpenCL `-ngl 0` Q4_0 TG 50.50 vs Q4_K_M 44.60 (+13%). Migration
+    candidate pending perplexity sanity-check on wikitext.
+  - **Vulkan TG path partial recovery:** `GGML_VK_PREFER_HOST_MEMORY=1
+    + GGML_VK_DISABLE_MMVQ=1 + GGML_VK_DISABLE_FUSION=1` gives 4B
+    Q4_0 TG 41.09 (up from session 25's 38.01). PP path still
+    broken at ~7-8 t/s — no envvar combo fixes the F16 path on this
+    driver. OpenCL `-ngl 0` (TG 50.8) wins outright.
+  - **Vulkan `GGML_VK_DISABLE_COOPMAT=1` is asymmetric**: helps
+    Q4_K_M slightly (36.50), but cuts Q4_0 TG to 20.87 — driver
+    quirk worth filing.
+  - **`GGML_OPENCL_ADRENO_XMEM_GEMM=1` (PR #22755) flag confirmed
+    active** but provides no improvement on quantized weights —
+    expected since it's an F16xF32 GEMM path. No dense F16 4B on
+    disk to validate the intended use case.
+  - Concurrency-4 (4 streams × 512+128 toks) on OpenCL `-ngl 0`:
+    4B Q4_0 aggregate `S_TG 126.94 t/s` (4 × ~32 t/s per stream),
+    35B-A3B MXFP4 aggregate `S_TG 65.63 t/s` (4 × ~16). Per-stream
+    TG scales linearly on CPU under concurrency; the `-ngl 99` path
+    degrades sharply (20.31 t/s aggregate on 4B Q4_0). For agentic
+    workloads, `-ngl 0` wins decisively.
+  - Per-track CSVs: `results/csv/track_{b1,b2,c1,c2,c3,c4,c5,c6,c_thread_sweep}_*_2026-05-13.{md,log}`.
+    Full writeup with reproducer one-liners:
+    `docs/2026-05-13_overnight_perf_results.md`.

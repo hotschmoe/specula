@@ -1,0 +1,217 @@
+﻿
+
+=== model=14b_q4_km probe=bestcombo3 ===
+ggml_vulkan: Found 1 Vulkan devices:
+At line:4 char:7
++       & $bin -m $m -p 128 -n 128 -r 1 --progress -o md 2>&1
++       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ggml_vulkan: Found 1 Vulkan devices::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ggml_vulkan: 0 = Qualcomm(R) Adreno(TM) X2-90 GPU (Qualcomm Technologies Inc. Adreno Vulkan Driver) | uma: 1 | fp16: 1 | bf16: 0 | warp size: 64 | 
+shared memory: 32768 | int dot: 1 | matrix cores: KHR_coopmat
+llama-bench: benchmark 1/2: starting
+llama-bench: benchmark 1/2: warmup prompt run
+llama-bench: benchmark 1/2: prompt run 1/1
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | Vulkan     |  99 |           pp128 |          1.83 ┬▒ 0.00 |
+llama-bench: benchmark 2/2: starting
+llama-bench: benchmark 2/2: warmup generation run
+llama-bench: benchmark 2/2: generation run 1/1
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | Vulkan     |  99 |           tg128 |         12.34 ┬▒ 0.00 |
+
+build: 856c3adac (9128)
+
+
+=== model=14b_q4_km probe=bestcombo4_addbf16 ===
+ggml_vulkan: Found 1 Vulkan devices:
+At line:4 char:7
++       & $bin -m $m -p 128 -n 128 -r 1 --progress -o md 2>&1
++       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ggml_vulkan: Found 1 Vulkan devices::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ggml_vulkan: 0 = Qualcomm(R) Adreno(TM) X2-90 GPU (Qualcomm Technologies Inc. Adreno Vulkan Driver) | uma: 1 | fp16: 1 | bf16: 0 | warp size: 64 | 
+shared memory: 32768 | int dot: 1 | matrix cores: KHR_coopmat
+llama-bench: benchmark 1/2: starting
+llama-bench: benchmark 1/2: warmup prompt run
+llama-bench: benchmark 1/2: prompt run 1/1
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | Vulkan     |  99 |           pp128 |          1.82 ┬▒ 0.00 |
+llama-bench: benchmark 2/2: starting
+llama-bench: benchmark 2/2: warmup generation run
+llama-bench: benchmark 2/2: generation run 1/1
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | Vulkan     |  99 |           tg128 |         12.39 ┬▒ 0.00 |
+
+build: 856c3adac (9128)
+
+
+=== model=14b_q4_km probe=bestcombo5_addcoopmat ===
+ggml_vulkan: Found 1 Vulkan devices:
+At line:4 char:7
++       & $bin -m $m -p 128 -n 128 -r 1 --progress -o md 2>&1
++       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ggml_vulkan: Found 1 Vulkan devices::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ggml_vulkan: 0 = Qualcomm(R) Adreno(TM) X2-90 GPU (Qualcomm Technologies Inc. Adreno Vulkan Driver) | uma: 1 | fp16: 1 | bf16: 0 | warp size: 64 | 
+shared memory: 32768 | int dot: 1 | matrix cores: none
+llama-bench: benchmark 1/2: starting
+llama-bench: benchmark 1/2: warmup prompt run
+llama-bench: benchmark 1/2: prompt run 1/1
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | Vulkan     |  99 |           pp128 |          1.83 ┬▒ 0.00 |
+llama-bench: benchmark 2/2: starting
+llama-bench: benchmark 2/2: warmup generation run
+llama-bench: benchmark 2/2: generation run 1/1
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | Vulkan     |  99 |           tg128 |         12.40 ┬▒ 0.00 |
+
+build: 856c3adac (9128)
+
+
+=== model=4b_q4_km probe=bestcombo3 ===
+ggml_vulkan: Found 1 Vulkan devices:
+At line:4 char:7
++       & $bin -m $m -p 128 -n 128 -r 1 --progress -o md 2>&1
++       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ggml_vulkan: Found 1 Vulkan devices::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ggml_vulkan: 0 = Qualcomm(R) Adreno(TM) X2-90 GPU (Qualcomm Technologies Inc. Adreno Vulkan Driver) | uma: 1 | fp16: 1 | bf16: 0 | warp size: 64 | 
+shared memory: 32768 | int dot: 1 | matrix cores: KHR_coopmat
+llama-bench: benchmark 1/2: starting
+llama-bench: benchmark 1/2: warmup prompt run
+llama-bench: benchmark 1/2: prompt run 1/1
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | Vulkan     |  99 |           pp128 |          7.56 ┬▒ 0.00 |
+llama-bench: benchmark 2/2: starting
+llama-bench: benchmark 2/2: warmup generation run
+llama-bench: benchmark 2/2: generation run 1/1
+| qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | Vulkan     |  99 |           tg128 |         36.24 ┬▒ 0.00 |
+
+build: 856c3adac (9128)
+
+
+=== model=4b_q4_km probe=bestcombo4_addbf16 ===
+ggml_vulkan: Found 1 Vulkan devices:
+At line:4 char:7
++       & $bin -m $m -p 128 -n 128 -r 1 --progress -o md 2>&1
++       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ggml_vulkan: Found 1 Vulkan devices::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ggml_vulkan: 0 = Qualcomm(R) Adreno(TM) X2-90 GPU (Qualcomm Technologies Inc. Adreno Vulkan Driver) | uma: 1 | fp16: 1 | bf16: 0 | warp size: 64 | 
+shared memory: 32768 | int dot: 1 | matrix cores: KHR_coopmat
+llama-bench: benchmark 1/2: starting
+llama-bench: benchmark 1/2: warmup prompt run
+llama-bench: benchmark 1/2: prompt run 1/1
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | Vulkan     |  99 |           pp128 |          7.54 ┬▒ 0.00 |
+llama-bench: benchmark 2/2: starting
+llama-bench: benchmark 2/2: warmup generation run
+llama-bench: benchmark 2/2: generation run 1/1
+| qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | Vulkan     |  99 |           tg128 |         36.32 ┬▒ 0.00 |
+
+build: 856c3adac (9128)
+
+
+=== model=4b_q4_km probe=bestcombo5_addcoopmat ===
+ggml_vulkan: Found 1 Vulkan devices:
+At line:4 char:7
++       & $bin -m $m -p 128 -n 128 -r 1 --progress -o md 2>&1
++       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ggml_vulkan: Found 1 Vulkan devices::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ggml_vulkan: 0 = Qualcomm(R) Adreno(TM) X2-90 GPU (Qualcomm Technologies Inc. Adreno Vulkan Driver) | uma: 1 | fp16: 1 | bf16: 0 | warp size: 64 | 
+shared memory: 32768 | int dot: 1 | matrix cores: none
+llama-bench: benchmark 1/2: starting
+llama-bench: benchmark 1/2: warmup prompt run
+llama-bench: benchmark 1/2: prompt run 1/1
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | Vulkan     |  99 |           pp128 |          7.38 ┬▒ 0.00 |
+llama-bench: benchmark 2/2: starting
+llama-bench: benchmark 2/2: warmup generation run
+llama-bench: benchmark 2/2: generation run 1/1
+| qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | Vulkan     |  99 |           tg128 |         36.50 ┬▒ 0.00 |
+
+build: 856c3adac (9128)
+
+
+=== model=4b_q4_0 probe=bestcombo3 ===
+ggml_vulkan: Found 1 Vulkan devices:
+At line:4 char:7
++       & $bin -m $m -p 128 -n 128 -r 1 --progress -o md 2>&1
++       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ggml_vulkan: Found 1 Vulkan devices::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ggml_vulkan: 0 = Qualcomm(R) Adreno(TM) X2-90 GPU (Qualcomm Technologies Inc. Adreno Vulkan Driver) | uma: 1 | fp16: 1 | bf16: 0 | warp size: 64 | 
+shared memory: 32768 | int dot: 1 | matrix cores: KHR_coopmat
+llama-bench: benchmark 1/2: starting
+llama-bench: benchmark 1/2: warmup prompt run
+llama-bench: benchmark 1/2: prompt run 1/1
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| qwen3 4B Q4_0                  |   2.21 GiB |     4.02 B | Vulkan     |  99 |           pp128 |          7.09 ┬▒ 0.00 |
+llama-bench: benchmark 2/2: starting
+llama-bench: benchmark 2/2: warmup generation run
+llama-bench: benchmark 2/2: generation run 1/1
+| qwen3 4B Q4_0                  |   2.21 GiB |     4.02 B | Vulkan     |  99 |           tg128 |         36.56 ┬▒ 0.00 |
+
+build: 856c3adac (9128)
+
+
+=== model=4b_q4_0 probe=bestcombo4_addbf16 ===
+ggml_vulkan: Found 1 Vulkan devices:
+At line:4 char:7
++       & $bin -m $m -p 128 -n 128 -r 1 --progress -o md 2>&1
++       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ggml_vulkan: Found 1 Vulkan devices::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ggml_vulkan: 0 = Qualcomm(R) Adreno(TM) X2-90 GPU (Qualcomm Technologies Inc. Adreno Vulkan Driver) | uma: 1 | fp16: 1 | bf16: 0 | warp size: 64 | 
+shared memory: 32768 | int dot: 1 | matrix cores: KHR_coopmat
+llama-bench: benchmark 1/2: starting
+llama-bench: benchmark 1/2: warmup prompt run
+llama-bench: benchmark 1/2: prompt run 1/1
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| qwen3 4B Q4_0                  |   2.21 GiB |     4.02 B | Vulkan     |  99 |           pp128 |          7.55 ┬▒ 0.00 |
+llama-bench: benchmark 2/2: starting
+llama-bench: benchmark 2/2: warmup generation run
+llama-bench: benchmark 2/2: generation run 1/1
+| qwen3 4B Q4_0                  |   2.21 GiB |     4.02 B | Vulkan     |  99 |           tg128 |         35.49 ┬▒ 0.00 |
+
+build: 856c3adac (9128)
+
+
+=== model=4b_q4_0 probe=bestcombo5_addcoopmat ===
+ggml_vulkan: Found 1 Vulkan devices:
+At line:4 char:7
++       & $bin -m $m -p 128 -n 128 -r 1 --progress -o md 2>&1
++       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ggml_vulkan: Found 1 Vulkan devices::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ggml_vulkan: 0 = Qualcomm(R) Adreno(TM) X2-90 GPU (Qualcomm Technologies Inc. Adreno Vulkan Driver) | uma: 1 | fp16: 1 | bf16: 0 | warp size: 64 | 
+shared memory: 32768 | int dot: 1 | matrix cores: none
+llama-bench: benchmark 1/2: starting
+llama-bench: benchmark 1/2: warmup prompt run
+llama-bench: benchmark 1/2: prompt run 1/1
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| qwen3 4B Q4_0                  |   2.21 GiB |     4.02 B | Vulkan     |  99 |           pp128 |          6.91 ┬▒ 0.00 |
+llama-bench: benchmark 2/2: starting
+llama-bench: benchmark 2/2: warmup generation run
+llama-bench: benchmark 2/2: generation run 1/1
+| qwen3 4B Q4_0                  |   2.21 GiB |     4.02 B | Vulkan     |  99 |           tg128 |         20.87 ┬▒ 0.00 |
+
+build: 856c3adac (9128)
+
