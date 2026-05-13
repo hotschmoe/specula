@@ -318,6 +318,12 @@ def main() -> int:
     p.add_argument("--no-ar128", action="store_true",
                    help="skip the AR128 prefill chain unconditionally. "
                         "Hard escape hatch / AR1-only baseline.")
+    p.add_argument("--prompt", type=str, default=None,
+                   help="path to prompt file. Default is pp512_prompt.txt "
+                        "(~512 tokens). Use pp4k_prompt.txt to push above the "
+                        "cl=512 tier — the tokenizer truncates encoded tokens "
+                        "to --pp-tokens, so a longer file is required to "
+                        "exercise larger ctx tiers.")
     p.add_argument("--ar128-min-tokens", type=int, default=512,
                    help="prompt-token threshold for taking the AR128 swap "
                         "path (vLLM-style request-size routing). Below the "
@@ -357,7 +363,6 @@ def main() -> int:
     print(f"ctx tier       : {ctx_tier}  (cap {cap} KV slots)")
     print(f"pp tokens      : {args.pp_tokens}")
     print(f"tg tokens      : {args.tg_tokens}")
-    print(f"prompt         : {PROMPT_PATH}")
     print(f"log (trash)    : {log_path}")
 
     metadata = yaml.safe_load((BUNDLE_DIR / "metadata.yaml").read_text())
@@ -365,7 +370,9 @@ def main() -> int:
     parts_cfg_ar128 = build_part_cfg(metadata, ar=AR128_BATCH, ctx=ctx_tier)
 
     tokenizer = Tokenizer.from_file(str(BUNDLE_DIR / "tokenizer.json"))
-    prompt_text = PROMPT_PATH.read_text(encoding="utf-8")
+    prompt_path = Path(args.prompt) if args.prompt else PROMPT_PATH
+    print(f"prompt         : {prompt_path}")
+    prompt_text = prompt_path.read_text(encoding="utf-8")
     prompt_ids = tokenizer.encode(prompt_text).ids[: args.pp_tokens]
     print(f"prompt tokenized to {len(prompt_ids)} (target {args.pp_tokens})")
 

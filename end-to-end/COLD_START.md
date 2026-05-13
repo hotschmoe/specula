@@ -467,6 +467,99 @@ AIMET-encoding entry counts and KV bitwidth coverage.
   QDQ nodes vs. Qualcomm's reference. Probably tolerable; note
   the diff and continue.
 
+### 13. Push past Qualcomm — cl=8192 / 16384 / 32768
+
+**Run this only after step 12 passes** (i.e., we've verified our
+pipeline can structurally reproduce Qualcomm's blessed 4-part
+bundle at cl ∈ {512, 1024, 2048, 3072, 4096}). Qualcomm shipped
+their bundle capped at cl=4096; **we are not capped at what they
+shipped**. On 2026-05-13 we measured the existing cl=4096 graph at
+pp=3584 / tg=256 and confirmed TG holds flat at ~20 t/s across all
+buffer fill levels (`results/csv/qwen3_4b_ortqnn_cl4096_pp3584_tg256_2026-05-13.csv`),
+so the only thing stopping us from real long-context NPU inference
+is the absence of compiled larger-cl graphs.
+
+The Qwen3-4B model itself supports it: `config.json` has
+`max_position_embeddings: 40960` and `rope_theta: 1e6`. No YaRN /
+rope-scaling required for cl ≤ 32k — `theta=1e6` covers it natively.
+
+Build three additional bundles after the cl=4096 reproduction
+lands:
+
+```bash
+# cl=8192 — safe, fits comfortably in HTP context budget
+nohup setsid python end-to-end/quantize_to_npu.py \
+    --model-id Qwen/Qwen3-4B \
+    --model-path /workspace/models/Qwen3-4B \
+    --workdir /workspace/runs/qwen3_4b_w4a16_cl8k \
+    --precision w4a16 \
+    --ctx 8192 \
+    > /workspace/runs/qwen3_4b_w4a16_cl8k.log 2>&1 < /dev/null &
+disown
+
+# cl=16384 — KV ~9 GB, near HTP ceiling; verify it loads on X2E
+# before assuming it's usable
+nohup setsid python end-to-end/quantize_to_npu.py \
+    --model-id Qwen/Qwen3-4B \
+    --model-path /workspace/models/Qwen3-4B \
+    --workdir /workspace/runs/qwen3_4b_w4a16_cl16k \
+    --precision w4a16 \
+    --ctx 16384 \
+    > /workspace/runs/qwen3_4b_w4a16_cl16k.log 2>&1 < /dev/null &
+disown
+
+# cl=32768 — research push. KV ~18 GB; likely needs weight-sharing
+# or won't load whole. Run anyway and report what the HTP says.
+nohup setsid python end-to-end/quantize_to_npu.py \
+    --model-id Qwen/Qwen3-4B \
+    --model-path /workspace/models/Qwen3-4B \
+    --workdir /workspace/runs/qwen3_4b_w4a16_cl32k \
+    --precision w4a16 \
+    --ctx 32768 \
+    > /workspace/runs/qwen3_4b_w4a16_cl32k.log 2>&1 < /dev/null &
+disown
+```
+
+Expected per-bundle build time: ~6-8 hr each (same shape as step
+11). Each bundle is independent and can run on a fresh pod;
+serialize them on one pod or fan out across pods depending on cost
+budget.
+
+**Expected HTP-side outcomes** (verify on X2E in `npu_engine/`,
+not on cloud):
+
+| tier   | KV memory | TG projection | Risk |
+|--------|-----------|---------------|------|
+| 8192   | ~4.6 GB   | ~15 t/s       | low — fits HTP budget |
+| 16384  | ~9.2 GB   | ~10-12 t/s    | medium — at/over single-session HTP ceiling; may need session/weight-sharing |
+| 32768  | ~18 GB    | unknown       | high — likely exceeds X2E HTP context budget; may not load |
+
+Bench commands on the X2E (after copying the bundle to
+`models/specula-qwen3-4b-cl{N}k/`):
+
+```powershell
+.venv/Scripts/python.exe npu_engine/bench_qwen3_4b_ortqnn.py `
+    --power-state ac --ctx-tier 8192 `
+    --prompt results/qwen3_4b_baseline/pp8k_prompt.txt `
+    --pp-tokens 6144 --tg-tokens 512 `
+    --tag cl8192_pp6144_<date>
+```
+
+Note: `bench_qwen3_4b_ortqnn.py` currently hardcodes `CTX_TIERS =
+(512, 1024, 2048, 3072, 4096)` (the Qualcomm tier set). Extend
+that tuple to include the new tiers before running, and confirm
+the bundle's `metadata.yaml` exposes matching `ar1_cl{N}_*_of_4`
+and `ar128_cl{N}_*_of_4` keys.
+
+**Why this matters.** Every backend in our matrix can do >4k via
+RoPE / sliding window / YaRN — except the NPU, which is capped by
+the compiled cl tier. Closing that gap is what unlocks the NPU for
+real long-context workloads (multi-doc RAG, agentic transcripts,
+codebase Q&A). Plus we get to find out where the X2E HTP context
+budget actually lives — Qualcomm only told us where their *bundle*
+stops, not where their *silicon* stops. We are the researchers;
+that's the data we don't have yet.
+
 ---
 
 ## Before teardown — write the session entry
