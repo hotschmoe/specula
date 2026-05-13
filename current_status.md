@@ -1,5 +1,57 @@
 # specula -- current status
 
+Last updated: 2026-05-13 (session 27 — **Qwen3.6-27B MTP first
+numbers. Built PR #22673 (`gg/spec-mtp-experiments` rebased) at
+`e7b484815` into `build-opencl-mtp/` so the mainline binaries stay
+intact at `856c3adac`.** Downloaded `unsloth/Qwen3.6-27B-MTP-GGUF`
+Q4_0 (16 GB) and Q8_0 (29 GB; resumed once after silent truncation).
+**Mainline cannot load these GGUFs** — `block_count=65` includes the
+MTP head, which has attention-only tensors that mainline expects to
+be full SSM+attention. Only the PR build can load them.
+
+**MTP TG wins:** Q4_0 27B `-ngl 0 -t 18 --spec-type draft-mtp
+--spec-draft-n-max 8` → TG **12.17 t/s** vs 8.39 baseline (**+45%**),
+acceptance 95.8%. Q8_0 at same config → TG **7.98 t/s** vs 5.13
+(**+55%**), acceptance 95.8%. Accept rate plateaus at 98-100% from
+n_max=2 through n_max=6, only drifting to 94% at n_max=16. **The
+unsloth MTP head is well-trained.** Peak Q4_0 win at n_max=12
+(TG 12.25, +46%); peak Q8_0 win at n_max=8 (TG 7.98, +56%).
+
+PP takes a ~22% hit when MTP is on (Q4_0 PP 63→49, Q8_0 PP 44→36) —
+prefill has to initialize the MTP head's KV state. Crossover prompt
+length where MTP-on still wins overall (for 256-token answer):
+~1.8k tokens for Q4_0. MTP is the right call for any prompt shorter
+than that, which covers chat / structured-output / shortlist RAG.
+
+**Hardware correction from session 26.** User caught a mistake: I
+quoted Adreno's 24 GB cap as a hardware limit. The 24 GB is the
+*default* OpenCL view; `GGML_OPENCL_ADRENO_USE_LARGE_BUFFER=1`
+unlocks the `cl_qcom_large_buffer` extension which is present on
+our driver, allowing access to the full 44 GB BIOS allocation.
+Rerun on 4B Q4_0 / 35B MXFP4 at `-ngl 99` shows the flag is ~5%
+overhead for models that already fit; **it matters only when the
+model exceeds 24 GB**. The session-26 numbers stand within normal
+variance (rerun 4B Q4_0: PP 564 / TG 24.7 without, PP 524 / TG 26
+with — vs session-26 single-run 586 / 26.7).
+
+**Qwen3.6-27B does not GPU-offload on OpenCL** independent of
+LARGE_BUFFER. `-ngl 99` fails with `clCreateImage error -40` at
+ggml-opencl.cpp:11358 — the SSM (`ssm_a`, `ssm_conv1d`) tensors
+have shapes the Adreno image-memory path doesn't accept. `-ngl 0`
+(coprocessor) is the only OpenCL path for 27B.
+
+Companion writeup: `docs/2026-05-13_qwen3_6_27b_mtp.md`.
+CSVs: `results/csv/qwen3_6_27b_{Q4_0,Q8_0}_mtp_sweep_2026-05-13.md`,
+`results/csv/track_c2b_large_buffer_reruns_2026-05-13.md`.
+
+Next: monitor PR #22673 for merge (cleanest path is to fold MTP into
+mainline once it lands); MTP perplexity sanity-check (verify accept
+rate translates to bit-equal outputs at temp=0); concurrency-4 with
+MTP enabled (`np > 1` interaction unmeasured); compare 27B-MTP TG
+vs 14B CPU+CPU spec decode for the quality/speed Pareto.
+
+---
+
 Last updated: 2026-05-13 (session 26 — **overnight perf sprint
 on `856c3adac` (no rebuilds). Three new records on this hardware.**
 Headline #1: **Qwen3-4B Q4_0 on `build-opencl` with `-ngl 0 -t 16` →

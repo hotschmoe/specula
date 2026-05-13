@@ -1,0 +1,911 @@
+﻿git : From https://github.com/ggml-org/llama.cpp
+At C:\Users\hotschmoe\Documents\GitHub\specula\scripts\build_llama_cpp.ps1:158 char:9
++         git fetch origin
++         ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (From https://gi...l-org/llama.cpp:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   634275fbb..2dfeca31c  master         -> origin/master
+ * [new branch]          0cc4m/vulkan-fix-matmul-pipeline-int-selection -> origin/0cc4m/vulkan-fix-matmul-pipeline-int-selection
+ + 1171723f9...2fc9362b4 cross-profiler -> origin/cross-profiler  (forced update)
+ * [new branch]          xsn/download_no_exit_error -> origin/xsn/download_no_exit_error
+ * [new tag]             b9133          -> b9133
+git : Switched to branch 'pr-22673-mtp'
+At C:\Users\hotschmoe\Documents\GitHub\specula\scripts\build_llama_cpp.ps1:159 char:9
++         git checkout $Commit
++         ~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Switched to branch 'pr-22673-mtp':String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+M	ggml/src/ggml-cpu/kleidiai/kleidiai.cpp
+-- The C compiler identification is Clang 22.1.3 with GNU-like command-line
+-- The CXX compiler identification is Clang 22.1.3 with GNU-like command-line
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: C:/Program Files/LLVM/bin/clang.exe - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Program Files/LLVM/bin/clang++.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+cmake.exe : CMAKE_BUILD_TYPE=Release
+At C:\Users\hotschmoe\Documents\GitHub\specula\scripts\build_llama_cpp.ps1:276 char:5
++     & cmake @commonFlags @presetFlags
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (CMAKE_BUILD_TYPE=Release:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+-- Found Git: C:/Program Files/Git/cmd/git.exe (found version "2.53.0.windows.2")
+-- The ASM compiler identification is Clang with GNU-like command-line
+-- Found assembler: C:/Program Files/LLVM/bin/clang.exe
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Failed
+-- Check if compiler accepts -pthread
+-- Check if compiler accepts -pthread - no
+-- Looking for pthread_create in pthreads
+-- Looking for pthread_create in pthreads - not found
+-- Looking for pthread_create in pthread
+-- Looking for pthread_create in pthread - not found
+-- Found Threads: TRUE
+-- Warning: ccache not found - consider installing it for faster compilation or disable this warning with GGML_CCACHE=OFF
+-- CMAKE_SYSTEM_PROCESSOR: ARM64
+-- GGML_SYSTEM_ARCH: ARM
+-- Including CPU backend
+-- Found OpenMP_C: -fopenmp=libomp (found version "5.1")
+-- Found OpenMP_CXX: -fopenmp=libomp (found version "5.1")
+-- Found OpenMP: TRUE (found version "5.1")
+-- ARM detected
+-- Performing Test GGML_COMPILER_SUPPORTS_FP16_FORMAT_I3E
+-- Performing Test GGML_COMPILER_SUPPORTS_FP16_FORMAT_I3E - Failed
+CMake Warning at ggml/src/ggml-cpu/CMakeLists.txt:146 (message):
+  ARM -march/-mcpu not found, -mcpu=native will be used
+Call Stack (most recent call first):
+  ggml/src/CMakeLists.txt:446 (ggml_add_cpu_backend_variant_impl)
+
+
+-- Performing Test GGML_MACHINE_SUPPORTS_dotprod
+-- Performing Test GGML_MACHINE_SUPPORTS_dotprod - Success
+-- Performing Test GGML_MACHINE_SUPPORTS_i8mm
+-- Performing Test GGML_MACHINE_SUPPORTS_i8mm - Success
+-- Performing Test GGML_MACHINE_SUPPORTS_sve
+-- Performing Test GGML_MACHINE_SUPPORTS_sve - Success
+-- Performing Test GGML_MACHINE_SUPPORTS_sme
+-- Performing Test GGML_MACHINE_SUPPORTS_sme - Success
+-- Checking for ARM features using flags:
+--   -mcpu=native+dotprod+i8mm+sve+sme
+-- Performing Test HAVE_DOTPROD
+-- Performing Test HAVE_DOTPROD - Success
+-- Performing Test HAVE_SVE
+-- Performing Test HAVE_SVE - Success
+-- Performing Test HAVE_MATMUL_INT8
+-- Performing Test HAVE_MATMUL_INT8 - Success
+-- Performing Test HAVE_FMA
+-- Performing Test HAVE_FMA - Success
+-- Performing Test HAVE_FP16_VECTOR_ARITHMETIC
+-- Performing Test HAVE_FP16_VECTOR_ARITHMETIC - Success
+-- Performing Test HAVE_SME
+-- Performing Test HAVE_SME - Success
+-- Adding CPU backend variant ggml-cpu: -mcpu=native+dotprod+i8mm+sve+sme 
+-- Looking for include file OpenCL/cl.h
+-- Looking for include file OpenCL/cl.h - not found
+-- Looking for CL_VERSION_3_0
+-- Looking for CL_VERSION_3_0 - found
+-- Found OpenCL: C:/Users/hotschmoe/Documents/GitHub/OpenCL-ICD-Loader/install/lib/OpenCL.lib (found version "3.0")
+-- Found Python3: C:/Users/hotschmoe/AppData/Local/Programs/Python/Python312-arm64/python.exe (found version "3.12.10") found components: Interpreter
+-- OpenCL will use matmul kernels optimized for Adreno
+-- opencl: embedding kernel add
+-- opencl: embedding kernel add_id
+-- opencl: embedding kernel argsort
+-- opencl: embedding kernel tri
+-- opencl: embedding kernel fill
+-- opencl: embedding kernel clamp
+-- opencl: embedding kernel cpy
+-- opencl: embedding kernel cvt
+-- opencl: embedding kernel diag_mask_inf
+-- opencl: embedding kernel diag
+-- opencl: embedding kernel div
+-- opencl: embedding kernel gelu
+-- opencl: embedding kernel get_rows
+-- opencl: embedding kernel glu
+-- opencl: embedding kernel group_norm
+-- opencl: embedding kernel solve_tri
+-- opencl: embedding kernel im2col_f32
+-- opencl: embedding kernel im2col_f16
+-- opencl: embedding kernel mean
+-- opencl: embedding kernel mul_mv_f16_f16
+-- opencl: embedding kernel mul_mv_f16_f32_1row
+-- opencl: embedding kernel mul_mv_f16_f32_l4
+-- opencl: embedding kernel mul_mv_f16_f32
+-- opencl: embedding kernel mul_mv_f32_f32
+-- opencl: embedding kernel mul_mv_q4_0_f32
+-- opencl: embedding kernel mul_mv_q4_0_f32_v
+-- opencl: embedding kernel mul_mv_q4_0_f32_8x_flat
+-- opencl: embedding kernel mul_mv_q4_0_f32_1d_8x_flat
+-- opencl: embedding kernel mul_mv_q4_0_f32_1d_16x_flat
+-- opencl: embedding kernel mul_mv_q4_1_f32
+-- opencl: embedding kernel mul_mv_q4_1_f32_flat
+-- opencl: embedding kernel mul_mv_q4_k_f32
+-- opencl: embedding kernel mul_mv_q4_k_f32_flat
+-- opencl: embedding kernel mul_mv_q5_k_f32
+-- opencl: embedding kernel mul_mv_q5_k_f32_flat
+-- opencl: embedding kernel mul_mv_q6_k_f32
+-- opencl: embedding kernel mul_mv_q6_k_f32_flat
+-- opencl: embedding kernel mul_mv_q8_0_f32
+-- opencl: embedding kernel mul_mv_q8_0_f32_flat
+-- opencl: embedding kernel mul_mv_iq4_nl_f32
+-- opencl: embedding kernel mul_mv_iq4_nl_f32_flat
+-- opencl: embedding kernel mul_mv_mxfp4_f32
+-- opencl: embedding kernel mul_mv_mxfp4_f32_flat
+-- opencl: embedding kernel mul_mv_id_q4_0_f32_8x_flat
+-- opencl: embedding kernel mul_mv_id_q8_0_f32
+-- opencl: embedding kernel mul_mv_id_q8_0_f32_flat
+-- opencl: embedding kernel mul_mv_id_mxfp4_f32
+-- opencl: embedding kernel mul_mv_id_mxfp4_f32_flat
+-- opencl: embedding kernel gemm_moe_q4_0_f32_ns
+-- opencl: embedding kernel gemv_moe_q4_0_f32_ns
+-- opencl: embedding kernel gemm_moe_q4_1_f32_ns
+-- opencl: embedding kernel gemv_moe_q4_1_f32_ns
+-- opencl: embedding kernel gemm_moe_mxfp4_f32
+-- opencl: embedding kernel gemv_moe_mxfp4_f32
+-- opencl: embedding kernel gemm_moe_mxfp4_f32_ns
+-- opencl: embedding kernel gemv_moe_mxfp4_f32_ns
+-- opencl: embedding kernel moe_reorder_b
+-- opencl: embedding kernel moe_sort_by_expert
+-- opencl: embedding kernel mul_mm_f32_f32_l4_lm
+-- opencl: embedding kernel mul_mm_f16_f32_l4_lm
+-- opencl: embedding kernel mul_mm_q4_0_f32_l4_lm
+-- opencl: embedding kernel mul_mm_q4_1_f32_l4_lm
+-- opencl: embedding kernel mul_mm_q8_0_f32_l4_lm
+-- opencl: embedding kernel mul_mm_iq4_nl_f32_l4_lm
+-- opencl: embedding kernel mul_mm_q4_k_f32_l4_lm
+-- opencl: embedding kernel mul_mm_q5_k_f32_l4_lm
+-- opencl: embedding kernel mul_mm_q6_k_f32_l4_lm
+-- opencl: embedding kernel gemv_noshuffle_q4_0_f32
+-- opencl: embedding kernel gemv_noshuffle_q4_0_f32_spec
+-- opencl: embedding kernel gemm_noshuffle_q4_0_f32
+-- opencl: embedding kernel gemv_noshuffle_q4_1_f32
+-- opencl: embedding kernel gemm_noshuffle_q4_1_f32
+-- opencl: embedding kernel gemv_noshuffle_iq4_nl_f32
+-- opencl: embedding kernel gemm_noshuffle_iq4_nl_f32
+-- opencl: embedding kernel gemv_noshuffle_q8_0_f32
+-- opencl: embedding kernel gemm_noshuffle_q8_0_f32
+-- opencl: embedding kernel gemv_noshuffle_q4_k_f32
+-- opencl: embedding kernel gemm_noshuffle_q4_k_f32
+-- opencl: embedding kernel gemv_noshuffle_q6_k_f32
+-- opencl: embedding kernel gemm_noshuffle_q6_k_f32
+-- opencl: embedding kernel gemv_noshuffle_q5_k_f32
+-- opencl: embedding kernel gemm_noshuffle_q5_k_f32
+-- opencl: embedding kernel mul
+-- opencl: embedding kernel neg
+-- opencl: embedding kernel norm
+-- opencl: embedding kernel relu
+-- opencl: embedding kernel l2_norm
+-- opencl: embedding kernel rms_norm
+-- opencl: embedding kernel rope
+-- opencl: embedding kernel scale
+-- opencl: embedding kernel set_rows
+-- opencl: embedding kernel sigmoid
+-- opencl: embedding kernel silu
+-- opencl: embedding kernel softmax_4_f32
+-- opencl: embedding kernel softmax_4_f16
+-- opencl: embedding kernel softmax_f32
+-- opencl: embedding kernel softmax_f16
+-- opencl: embedding kernel sqr
+-- opencl: embedding kernel sqrt
+-- opencl: embedding kernel ssm_conv
+-- opencl: embedding kernel sub
+-- opencl: embedding kernel sum_rows
+-- opencl: embedding kernel cumsum
+-- opencl: embedding kernel transpose
+-- opencl: embedding kernel concat
+-- opencl: embedding kernel tsembd
+-- opencl: embedding kernel upscale
+-- opencl: embedding kernel tanh
+-- opencl: embedding kernel exp
+-- opencl: embedding kernel expm1
+-- opencl: embedding kernel softplus
+-- opencl: embedding kernel pad
+-- opencl: embedding kernel repeat
+-- opencl: embedding kernel mul_mat_f16_f32
+-- opencl: embedding kernel mul_mm_f16_f32_kq_kqv
+-- opencl: embedding kernel conv2d
+-- opencl: embedding kernel conv2d_f16_f32
+-- opencl: embedding kernel flash_attn_f32_f16
+-- opencl: embedding kernel flash_attn_f16
+-- opencl: embedding kernel flash_attn_f32
+-- opencl: embedding kernel gemm_xmem_f16_f32_os8
+-- Including OpenCL backend
+-- ggml version: 0.11.1
+-- ggml commit:  e7b484815-dirty
+-- Could NOT find OpenSSL, try to set the path to OpenSSL root folder in the system variable OPENSSL_ROOT_DIR (missing: OPENSSL_CRYPTO_LIBRARY OPENSSL_INCLUDE_DIR) 
+CMake Warning at vendor/cpp-httplib/CMakeLists.txt:152 (message):
+  OpenSSL not found, HTTPS support disabled
+
+
+-- Generating embedded license file for target: llama-common
+-- Configuring done (7.9s)
+-- Generating done (0.2s)
+-- Build files have been written to: C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp
+[1/409] Building C object ggml/src/CMakeFiles/ggml-base.dir/ggml-alloc.c.obj
+[2/409] Building CXX object ggml/src/CMakeFiles/ggml-base.dir/ggml.cpp.obj
+[3/409] Building CXX object ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/hbm.cpp.obj
+[4/409] Building CXX object ggml/src/CMakeFiles/ggml-base.dir/ggml-threading.cpp.obj
+[5/409] Building CXX object ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/traits.cpp.obj
+[6/409] Building CXX object ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.cpp.obj
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/ggml-cpu/ggml-cpu.cpp:26:13: warning: 'WIN32_LEAN_AND_MEAN' macro redefined [-Wmacro-redefined]
+   26 | #    define WIN32_LEAN_AND_MEAN
+      |             ^
+<command line>:12:9: note: previous definition is here
+   12 | #define WIN32_LEAN_AND_MEAN 1
+      |         ^
+1 warning generated.
+[7/409] Building CXX object ggml/src/CMakeFiles/ggml-base.dir/ggml-opt.cpp.obj
+[8/409] Building CXX object ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/amx.cpp.obj
+[9/409] Building C object ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.c.obj
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/ggml-cpu/ggml-cpu.c:95:9: warning: 'WIN32_LEAN_AND_MEAN' macro redefined [-Wmacro-redefined]
+   95 | #define WIN32_LEAN_AND_MEAN
+      |         ^
+<command line>:12:9: note: previous definition is here
+   12 | #define WIN32_LEAN_AND_MEAN 1
+      |         ^
+1 warning generated.
+[10/409] Building CXX object ggml/src/CMakeFiles/ggml-base.dir/ggml-backend.cpp.obj
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/ggml-backend.cpp:4:9: warning: 'WIN32_LEAN_AND_MEAN' macro redefined [-Wmacro-redefined]
+    4 | #define WIN32_LEAN_AND_MEAN
+      |         ^
+<command line>:10:9: note: previous definition is here
+   10 | #define WIN32_LEAN_AND_MEAN 1
+      |         ^
+1 warning generated.
+[11/409] Building CXX object ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/mmq.cpp.obj
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/ggml-cpu/amx/mmq.cpp:11:
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/ggml-cpu\quants.h:4:
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:194:9: warning: anonymous structs are a GNU extension [-Wgnu-anonymous-struct]
+  194 |         struct {
+      |         ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:194:9: warning: anonymous types declared in an anonymous union are an extension [-Wnested-anon-types]
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:230:9: warning: anonymous structs are a GNU extension [-Wgnu-anonymous-struct]
+  230 |         struct {
+      |         ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:230:9: warning: anonymous types declared in an anonymous union are an extension [-Wnested-anon-types]
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:251:9: warning: anonymous structs are a GNU extension [-Wgnu-anonymous-struct]
+  251 |         struct {
+      |         ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:251:9: warning: anonymous types declared in an anonymous union are an extension [-Wnested-anon-types]
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:292:9: warning: anonymous structs are a GNU extension [-Wgnu-anonymous-struct]
+  292 |         struct {
+      |         ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:292:9: warning: anonymous types declared in an anonymous union are an extension [-Wnested-anon-types]
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:319:9: warning: anonymous structs are a GNU extension [-Wgnu-anonymous-struct]
+  319 |         struct {
+      |         ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:319:9: warning: anonymous types declared in an anonymous union are an extension [-Wnested-anon-types]
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:336:9: warning: anonymous structs are a GNU extension [-Wgnu-anonymous-struct]
+  336 |         struct {
+      |         ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:336:9: warning: anonymous types declared in an anonymous union are an extension [-Wnested-anon-types]
+12 warnings generated.
+[12/409] Building CXX object ggml/src/CMakeFiles/ggml-base.dir/ggml-backend-meta.cpp.obj
+[13/409] Building CXX object ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/vec.cpp.obj
+[14/409] Building C object ggml/src/CMakeFiles/ggml-base.dir/ggml.c.obj
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/ggml.c:47:9: warning: 'WIN32_LEAN_AND_MEAN' macro redefined [-Wmacro-redefined]
+   47 | #define WIN32_LEAN_AND_MEAN
+      |         ^
+<command line>:10:9: note: previous definition is here
+   10 | #define WIN32_LEAN_AND_MEAN 1
+      |         ^
+1 warning generated.
+[15/409] Building C object ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/quants.c.obj
+[16/409] Building CXX object ggml/src/CMakeFiles/ggml-base.dir/gguf.cpp.obj
+[17/409] Building CXX object common/CMakeFiles/llama-common-base.dir/build-info.cpp.obj
+[18/409] Building CXX object ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/binary-ops.cpp.obj
+[19/409] Linking CXX static library common\llama-common-base.lib
+[20/409] Building C object ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/arm/quants.c.obj
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/ggml-cpu/arch/arm/quants.c:3:
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-quants.h:4:
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:79:9: warning: keyword is hidden by macro definition [-Wkeyword-macro]
+   79 | #define static_assert(cond, msg) _Static_assert(cond, msg)
+      |         ^
+1 warning generated.
+[21/409] Building CXX object ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/llamafile/sgemm.cpp.obj
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/ggml-cpu/llamafile/sgemm.cpp:54:
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-quants.h:4:
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:194:9: warning: anonymous structs are a GNU extension [-Wgnu-anonymous-struct]
+  194 |         struct {
+      |         ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:194:9: warning: anonymous types declared in an anonymous union are an extension [-Wnested-anon-types]
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:230:9: warning: anonymous structs are a GNU extension [-Wgnu-anonymous-struct]
+  230 |         struct {
+      |         ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:230:9: warning: anonymous types declared in an anonymous union are an extension [-Wnested-anon-types]
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:251:9: warning: anonymous structs are a GNU extension [-Wgnu-anonymous-struct]
+  251 |         struct {
+      |         ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:251:9: warning: anonymous types declared in an anonymous union are an extension [-Wnested-anon-types]
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:292:9: warning: anonymous structs are a GNU extension [-Wgnu-anonymous-struct]
+  292 |         struct {
+      |         ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:292:9: warning: anonymous types declared in an anonymous union are an extension [-Wnested-anon-types]
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:319:9: warning: anonymous structs are a GNU extension [-Wgnu-anonymous-struct]
+  319 |         struct {
+      |         ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:319:9: warning: anonymous types declared in an anonymous union are an extension [-Wnested-anon-types]
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:336:9: warning: anonymous structs are a GNU extension [-Wgnu-anonymous-struct]
+  336 |         struct {
+      |         ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/.\ggml-common.h:336:9: warning: anonymous types declared in an anonymous union are an extension [-Wnested-anon-types]
+12 warnings generated.
+[22/409] Building CXX object ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/unary-ops.cpp.obj
+[23/409] Building CXX object ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/arm/repack.cpp.obj
+[24/409] Building C object ggml/src/CMakeFiles/ggml-base.dir/ggml-quants.c.obj
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/ggml-quants.c:4:
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src\ggml-quants.h:4:
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src\ggml-common.h:79:9: warning: keyword is hidden by macro definition [-Wkeyword-macro]
+   79 | #define static_assert(cond, msg) _Static_assert(cond, msg)
+      |         ^
+1 warning generated.
+[25/409] Building CXX object ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/repack.cpp.obj
+[26/409] Linking CXX shared library bin\ggml-base.dll
+[27/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/add.cl.h
+[28/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/diag_mask_inf.cl.h
+[29/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/tri.cl.h
+[30/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/diag.cl.h
+[31/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/cpy.cl.h
+[32/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/fill.cl.h
+[33/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/argsort.cl.h
+[34/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/cvt.cl.h
+[35/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/add_id.cl.h
+[36/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/clamp.cl.h
+[37/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gelu.cl.h
+[38/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/div.cl.h
+[39/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/get_rows.cl.h
+[40/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/glu.cl.h
+[41/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/group_norm.cl.h
+[42/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/im2col_f16.cl.h
+[43/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mean.cl.h
+[44/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/im2col_f32.cl.h
+[45/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/solve_tri.cl.h
+[46/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_f16_f16.cl.h
+[47/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_f16_f32_l4.cl.h
+[48/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_f16_f32_1row.cl.h
+[49/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_f16_f32.cl.h
+[50/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_f32_f32.cl.h
+[51/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_q4_0_f32.cl.h
+[52/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_q4_0_f32_v.cl.h
+[53/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_q4_0_f32_8x_flat.cl.h
+[54/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_q4_0_f32_1d_8x_flat.cl.h
+[55/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_q4_1_f32.cl.h
+[56/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_q4_0_f32_1d_16x_flat.cl.h
+[57/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_q4_1_f32_flat.cl.h
+[58/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_q4_k_f32.cl.h
+[59/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_q4_k_f32_flat.cl.h
+[60/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_q5_k_f32.cl.h
+[61/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_q5_k_f32_flat.cl.h
+[62/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_q6_k_f32.cl.h
+[63/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_q6_k_f32_flat.cl.h
+[64/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_q8_0_f32.cl.h
+[65/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_q8_0_f32_flat.cl.h
+[66/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_iq4_nl_f32.cl.h
+[67/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_iq4_nl_f32_flat.cl.h
+[68/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_mxfp4_f32.cl.h
+[69/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_mxfp4_f32_flat.cl.h
+[70/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_id_q4_0_f32_8x_flat.cl.h
+[71/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_id_q8_0_f32_flat.cl.h
+[72/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_id_q8_0_f32.cl.h
+[73/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_id_mxfp4_f32.cl.h
+[74/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mv_id_mxfp4_f32_flat.cl.h
+[75/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemm_moe_q4_0_f32_ns.cl.h
+[76/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemv_moe_q4_0_f32_ns.cl.h
+[77/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemm_moe_q4_1_f32_ns.cl.h
+[78/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemm_moe_mxfp4_f32.cl.h
+[79/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemv_moe_q4_1_f32_ns.cl.h
+[80/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemv_moe_mxfp4_f32.cl.h
+[81/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemm_moe_mxfp4_f32_ns.cl.h
+[82/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemv_moe_mxfp4_f32_ns.cl.h
+[83/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/moe_reorder_b.cl.h
+[84/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/moe_sort_by_expert.cl.h
+[85/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mm_f32_f32_l4_lm.cl.h
+[86/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mm_f16_f32_l4_lm.cl.h
+[87/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mm_q4_1_f32_l4_lm.cl.h
+[88/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mm_q4_0_f32_l4_lm.cl.h
+[89/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mm_q8_0_f32_l4_lm.cl.h
+[90/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mm_iq4_nl_f32_l4_lm.cl.h
+[91/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mm_q4_k_f32_l4_lm.cl.h
+[92/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mm_q5_k_f32_l4_lm.cl.h
+[93/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mm_q6_k_f32_l4_lm.cl.h
+[94/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemv_noshuffle_q4_0_f32.cl.h
+[95/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemv_noshuffle_q4_0_f32_spec.cl.h
+[96/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemm_noshuffle_q4_0_f32.cl.h
+[97/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemv_noshuffle_q4_1_f32.cl.h
+[98/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemm_noshuffle_q4_1_f32.cl.h
+[99/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemv_noshuffle_iq4_nl_f32.cl.h
+[100/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemm_noshuffle_iq4_nl_f32.cl.h
+[101/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemm_noshuffle_q8_0_f32.cl.h
+[102/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemv_noshuffle_q8_0_f32.cl.h
+[103/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemv_noshuffle_q4_k_f32.cl.h
+[104/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemv_noshuffle_q6_k_f32.cl.h
+[105/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemm_noshuffle_q4_k_f32.cl.h
+[106/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemm_noshuffle_q6_k_f32.cl.h
+[107/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemv_noshuffle_q5_k_f32.cl.h
+[108/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul.cl.h
+[109/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemm_noshuffle_q5_k_f32.cl.h
+[110/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/neg.cl.h
+[111/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/norm.cl.h
+[112/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/relu.cl.h
+[113/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/l2_norm.cl.h
+[114/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/rms_norm.cl.h
+[115/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/rope.cl.h
+[116/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/scale.cl.h
+[117/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/set_rows.cl.h
+[118/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/sigmoid.cl.h
+[119/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/silu.cl.h
+[120/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/softmax_4_f32.cl.h
+[121/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/softmax_4_f16.cl.h
+[122/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/softmax_f32.cl.h
+[123/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/softmax_f16.cl.h
+[124/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/sqr.cl.h
+[125/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/sqrt.cl.h
+[126/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/ssm_conv.cl.h
+[127/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/sub.cl.h
+[128/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/sum_rows.cl.h
+[129/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/cumsum.cl.h
+[130/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/transpose.cl.h
+[131/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/concat.cl.h
+[132/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/tsembd.cl.h
+[133/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/upscale.cl.h
+[134/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/exp.cl.h
+[135/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/tanh.cl.h
+[136/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/expm1.cl.h
+[137/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/softplus.cl.h
+[138/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/pad.cl.h
+[139/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/repeat.cl.h
+[140/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mm_f16_f32_kq_kqv.cl.h
+[141/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/mul_mat_f16_f32.cl.h
+[142/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/conv2d.cl.h
+[143/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/conv2d_f16_f32.cl.h
+[144/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/flash_attn_f32_f16.cl.h
+[145/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/flash_attn_f16.cl.h
+[146/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/flash_attn_f32.cl.h
+[147/409] Generate C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/build-opencl-mtp/ggml/src/ggml-opencl/autogenerated/gemm_xmem_f16_f32_os8.cl.h
+[148/409] Building CXX object src/CMakeFiles/llama.dir/llama-cparams.cpp.obj
+[149/409] Building CXX object src/CMakeFiles/llama.dir/llama-arch.cpp.obj
+[150/409] Building CXX object ggml/src/CMakeFiles/ggml.dir/ggml-backend-dl.cpp.obj
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/ggml-backend-dl.cpp:1:
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src\ggml-backend-dl.h:4:12: warning: 'WIN32_LEAN_AND_MEAN' macro redefined [-Wmacro-redefined]
+    4 | #   define WIN32_LEAN_AND_MEAN
+      |            ^
+<command line>:11:9: note: previous definition is here
+   11 | #define WIN32_LEAN_AND_MEAN 1
+      |         ^
+1 warning generated.
+[151/409] Building CXX object src/CMakeFiles/llama.dir/llama.cpp.obj
+[152/409] Building CXX object ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ops.cpp.obj
+[153/409] Building CXX object src/CMakeFiles/llama.dir/llama-chat.cpp.obj
+[154/409] Building CXX object src/CMakeFiles/llama.dir/llama-hparams.cpp.obj
+[155/409] Linking CXX shared library bin\ggml-cpu.dll
+[156/409] Building CXX object src/CMakeFiles/llama.dir/llama-adapter.cpp.obj
+[157/409] Building CXX object src/CMakeFiles/llama.dir/llama-batch.cpp.obj
+[158/409] Building CXX object ggml/src/CMakeFiles/ggml.dir/ggml-backend-reg.cpp.obj
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/ggml-backend-reg.cpp:3:
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src\ggml-backend-dl.h:4:12: warning: 'WIN32_LEAN_AND_MEAN' macro redefined [-Wmacro-redefined]
+    4 | #   define WIN32_LEAN_AND_MEAN
+      |            ^
+<command line>:11:9: note: previous definition is here
+   11 | #define WIN32_LEAN_AND_MEAN 1
+      |         ^
+1 warning generated.
+[159/409] Building CXX object src/CMakeFiles/llama.dir/llama-io.cpp.obj
+[160/409] Building CXX object src/CMakeFiles/llama.dir/llama-memory.cpp.obj
+[161/409] Building CXX object src/CMakeFiles/llama.dir/llama-impl.cpp.obj
+[162/409] Building CXX object src/CMakeFiles/llama.dir/llama-kv-cache-iswa.cpp.obj
+[163/409] Building CXX object src/CMakeFiles/llama.dir/llama-context.cpp.obj
+[164/409] Building CXX object src/CMakeFiles/llama.dir/llama-memory-hybrid.cpp.obj
+[165/409] Building CXX object src/CMakeFiles/llama.dir/llama-memory-hybrid-iswa.cpp.obj
+[166/409] Building CXX object src/CMakeFiles/llama.dir/llama-mmap.cpp.obj
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/src/llama-mmap.cpp:28:13: warning: 'WIN32_LEAN_AND_MEAN' macro redefined [-Wmacro-redefined]
+   28 |     #define WIN32_LEAN_AND_MEAN
+      |             ^
+<command line>:10:9: note: previous definition is here
+   10 | #define WIN32_LEAN_AND_MEAN 1
+      |         ^
+1 warning generated.
+[167/409] Building CXX object src/CMakeFiles/llama.dir/llama-graph.cpp.obj
+[168/409] Building CXX object src/CMakeFiles/llama.dir/llama-memory-recurrent.cpp.obj
+[169/409] Building CXX object src/CMakeFiles/llama.dir/llama-grammar.cpp.obj
+[170/409] Building CXX object src/CMakeFiles/llama.dir/llama-model-saver.cpp.obj
+[171/409] Building CXX object src/CMakeFiles/llama.dir/models/afmoe.cpp.obj
+[172/409] Building CXX object src/CMakeFiles/llama.dir/unicode-data.cpp.obj
+[173/409] Building CXX object src/CMakeFiles/llama.dir/models/apertus.cpp.obj
+[174/409] Building CXX object src/CMakeFiles/llama.dir/models/arcee.cpp.obj
+[175/409] Building CXX object src/CMakeFiles/llama.dir/models/arctic.cpp.obj
+[176/409] Building CXX object src/CMakeFiles/llama.dir/models/arwkv7.cpp.obj
+[177/409] Building CXX object src/CMakeFiles/llama.dir/llama-kv-cache.cpp.obj
+[178/409] Building CXX object src/CMakeFiles/llama.dir/models/baichuan.cpp.obj
+[179/409] Building CXX object src/CMakeFiles/llama.dir/models/bailingmoe.cpp.obj
+[180/409] Building CXX object src/CMakeFiles/llama.dir/llama-model-loader.cpp.obj
+[181/409] Building CXX object src/CMakeFiles/llama.dir/models/bailingmoe2.cpp.obj
+[182/409] Building CXX object src/CMakeFiles/llama.dir/llama-sampler.cpp.obj
+[183/409] Building CXX object src/CMakeFiles/llama.dir/models/bert.cpp.obj
+[184/409] Building CXX object src/CMakeFiles/llama.dir/llama-quant.cpp.obj
+[185/409] Building CXX object src/CMakeFiles/llama.dir/models/bitnet.cpp.obj
+[186/409] Building CXX object src/CMakeFiles/llama.dir/models/bloom.cpp.obj
+[187/409] Building CXX object src/CMakeFiles/llama.dir/models/chameleon.cpp.obj
+[188/409] Building CXX object src/CMakeFiles/llama.dir/models/chatglm.cpp.obj
+[189/409] Building CXX object src/CMakeFiles/llama.dir/models/codeshell.cpp.obj
+[190/409] Building CXX object src/CMakeFiles/llama.dir/models/cogvlm.cpp.obj
+[191/409] Building CXX object src/CMakeFiles/llama.dir/llama-vocab.cpp.obj
+[192/409] Building CXX object src/CMakeFiles/llama.dir/llama-model.cpp.obj
+[193/409] Building CXX object src/CMakeFiles/llama.dir/models/cohere2.cpp.obj
+[194/409] Building CXX object src/CMakeFiles/llama.dir/models/command-r.cpp.obj
+[195/409] Building CXX object src/CMakeFiles/llama.dir/models/dbrx.cpp.obj
+[196/409] Building CXX object src/CMakeFiles/llama.dir/models/deci.cpp.obj
+[197/409] Building CXX object src/CMakeFiles/llama.dir/unicode.cpp.obj
+[198/409] Building CXX object src/CMakeFiles/llama.dir/models/deepseek.cpp.obj
+[199/409] Building CXX object src/CMakeFiles/llama.dir/models/deepseek2.cpp.obj
+[200/409] Building CXX object src/CMakeFiles/llama.dir/models/deepseek2ocr.cpp.obj
+[201/409] Building CXX object src/CMakeFiles/llama.dir/models/delta-net-base.cpp.obj
+[202/409] Building CXX object src/CMakeFiles/llama.dir/models/dream.cpp.obj
+[203/409] Building CXX object src/CMakeFiles/llama.dir/models/dots1.cpp.obj
+[204/409] Building CXX object src/CMakeFiles/llama.dir/models/ernie4-5-moe.cpp.obj
+[205/409] Building CXX object src/CMakeFiles/llama.dir/models/ernie4-5.cpp.obj
+[206/409] Building CXX object src/CMakeFiles/llama.dir/models/eurobert.cpp.obj
+[207/409] Building CXX object src/CMakeFiles/llama.dir/models/exaone-moe.cpp.obj
+[208/409] Building CXX object src/CMakeFiles/llama.dir/models/exaone.cpp.obj
+[209/409] Building CXX object src/CMakeFiles/llama.dir/models/exaone4.cpp.obj
+[210/409] Building CXX object src/CMakeFiles/llama.dir/models/falcon.cpp.obj
+[211/409] Building CXX object src/CMakeFiles/llama.dir/models/falcon-h1.cpp.obj
+[212/409] Building CXX object src/CMakeFiles/llama.dir/models/gemma-embedding.cpp.obj
+[213/409] Building CXX object src/CMakeFiles/llama.dir/models/gemma.cpp.obj
+[214/409] Building CXX object src/CMakeFiles/llama.dir/models/gemma2.cpp.obj
+[215/409] Building CXX object src/CMakeFiles/llama.dir/models/gemma3.cpp.obj
+[216/409] Building CXX object src/CMakeFiles/llama.dir/models/gemma3n.cpp.obj
+[217/409] Building CXX object vendor/cpp-httplib/CMakeFiles/cpp-httplib.dir/httplib.cpp.obj
+[218/409] Building CXX object ggml/src/ggml-opencl/CMakeFiles/ggml-opencl.dir/ggml-opencl.cpp.obj
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/ggml/src/ggml-opencl/ggml-opencl.cpp:4342:9: warning: TODO: implement BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, IQ4_NL support (https://github.com/ggml-org/llama.cpp/pull/14661) [-W#pragma-messages]
+ 4342 | #pragma message("TODO: implement BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, IQ4_NL support (https://github.com/ggml-org/llama.cpp/pull/14661)")
+      |         ^
+1 warning generated.
+[219/409] Building CXX object src/CMakeFiles/llama.dir/models/glm-dsa.cpp.obj
+[220/409] Building CXX object src/CMakeFiles/llama.dir/models/gemma4.cpp.obj
+[221/409] Building CXX object src/CMakeFiles/llama.dir/models/glm4-moe.cpp.obj
+[222/409] Building CXX object src/CMakeFiles/llama.dir/models/gpt2.cpp.obj
+[223/409] Building CXX object src/CMakeFiles/llama.dir/models/glm4.cpp.obj
+[224/409] Linking CXX shared library bin\ggml-opencl.dll
+[225/409] Building CXX object src/CMakeFiles/llama.dir/models/gptneox.cpp.obj
+[226/409] Building CXX object src/CMakeFiles/llama.dir/models/granite-hybrid.cpp.obj
+[227/409] Building CXX object src/CMakeFiles/llama.dir/models/granite-moe.cpp.obj
+[228/409] Linking CXX shared library bin\ggml.dll
+[229/409] Building CXX object src/CMakeFiles/llama.dir/models/granite.cpp.obj
+[230/409] Building CXX object src/CMakeFiles/llama.dir/models/grok.cpp.obj
+[231/409] Building CXX object src/CMakeFiles/llama.dir/models/hunyuan-dense.cpp.obj
+[232/409] Building CXX object src/CMakeFiles/llama.dir/models/grovemoe.cpp.obj
+[233/409] Building CXX object src/CMakeFiles/llama.dir/models/internlm2.cpp.obj
+[234/409] Building CXX object src/CMakeFiles/llama.dir/models/hunyuan-vl.cpp.obj
+[235/409] Building CXX object src/CMakeFiles/llama.dir/models/hunyuan-moe.cpp.obj
+[236/409] Building CXX object src/CMakeFiles/llama.dir/models/jais.cpp.obj
+[237/409] Building CXX object src/CMakeFiles/llama.dir/models/jais2.cpp.obj
+[238/409] Building CXX object src/CMakeFiles/llama.dir/models/jamba.cpp.obj
+[239/409] Building CXX object src/CMakeFiles/llama.dir/models/jina-bert-v2.cpp.obj
+[240/409] Building CXX object src/CMakeFiles/llama.dir/models/jina-bert-v3.cpp.obj
+[241/409] Building CXX object src/CMakeFiles/llama.dir/models/kimi-linear.cpp.obj
+[242/409] Building CXX object src/CMakeFiles/llama.dir/models/llada-moe.cpp.obj
+[243/409] Building CXX object src/CMakeFiles/llama.dir/models/llama-embed.cpp.obj
+[244/409] Building CXX object src/CMakeFiles/llama.dir/models/lfm2moe.cpp.obj
+[245/409] Building CXX object src/CMakeFiles/llama.dir/models/lfm2.cpp.obj
+[246/409] Building CXX object src/CMakeFiles/llama.dir/models/llama.cpp.obj
+[247/409] Building CXX object src/CMakeFiles/llama.dir/models/llada.cpp.obj
+[248/409] Building CXX object src/CMakeFiles/llama.dir/models/llama4.cpp.obj
+[249/409] Building CXX object src/CMakeFiles/llama.dir/models/maincoder.cpp.obj
+[250/409] Building CXX object src/CMakeFiles/llama.dir/models/mamba.cpp.obj
+[251/409] Building CXX object src/CMakeFiles/llama.dir/models/mamba-base.cpp.obj
+[252/409] Building CXX object src/CMakeFiles/llama.dir/models/mamba2.cpp.obj
+[253/409] Building CXX object src/CMakeFiles/llama.dir/models/minicpm.cpp.obj
+[254/409] Building CXX object src/CMakeFiles/llama.dir/models/mimo2.cpp.obj
+[255/409] Building CXX object src/CMakeFiles/llama.dir/models/minimax-m2.cpp.obj
+[256/409] Building CXX object src/CMakeFiles/llama.dir/models/minicpm3.cpp.obj
+[257/409] Building CXX object src/CMakeFiles/llama.dir/models/mistral4.cpp.obj
+[258/409] Building CXX object src/CMakeFiles/llama.dir/models/modern-bert.cpp.obj
+[259/409] Building CXX object src/CMakeFiles/llama.dir/models/mistral3.cpp.obj
+[260/409] Building CXX object src/CMakeFiles/llama.dir/models/mpt.cpp.obj
+[261/409] Building CXX object src/CMakeFiles/llama.dir/models/nemotron-h-moe.cpp.obj
+[262/409] Building CXX object src/CMakeFiles/llama.dir/models/nemotron.cpp.obj
+[263/409] Building CXX object src/CMakeFiles/llama.dir/models/neo-bert.cpp.obj
+[264/409] Building CXX object src/CMakeFiles/llama.dir/models/nemotron-h.cpp.obj
+[265/409] Building CXX object src/CMakeFiles/llama.dir/models/nomic-bert.cpp.obj
+[266/409] Building CXX object src/CMakeFiles/llama.dir/models/nomic-bert-moe.cpp.obj
+[267/409] Building CXX object src/CMakeFiles/llama.dir/models/openai-moe.cpp.obj
+[268/409] Building CXX object src/CMakeFiles/llama.dir/models/olmoe.cpp.obj
+[269/409] Building CXX object src/CMakeFiles/llama.dir/models/olmo.cpp.obj
+[270/409] Building CXX object src/CMakeFiles/llama.dir/models/openelm.cpp.obj
+[271/409] Building CXX object src/CMakeFiles/llama.dir/models/olmo2.cpp.obj
+[272/409] Building CXX object src/CMakeFiles/llama.dir/models/paddleocr.cpp.obj
+[273/409] Building CXX object src/CMakeFiles/llama.dir/models/orion.cpp.obj
+[274/409] Building CXX object src/CMakeFiles/llama.dir/models/phi2.cpp.obj
+[275/409] Building CXX object src/CMakeFiles/llama.dir/models/pangu-embed.cpp.obj
+[276/409] Building CXX object src/CMakeFiles/llama.dir/models/phi3.cpp.obj
+[277/409] Building CXX object src/CMakeFiles/llama.dir/models/phimoe.cpp.obj
+[278/409] Building CXX object src/CMakeFiles/llama.dir/models/plamo.cpp.obj
+[279/409] Building CXX object src/CMakeFiles/llama.dir/models/qwen2.cpp.obj
+[280/409] Building CXX object src/CMakeFiles/llama.dir/models/plm.cpp.obj
+[281/409] Building CXX object src/CMakeFiles/llama.dir/models/plamo2.cpp.obj
+[282/409] Building CXX object src/CMakeFiles/llama.dir/models/qwen.cpp.obj
+[283/409] Building CXX object src/CMakeFiles/llama.dir/models/qwen2vl.cpp.obj
+[284/409] Building CXX object src/CMakeFiles/llama.dir/models/plamo3.cpp.obj
+[285/409] Building CXX object src/CMakeFiles/llama.dir/models/qwen2moe.cpp.obj
+[286/409] Building CXX object src/CMakeFiles/llama.dir/models/qwen3.cpp.obj
+[287/409] Building CXX object src/CMakeFiles/llama.dir/models/qwen35.cpp.obj
+[288/409] Building CXX object src/CMakeFiles/llama.dir/models/qwen35moe.cpp.obj
+[289/409] Building CXX object src/CMakeFiles/llama.dir/models/qwen3moe.cpp.obj
+[290/409] Building CXX object src/CMakeFiles/llama.dir/models/qwen3vl.cpp.obj
+[291/409] Building CXX object src/CMakeFiles/llama.dir/models/qwen3next.cpp.obj
+[292/409] Building CXX object src/CMakeFiles/llama.dir/models/refact.cpp.obj
+[293/409] Building CXX object src/CMakeFiles/llama.dir/models/qwen3vlmoe.cpp.obj
+[294/409] Building CXX object src/CMakeFiles/llama.dir/models/rnd1.cpp.obj
+[295/409] Building CXX object src/CMakeFiles/llama.dir/models/rwkv6-base.cpp.obj
+[296/409] Building CXX object src/CMakeFiles/llama.dir/models/rwkv6qwen2.cpp.obj
+[297/409] Building CXX object src/CMakeFiles/llama.dir/models/rwkv6.cpp.obj
+[298/409] Building CXX object src/CMakeFiles/llama.dir/models/rwkv7-base.cpp.obj
+[299/409] Building CXX object src/CMakeFiles/llama.dir/models/rwkv7.cpp.obj
+[300/409] Building CXX object src/CMakeFiles/llama.dir/models/seed-oss.cpp.obj
+[301/409] Building CXX object src/CMakeFiles/llama.dir/models/smallthinker.cpp.obj
+[302/409] Building CXX object src/CMakeFiles/llama.dir/models/smollm3.cpp.obj
+[303/409] Building CXX object src/CMakeFiles/llama.dir/models/starcoder.cpp.obj
+[304/409] Building CXX object src/CMakeFiles/llama.dir/models/stablelm.cpp.obj
+[305/409] Building CXX object src/CMakeFiles/llama.dir/models/starcoder2.cpp.obj
+[306/409] Building CXX object src/CMakeFiles/llama.dir/models/step35.cpp.obj
+[307/409] Building CXX object src/CMakeFiles/llama.dir/models/t5encoder.cpp.obj
+[308/409] Building CXX object src/CMakeFiles/llama.dir/models/t5.cpp.obj
+[309/409] Building CXX object src/CMakeFiles/llama.dir/models/wavtokenizer-dec.cpp.obj
+[310/409] Building CXX object src/CMakeFiles/llama.dir/models/xverse.cpp.obj
+[311/409] Linking CXX shared library bin\llama.dll
+[312/409] Building CXX object common/CMakeFiles/llama-common.dir/console.cpp.obj
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/console.cpp:16:9: warning: 'WIN32_LEAN_AND_MEAN' macro redefined [-Wmacro-redefined]
+   16 | #define WIN32_LEAN_AND_MEAN
+      |         ^
+<command line>:9:9: note: previous definition is here
+    9 | #define WIN32_LEAN_AND_MEAN 1
+      |         ^
+1 warning generated.
+[313/409] Building CXX object common/CMakeFiles/llama-common.dir/debug.cpp.obj
+[314/409] Building CXX object common/CMakeFiles/llama-common.dir/fit.cpp.obj
+[315/409] Building CXX object common/CMakeFiles/llama-common.dir/chat-auto-parser-helpers.cpp.obj
+[316/409] Building CXX object common/CMakeFiles/llama-common.dir/llguidance.cpp.obj
+[317/409] Building CXX object common/CMakeFiles/llama-common.dir/common.cpp.obj
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/common.cpp:37:9: warning: 'WIN32_LEAN_AND_MEAN' macro redefined [-Wmacro-redefined]
+   37 | #define WIN32_LEAN_AND_MEAN
+      |         ^
+<command line>:9:9: note: previous definition is here
+    9 | #define WIN32_LEAN_AND_MEAN 1
+      |         ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/common.cpp:1058:33: warning: 'fileno' is deprecated: The POSIX name for this item is deprecated. Instead, use the ISO C and C++ conformant name: _fileno. See online help for details. [-Wdeprecated-declarations]
+ 1058 |     bool stdout_is_tty = isatty(fileno(stdout));
+      |                                 ^
+C:\Program Files (x86)\Windows Kits\10\include\10.0.26100.0\ucrt\stdio.h:2433:28: note: 'fileno' has been explicitly marked deprecated here
+ 2433 |         _Check_return_     _CRT_NONSTDC_DEPRECATE(_fileno)    _ACRTIMP int   __cdecl fileno(_In_ FILE* _Stream);
+      |                            ^
+C:\Program Files (x86)\Windows Kits\10\include\10.0.26100.0\ucrt\corecrt.h:428:50: note: expanded from macro '_CRT_NONSTDC_DEPRECATE'
+  428 |         #define _CRT_NONSTDC_DEPRECATE(_NewName) _CRT_DEPRECATE_TEXT(             \
+      |                                                  ^
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\vcruntime.h:358:47: note: expanded from macro '_CRT_DEPRECATE_TEXT'
+  358 | #define _CRT_DEPRECATE_TEXT(_Text) __declspec(deprecated(_Text))
+      |                                               ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/common.cpp:1058:26: warning: 'isatty' is deprecated: The POSIX name for this item is deprecated. Instead, use the ISO C and C++ conformant name: _isatty. See online help for details. [-Wdeprecated-declarations]
+ 1058 |     bool stdout_is_tty = isatty(fileno(stdout));
+      |                          ^
+C:\Program Files (x86)\Windows Kits\10\include\10.0.26100.0\ucrt\corecrt_io.h:492:24: note: 'isatty' has been explicitly marked deprecated here
+  492 |         _Check_return_ _CRT_NONSTDC_DEPRECATE(_isatty)
+      |                        ^
+C:\Program Files (x86)\Windows Kits\10\include\10.0.26100.0\ucrt\corecrt.h:428:50: note: expanded from macro '_CRT_NONSTDC_DEPRECATE'
+  428 |         #define _CRT_NONSTDC_DEPRECATE(_NewName) _CRT_DEPRECATE_TEXT(             \
+      |                                                  ^
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\vcruntime.h:358:47: note: expanded from macro '_CRT_DEPRECATE_TEXT'
+  358 | #define _CRT_DEPRECATE_TEXT(_Text) __declspec(deprecated(_Text))
+      |                                               ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/common.cpp:1059:33: warning: 'fileno' is deprecated: The POSIX name for this item is deprecated. Instead, use the ISO C and C++ conformant name: _fileno. See online help for details. [-Wdeprecated-declarations]
+ 1059 |     bool stderr_is_tty = isatty(fileno(stderr));
+      |                                 ^
+C:\Program Files (x86)\Windows Kits\10\include\10.0.26100.0\ucrt\stdio.h:2433:28: note: 'fileno' has been explicitly marked deprecated here
+ 2433 |         _Check_return_     _CRT_NONSTDC_DEPRECATE(_fileno)    _ACRTIMP int   __cdecl fileno(_In_ FILE* _Stream);
+      |                            ^
+C:\Program Files (x86)\Windows Kits\10\include\10.0.26100.0\ucrt\corecrt.h:428:50: note: expanded from macro '_CRT_NONSTDC_DEPRECATE'
+  428 |         #define _CRT_NONSTDC_DEPRECATE(_NewName) _CRT_DEPRECATE_TEXT(             \
+      |                                                  ^
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\vcruntime.h:358:47: note: expanded from macro '_CRT_DEPRECATE_TEXT'
+  358 | #define _CRT_DEPRECATE_TEXT(_Text) __declspec(deprecated(_Text))
+      |                                               ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/common.cpp:1059:26: warning: 'isatty' is deprecated: The POSIX name for this item is deprecated. Instead, use the ISO C and C++ conformant name: _isatty. See online help for details. [-Wdeprecated-declarations]
+ 1059 |     bool stderr_is_tty = isatty(fileno(stderr));
+      |                          ^
+C:\Program Files (x86)\Windows Kits\10\include\10.0.26100.0\ucrt\corecrt_io.h:492:24: note: 'isatty' has been explicitly marked deprecated here
+  492 |         _Check_return_ _CRT_NONSTDC_DEPRECATE(_isatty)
+      |                        ^
+C:\Program Files (x86)\Windows Kits\10\include\10.0.26100.0\ucrt\corecrt.h:428:50: note: expanded from macro '_CRT_NONSTDC_DEPRECATE'
+  428 |         #define _CRT_NONSTDC_DEPRECATE(_NewName) _CRT_DEPRECATE_TEXT(             \
+      |                                                  ^
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\vcruntime.h:358:47: note: expanded from macro '_CRT_DEPRECATE_TEXT'
+  358 | #define _CRT_DEPRECATE_TEXT(_Text) __declspec(deprecated(_Text))
+      |                                               ^
+5 warnings generated.
+[318/409] Building CXX object common/CMakeFiles/llama-common.dir/log.cpp.obj
+[319/409] Building CXX object common/CMakeFiles/llama-common.dir/chat-auto-parser-generator.cpp.obj
+[320/409] Building CXX object common/CMakeFiles/llama-common.dir/ngram-cache.cpp.obj
+[321/409] Building CXX object common/CMakeFiles/llama-common.dir/ngram-mod.cpp.obj
+[322/409] Building CXX object common/CMakeFiles/llama-common.dir/ngram-map.cpp.obj
+[323/409] Building CXX object common/CMakeFiles/llama-common.dir/reasoning-budget.cpp.obj
+[324/409] Building CXX object common/CMakeFiles/llama-common.dir/json-partial.cpp.obj
+[325/409] Building CXX object common/CMakeFiles/llama-common.dir/chat-peg-parser.cpp.obj
+[326/409] Building CXX object common/CMakeFiles/llama-common.dir/regex-partial.cpp.obj
+[327/409] Building CXX object common/CMakeFiles/llama-common.dir/unicode.cpp.obj
+[328/409] Building CXX object common/CMakeFiles/llama-common.dir/sampling.cpp.obj
+[329/409] Building CXX object common/CMakeFiles/llama-common.dir/chat-diff-analyzer.cpp.obj
+[330/409] Building CXX object common/CMakeFiles/llama-common.dir/preset.cpp.obj
+[331/409] Building CXX object common/CMakeFiles/llama-common.dir/download.cpp.obj
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/download.cpp:24:
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common\http.h:3:
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/../vendor\cpp-httplib/httplib.h:233:17: warning: extension used [-Wlanguage-extension-token]
+  233 | using ssize_t = __int64;
+      |                 ^
+1 warning generated.
+[332/409] Building CXX object common/CMakeFiles/llama-common.dir/jinja/lexer.cpp.obj
+[333/409] Building CXX object common/CMakeFiles/llama-common.dir/hf-cache.cpp.obj
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/hf-cache.cpp:6:
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common\http.h:3:
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/../vendor\cpp-httplib/httplib.h:233:17: warning: extension used [-Wlanguage-extension-token]
+  233 | using ssize_t = __int64;
+      |                 ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/hf-cache.cpp:22:9: warning: 'WIN32_LEAN_AND_MEAN' macro redefined [-Wmacro-redefined]
+   22 | #define WIN32_LEAN_AND_MEAN
+      |         ^
+<command line>:9:9: note: previous definition is here
+    9 | #define WIN32_LEAN_AND_MEAN 1
+      |         ^
+2 warnings generated.
+[334/409] Building CXX object common/CMakeFiles/llama-common.dir/speculative.cpp.obj
+[335/409] Building CXX object common/CMakeFiles/llama-common.dir/__/license.cpp.obj
+[336/409] Linking CXX static library vendor\cpp-httplib\cpp-httplib.lib
+[337/409] Building CXX object common/CMakeFiles/llama-common.dir/jinja/string.cpp.obj
+[338/409] Building CXX object common/CMakeFiles/llama-common.dir/jinja/parser.cpp.obj
+[339/409] Building CXX object common/CMakeFiles/llama-common.dir/json-schema-to-grammar.cpp.obj
+[340/409] Building CXX object common/CMakeFiles/llama-common.dir/jinja/runtime.cpp.obj
+[341/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/mtmd-audio.cpp.obj
+[342/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/mtmd-image.cpp.obj
+[343/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/cogvlm.cpp.obj
+[344/409] Building CXX object common/CMakeFiles/llama-common.dir/chat.cpp.obj
+[345/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/mtmd.cpp.obj
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/tools/mtmd/mtmd.cpp:12:9: warning: 'WIN32_LEAN_AND_MEAN' macro redefined [-Wmacro-redefined]
+   12 | #define WIN32_LEAN_AND_MEAN
+      |         ^
+<command line>:10:9: note: previous definition is here
+   10 | #define WIN32_LEAN_AND_MEAN 1
+      |         ^
+1 warning generated.
+[346/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/conformer.cpp.obj
+[347/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/dotsocr.cpp.obj
+[348/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/gemma4a.cpp.obj
+[349/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/gemma4v.cpp.obj
+[350/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/glm4v.cpp.obj
+[351/409] Building CXX object common/CMakeFiles/llama-common.dir/arg.cpp.obj
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/arg.cpp:16:9: warning: 'WIN32_LEAN_AND_MEAN' macro redefined [-Wmacro-redefined]
+   16 | #define WIN32_LEAN_AND_MEAN
+      |         ^
+<command line>:9:9: note: previous definition is here
+    9 | #define WIN32_LEAN_AND_MEAN 1
+      |         ^
+1 warning generated.
+[352/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/granite-speech.cpp.obj
+[353/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/hunyuanocr.cpp.obj
+[354/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/internvl.cpp.obj
+[355/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/kimivl.cpp.obj
+[356/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/kimik25.cpp.obj
+[357/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/nemotron-v2-vl.cpp.obj
+[358/409] Building CXX object common/CMakeFiles/llama-common.dir/jinja/caps.cpp.obj
+[359/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/llama4.cpp.obj
+[360/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/llava.cpp.obj
+[361/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/minicpmv.cpp.obj
+[362/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/paddleocr.cpp.obj
+[363/409] Building CXX object common/CMakeFiles/llama-common.dir/jinja/value.cpp.obj
+[364/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/pixtral.cpp.obj
+[365/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/qwen2vl.cpp.obj
+[366/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/qwen3vl.cpp.obj
+[367/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/qwen3a.cpp.obj
+[368/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/mimovl.cpp.obj
+[369/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/step3vl.cpp.obj
+[370/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/clip.cpp.obj
+[371/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/siglip.cpp.obj
+[372/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/whisper-enc.cpp.obj
+[373/409] Building CXX object common/CMakeFiles/llama-common.dir/peg-parser.cpp.obj
+[374/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/deepseekocr.cpp.obj
+[375/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/mobilenetv5.cpp.obj
+[376/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/youtuvl.cpp.obj
+[377/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/models/yasa2.cpp.obj
+[378/409] Linking CXX shared library bin\llama-common.dll
+[379/409] Building CXX object tools/batched-bench/CMakeFiles/llama-batched-bench.dir/batched-bench.cpp.obj
+[380/409] Building CXX object examples/speculative-simple/CMakeFiles/llama-speculative-simple.dir/speculative-simple.cpp.obj
+[381/409] Building CXX object examples/speculative/CMakeFiles/llama-speculative.dir/speculative.cpp.obj
+[382/409] Linking CXX executable bin\llama-speculative.exe
+[383/409] Linking CXX executable bin\llama-speculative-simple.exe
+[384/409] Linking CXX executable bin\llama-batched-bench.exe
+[385/409] Building CXX object tools/server/CMakeFiles/server-context.dir/server-queue.cpp.obj
+[386/409] Building CXX object tools/completion/CMakeFiles/llama-completion.dir/completion.cpp.obj
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/tools/completion/completion.cpp:23:9: warning: 'WIN32_LEAN_AND_MEAN' macro redefined [-Wmacro-redefined]
+   23 | #define WIN32_LEAN_AND_MEAN
+      |         ^
+<command line>:8:9: note: previous definition is here
+    8 | #define WIN32_LEAN_AND_MEAN 1
+      |         ^
+1 warning generated.
+[387/409] Linking CXX executable bin\llama-completion.exe
+[388/409] Building CXX object tools/mtmd/CMakeFiles/mtmd.dir/mtmd-helper.cpp.obj
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/tools/mtmd/mtmd-helper.cpp:3:9: warning: 'WIN32_LEAN_AND_MEAN' macro redefined [-Wmacro-redefined]
+    3 | #define WIN32_LEAN_AND_MEAN
+      |         ^
+<command line>:10:9: note: previous definition is here
+   10 | #define WIN32_LEAN_AND_MEAN 1
+      |         ^
+1 warning generated.
+[389/409] Linking CXX shared library bin\mtmd.dll
+[390/409] Building CXX object tools/perplexity/CMakeFiles/llama-perplexity.dir/perplexity.cpp.obj
+[391/409] Linking CXX executable bin\llama-perplexity.exe
+[392/409] Building CXX object tools/server/CMakeFiles/server-context.dir/server-chat.cpp.obj
+[393/409] Building CXX object tools/llama-bench/CMakeFiles/llama-bench.dir/llama-bench.cpp.obj
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/tools/llama-bench/llama-bench.cpp:30:13: warning: 'WIN32_LEAN_AND_MEAN' macro redefined [-Wmacro-redefined]
+   30 | #    define WIN32_LEAN_AND_MEAN
+      |             ^
+<command line>:8:9: note: previous definition is here
+    8 | #define WIN32_LEAN_AND_MEAN 1
+      |         ^
+1 warning generated.
+[394/409] Linking CXX executable bin\llama-bench.exe
+[395/409] Building CXX object tools/server/CMakeFiles/server-context.dir/server-common.cpp.obj
+[396/409] Building CXX object tools/cli/CMakeFiles/llama-cli.dir/cli.cpp.obj
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/tools/cli/cli.cpp:21:9: warning: 'WIN32_LEAN_AND_MEAN' macro redefined [-Wmacro-redefined]
+   21 | #define WIN32_LEAN_AND_MEAN
+      |         ^
+<command line>:8:9: note: previous definition is here
+    8 | #define WIN32_LEAN_AND_MEAN 1
+      |         ^
+1 warning generated.
+[397/409] Building CXX object tools/server/CMakeFiles/server-context.dir/server-tools.cpp.obj
+[398/409] Building CXX object tools/server/CMakeFiles/server-context.dir/server-context.cpp.obj
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/tools/server/server-context.cpp:28:9: warning: 'WIN32_LEAN_AND_MEAN' macro redefined [-Wmacro-redefined]
+   28 | #define WIN32_LEAN_AND_MEAN
+      |         ^
+<command line>:9:9: note: previous definition is here
+    9 | #define WIN32_LEAN_AND_MEAN 1
+      |         ^
+1 warning generated.
+[399/409] Building CXX object tools/server/CMakeFiles/server-context.dir/server-task.cpp.obj
+[400/409] Linking CXX static library tools\server\server-context.lib
+[401/409] Generating loading.html.hpp
+[402/409] Generating index.html.hpp
+[403/409] Linking CXX executable bin\llama-cli.exe
+[404/409] Generating bundle.css.hpp
+[405/409] Generating bundle.js.hpp
+[406/409] Building CXX object tools/server/CMakeFiles/llama-server.dir/server.cpp.obj
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/tools/server/server.cpp:4:
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/tools/server\server-cors-proxy.h:4:
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/.\http.h:3:
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/../vendor\cpp-httplib/httplib.h:233:17: warning: extension used [-Wlanguage-extension-token]
+  233 | using ssize_t = __int64;
+      |                 ^
+1 warning generated.
+[407/409] Building CXX object tools/server/CMakeFiles/llama-server.dir/server-models.cpp.obj
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/tools/server/server-models.cpp:8:
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/../vendor\cpp-httplib/httplib.h:233:17: warning: extension used [-Wlanguage-extension-token]
+  233 | using ssize_t = __int64;
+      |                 ^
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/tools/server/server-models.cpp:9:
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/../vendor\sheredom/subprocess.h:318:5: warning: anonymous structs are a GNU extension [-Wgnu-anonymous-struct]
+  318 |     struct {
+      |     ^
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/../vendor\sheredom/subprocess.h:318:5: warning: anonymous types declared in an anonymous union are an extension [-Wnested-anon-types]
+3 warnings generated.
+[408/409] Building CXX object tools/server/CMakeFiles/llama-server.dir/server-http.cpp.obj
+In file included from C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/tools/server/server-http.cpp:5:
+C:/Users/hotschmoe/Documents/GitHub/specula/llama.cpp/common/../vendor\cpp-httplib/httplib.h:233:17: warning: extension used [-Wlanguage-extension-token]
+  233 | using ssize_t = __int64;
+      |                 ^
+1 warning generated.
+[409/409] Linking CXX executable bin\llama-server.exe

@@ -53,6 +53,7 @@ param(
     [ValidateSet('cpu', 'cpu-kleidiai', 'vulkan', 'opencl', 'vulkan-opencl', 'hexagon')]
     [string]$Preset = 'vulkan',
     [string]$Commit = '',
+    [string]$BuildDirSuffix = '',
     [string]$RepoDir = (Join-Path $PSScriptRoot '..\llama.cpp'),
     [int]$Jobs = 12,
     [string]$LlvmRoot = 'C:\Program Files\LLVM',
@@ -183,7 +184,7 @@ try {
     }
 
     # --- Preset -> cmake flags -----------------------------------------------
-    $buildDir = "build-$Preset"
+    $buildDir = "build-$Preset$BuildDirSuffix"
     switch ($Preset) {
         'cpu' {
             $presetFlags = @('-DGGML_CPU_KLEIDIAI=OFF')
