@@ -1,0 +1,3 @@
+backend,model,pp_tps,tg_tps,pp_tokens,tg_tokens,threads,ngl,build_commit,notes
+cpu,Qwen3.6-35B-A3B-Q4_K_M.gguf,141.51,34.19,512,128,8,0,856c3adac,Snapdragon X2 Elite plain NEON
+cpu,Qwen3.6-35B-A3B-MXFP4_MOE.gguf,145.63,31.37,512,128,8,0,856c3adac,Snapdragon X2 Elite plain NEON

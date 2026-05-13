@@ -1059,3 +1059,38 @@ Layout follows `docs/repo_hygiene.md`:
   has 12 cores of true parallelism; NPU is one Hexagon engine), not
   fixable by more engineering on the NPU side. NPU at high N is a
   power-efficiency play, not a throughput play.
+- 2026-05-12 (AC, full sweep at new llama.cpp HEAD): llama.cpp
+  `f53577432` → `856c3adac` (186 commits ahead). All four llama.cpp
+  variants rebuilt clean from source; NPU side unchanged. Headline
+  AC deltas vs 2026-04-26:
+  - **NPU got ~10% better across both runtimes** with zero code or
+    bundle change. Genie: PP **1725.65 t/s** (+10.2%) / TG **26.14
+    t/s** (+12.2%). ORT-QNN: PP **2167.11 t/s** (+9.2%) / TG **29.03
+    t/s** (+6.5%). Almost certainly system-level (Qualcomm driver /
+    Windows OS / thermal headroom) — same .bin files, same
+    `npu_engine/sidecar.py`. ORT-QNN edge over Genie holds at +25.6%
+    PP / +11.1% TG.
+  - **CPU PP regressed −7.5%** (174.21 from 188.30); TG unchanged at
+    39.52. Plain CPU build only — KleidiAI build regressed similarly
+    (PP 168.84 from 185.78). Likely candidate is the RMS_NORM+MUL
+    CPU fusion (#22423); not worth bisecting at this magnitude (~0.2 s
+    extra prefill wall on 512 tokens).
+  - **OpenCL Q4_0 a wash**: PP **588.08 ± 6.94** (+3.3%) / TG **25.27
+    ± 0.03** (−3.6%). Five Adreno OpenCL PRs landed in the window;
+    they show up on Qwen3.6 MoE, not on dense Qwen3-4B.
+  - **Vulkan regression** is the bad news. Last sweep's working
+    config (`GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1`,
+    PP 115 / TG 38.51) **now STATUS_ACCESS_VIOLATIONs at model
+    load** on `856c3adac`. Isolated to the `DISABLE_F16` env var;
+    `HOST_MEMORY=1` alone is safe and gives PP 6.10 / TG 38.01
+    (best non-NPU TG in the matrix). Default env path still works
+    at PP 6.54 / TG 31.91. Net: GPU PP throne moves back to OpenCL
+    Q4_0; Vulkan is TG-only for now. Probable culprit PR is one of
+    the asymmetric-FA coopmat changes (#22589, #21753) — file
+    upstream.
+  - CSVs: `qwen3_4b_baseline_2026-05-12_ac.csv` (main runner),
+    `qwen3_4b_gpu_q4_0_2026-05-12_ac.csv` (Q4_0 GPU reruns + Vulkan
+    env matrix), `qwen3_4b_ortqnn_2026-05-12_ac.csv` (`npu_engine`).
+    Companion writeup with Qwen3.6-35B-A3B probe + MTP / DFlash /
+    PFlash / vLLM landscape in
+    `docs/2026-05-12_sweep_and_mtp_landscape.md`.

@@ -1,0 +1,5 @@
+backend,model,pp_tps,pp_std,tg_tps,tg_std,pp_tokens,tg_tokens,env,build_commit,notes
+gpu-opencl,Qwen3-4B-Q4_0.gguf,588.08,6.94,25.27,0.03,512,128,,856c3adac,Adreno X2-90; -ngl 99; r=3
+gpu-vulkan,Qwen3-4B-Q4_0.gguf,6.54,0.00,31.91,0.00,512,128,,856c3adac,default env (broken-F16 PP path)
+gpu-vulkan,Qwen3-4B-Q4_0.gguf,6.10,0.00,38.01,0.00,512,128,GGML_VK_PREFER_HOST_MEMORY=1,856c3adac,best non-NPU TG; PP still broken
+gpu-vulkan,Qwen3-4B-Q4_0.gguf,,,,,512,128,GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1,856c3adac,CRASH STATUS_ACCESS_VIOLATION — was PP 115 / TG 38.51 on 2026-04-26

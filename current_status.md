@@ -1,5 +1,55 @@
 # specula -- current status
 
+Last updated: 2026-05-12 (session 25 — **scheduled backend
+refresh + MTP/DFlash/PFlash landscape audit**. llama.cpp bumped
+`f53577432` → `856c3adac` (186 commits). NPU got ~10% faster
+across both runtimes on the unchanged Qualcomm w4a16 bundle —
+Genie PP **1725.65 t/s** / TG **26.14 t/s**, ORT-QNN PP **2167.11 t/s**
+/ TG **29.03 t/s** — likely Qualcomm driver / Windows update.
+CPU PP regressed ~−8% (RMS_NORM+MUL fusion likely suspect); TG
+flat. OpenCL Q4_0 a wash (+3% / −3.6%). **Vulkan regression**:
+prior workaround `GGML_VK_DISABLE_F16=1` now STATUS_ACCESS_VIOLATIONs
+at load. `GGML_VK_PREFER_HOST_MEMORY=1` alone still loads but PP
+stays at the broken-F16 ~6 t/s; TG goes to 38.01 t/s.
+
+**Qwen3.6-35B-A3B probe (new model row).** Mainline llama.cpp now
+registers `LLM_ARCH_QWEN35MOE` etc. The Q4_K_M and MXFP4_MOE GGUFs
+we already had on disk load on the rebuilt binaries. CPU TG
+**34.19 t/s** on a 35B parameter model is genuinely strong (A3B's 3B
+active per token doing its job). OpenCL MXFP4 prefill **210.47 t/s**
+beats CPU by +45%, but TG collapses to 13.08 (Adreno MoE dispatch-
+bound). Vulkan stalls at <1% device utilization with 45 GB resident
+— the broken-F16 path can't drive 35B MoE prefill. **CPU is the right
+single-backend choice for Qwen3.6-35B-A3B inference today.**
+
+**MTP landscape.** Mainline llama.cpp does **not** yet have MTP
+self-draft consumption (PR #22673 still draft on `gg/spec-mtp-experiments`).
+Standard `--spec-draft-model` flags ARE on master. Of the five
+DFlash/PFlash/MTP-fused forks, **all five are unbuildable on this
+hardware**: four are CUDA-only (Indras-Mirror TBQ4, croll83 Blackwell,
+z-lab DFlash, Luce-Org PFlash); the fifth (antirez) builds on CPU
+but targets only DeepSeek-V4-Flash. vLLM / SGLang have no Windows
+ARM64 + Vulkan/OpenCL/Adreno/Hexagon build. **Right path: wait for
+PR #22673 to merge, then re-bench against an MTP-preserved GGUF.**
+
+Companion writeup: `docs/2026-05-12_sweep_and_mtp_landscape.md`
+covers full sweep + Qwen3.6 probe + MTP/DFlash/PFlash/vLLM
+landscape + recommendations. Baseline doc update log entry added
+to `docs/qwen3_4b_baseline_all_backends.md`. CSVs:
+`qwen3_4b_baseline_2026-05-12_ac.csv`,
+`qwen3_4b_gpu_q4_0_2026-05-12_ac.csv`,
+`qwen3_4b_ortqnn_2026-05-12_ac.csv`,
+`qwen3_6_35b_a3b_baseline_2026-05-12_ac.csv`. Local llama.cpp
+stash `stash@{0}` holds the obsolete SME-detect patch (no longer
+needed on `856c3adac` — upstream has its own early-return path);
+safe to drop after `patch_kleidiai_detect.py` runs cleanly.
+
+Next: file Vulkan upstream issue; watch llama.cpp PR #22673;
+optional MLC-LLM probe as a non-CUDA vLLM alternative; resume
+last_side_quest sequence (SQ1 / SQ2 / SQ6).
+
+---
+
 Last updated: 2026-04-27 (session 24 — **last_side_quest umbrella
 opens; SQ5 long-context NPU closes POSITIVE.** New `last_side_quest/`
 workspace at repo root frames the final 6 deliverables before the
