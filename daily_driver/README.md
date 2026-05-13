@@ -64,35 +64,54 @@ This means **memory headroom is NOT the binding constraint** —
 f16 KV at 131k = 5.2 GB → 27 GB total on 48 GB system. Even at the
 full 256k native ctx it's only 32.5 GB total.
 
-**Canonical config (post-Phase-10c, 2026-04-27)**: **Vulkan
-everywhere; CPU is fallback only.**
+**Canonical config (session 27, 2026-05-13)**: **OpenCL `-ngl 0`
+("coprocessor mode") is the new primary; CPU is fallback; Vulkan
+is deprecated.**
 
-- **Daily-driver default** = `Vulkan + MXFP4_MOE + ngl=99 +
-  GGML_VK_DISABLE_F16=1 + GGML_VK_PREFER_HOST_MEMORY=1 +
-  --flash-attn off + --no-warmup + f16 KV`. Phase 10c measured
-  this against CPU on the actual agent workload (16k cold session
-  + 4 multi-turn delta-prefill turns) and Vulkan won every metric:
+Why the change from the Phase-10c (2026-04-27) Vulkan recipe:
 
-  | metric                       | CPU    | Vulkan | Δ        |
-  |---|---:|---:|---:|
-  | Cold session @ d=16k         | 748 s  | 340 s  | **−55%** |
-  | Per-turn warm wall (avg 1-4) | 21.8 s | 13.2 s | **−39%** |
-  | TG @ d=16k+ (server)         | 15.5   | 20.0   | **+29%** |
-  | Cold PP aggregate            | 22.2   | 49.4   | **+123%**|
+- **Vulkan PP path broken on `856c3adac`.** Session 25's scheduled
+  llama.cpp sweep landed PRs that segfault `GGML_VK_DISABLE_F16=1`
+  at model load (STATUS_ACCESS_VIOLATION). Without `DISABLE_F16`,
+  Vulkan PP collapses to ~6 t/s — long-ctx cold prefill is
+  unusable.
+- **OpenCL `-ngl 0` discovered.** Session 26's overnight perf sprint
+  found that registering the OpenCL backend with `-ngl 0` (no model
+  layers offloaded) lets Adreno act as a coprocessor while weights
+  stay in CPU RAM. Yields **+10-20% TG over pure CPU at every
+  context depth** with no shader-JIT first-request penalty.
+- **Session 27 long-ctx + delta-prefill probes confirm it works.**
+  TG at d=32k: OpenCL `-ngl 0` 14.5 t/s vs CPU 13.2 (+10%).
+  Delta-prefill via `cache_prompt`: turn-2 wall 13.5 s on a 5k base
+  + 524 delta (vs turn-1 cold 86.8 s). Cache reuse: 4941/5461
+  tokens. The agent warm path is fast.
 
-- **CPU + Q4_K_M fallback**: same `-t 8 + f16 KV + no FA` config,
-  used only when Vulkan is unavailable OR for trivially-short
-  single-turn chat at d≤4k.
+| metric (probes 1+3, session 27)        | CPU-kleidiai | OpenCL `-ngl 0` | Δ        |
+|---|---:|---:|---:|
+| TG @ d=0                                | 24.85 t/s    | **28.70 t/s**  | **+15%** |
+| TG @ d=8k                               | 20.77 t/s    | **24.80 t/s**  | **+19%** |
+| TG @ d=32k                              | 13.19 t/s    | **14.51 t/s**  | **+10%** |
+| Turn-2 delta-prefill wall (5k+524)      | not measured |   13.5 s       | --       |
+| Cache reuse on turn 2                   | --           | 4941 toks      | works    |
 
-Both use **f16 KV + no FA**. FA + f16 KV livelocks on this llama.cpp
-commit (`f53577432`) on both CPU and Vulkan — Phase 4 / Phase 10c
-documented this; revisit once upstream fixes it. `--no-warmup` on
-Vulkan defers shader-JIT to the first request (otherwise warmup
-itself hits the FA livelock and never completes); the first
-request after server boot pays an extra ~5 min one-time cost.
+- **Primary**: `OpenCL build + MXFP4_MOE + -ngl 0 -t 18 + f16 KV`.
+  No env vars needed. No `--no-warmup` (no shader-JIT to defer).
+- **CPU fallback**: `cpu-kleidiai build + Q4_K_M + -t 18 + f16 KV`.
+  Slightly slower (10-20% lower TG) but the simplest env. Same
+  memory footprint.
+- **Vulkan deprecated** until upstream restores the `DISABLE_F16`
+  path. The Phase-10c numbers above are no longer reproducible.
 
-See `optimization.md` § Phase 10c for the full delta-prefill
-analysis; `recipe.md` for the canonical serve invocation.
+All paths use **f16 KV + no FA**. FA + f16 KV livelocks on llama.cpp
+(`f53577432` thru `856c3adac`+) on both CPU and Vulkan — Phase 4 /
+Phase 10c documented this. The OpenCL `-ngl 0` path doesn't hit
+the FA livelock but we still leave `-fa` unset for consistency.
+
+See `optimization.md` § Phase 10c for the original Vulkan
+delta-prefill analysis (since invalidated by session-25 sweep).
+See `docs/2026-05-13_overnight_perf_results.md` for the OpenCL
+`-ngl 0` discovery context. See `recipe.md` for the canonical
+serve invocation.
 
 ## Run it (opencode loop)
 
@@ -117,15 +136,21 @@ alias is set by `--alias daily-driver` in `serve_daily_driver.ps1`
 and must match the `models.daily-driver` key in opencode.json — if
 you change one, change both.
 
-**First request after server boot is slow** (~5-6 min on Vulkan:
-shader JIT + 16k cold prefill folded together because of
-`--no-warmup`). Subsequent turns are normal (~13 s/turn at d=16k+).
-Plan the first interaction accordingly.
+**First request after server boot is moderate** on OpenCL `-ngl 0`
+(~30-90 s depending on prompt length; no shader-JIT hit unlike the
+old Vulkan recipe). Subsequent turns at a 5k warm context take
+~13 s/turn (probe 3); at d=16k expect ~20-25 s/turn; at d=32k+
+~30-45 s/turn (PP path slowdown dominates the cold delta cost).
 
-CPU fallback if Vulkan acts up:
+Backend overrides:
 
 ```powershell
+# CPU fallback — simpler env, ~10-20% lower TG.
 .\scripts\serve_daily_driver.ps1 -Backend cpu
+
+# Vulkan rollback (DEPRECATED — segfaults at load on 856c3adac).
+# Only kept for the event that upstream restores the F16-off path.
+.\scripts\serve_daily_driver.ps1 -Backend vulkan
 ```
 
 Same opencode model id (`daily-driver` alias is set by both backends).
@@ -190,11 +215,27 @@ see `optimization.md` § Tier-2 quant sweep.
 
 ## Status
 
-Phase: **canonical config locked, 2026-04-27.** Phases 1-10c done;
-Vulkan is the daily-driver backend; opencode integration scripts
-landed. Open queues (see `optimization.md` "Things still open"):
-quality probe at 120k ctx, slot-save/-load to amortize d=120k cold
-prefill, FA upstream fix, ngram_mod cache-reuse workaround test.
+Phase: **canonical config revised 2026-05-13 (session 27).** Phases
+1-10c (2026-04-27) picked Vulkan as primary; that recipe broke when
+session 25's scheduled llama.cpp sweep landed PRs that segfault the
+`DISABLE_F16` env var at model load. Sessions 26-27 re-tested all
+backends at long ctx + delta-prefill and switched the primary to
+**OpenCL `-ngl 0` coprocessor mode**. opencode integration scripts
+unchanged; `serve_daily_driver.ps1 -Backend opencl` is the new default.
+
+Open queues (see `optimization.md` "Things still open"):
+- Quality probe at 120k ctx (was open under Vulkan; still open under
+  OpenCL `-ngl 0`)
+- slot-save/-load to amortize d=120k cold prefill
+- FA upstream fix
+- ngram_mod cache-reuse workaround test
+- **NEW**: TG measurement at d=131k on OpenCL `-ngl 0` (probe 1 ran
+  out of budget at d=32k; need to run with `slot_save_path` so the
+  d=131k state can be reused across measurements)
+- **NEW**: PR #22673 (MTP support) — once it merges to mainline,
+  test if MTP self-draft helps 35B-A3B's long-ctx TG (session 27 saw
+  +45-55% on Qwen3.6-27B Q4_0/Q8_0 — would be a big agent UX win)
+
 Update log lives in `optimization.md`; broader session log in
 `current_status.md` at repo root.
 

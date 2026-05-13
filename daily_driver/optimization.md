@@ -5,6 +5,55 @@ Append findings here; don't open a new doc unless the topic is worth
 its own life (per `docs/repo_hygiene.md`). The headline tables at the
 top are the answer; everything below is the work that produced them.
 
+## TL;DR (session 27 revision, 2026-05-13)
+
+**Phase 10c's "Vulkan as canonical primary" is invalidated by session
+25's llama.cpp sweep.** `GGML_VK_DISABLE_F16=1` STATUS_ACCESS_VIOLATIONs
+at model load on commit `856c3adac`. With only `PREFER_HOST_MEMORY=1`
+set, Vulkan PP collapses to ~6 t/s — unusable for long-ctx cold prefill.
+
+**New primary: OpenCL with `-ngl 0` (coprocessor mode).** Discovered in
+session 26 overnight perf sprint; validated in session 27 with three
+probes:
+
+1. **Long-ctx TG decay** (probe 1, `results/csv/probe1_35b_ngl0_longctx_2026-05-13.md`):
+   TG vs ctx for 35B-A3B MXFP4_MOE on OpenCL `-ngl 0 -t 18`:
+   d=0 → 28.7, d=8k → 24.8, d=32k → 14.5. Beats CPU-kleidiai at
+   every depth (+15%, +19%, +10% respectively).
+2. **131k load** (probe 2, subsumed in probe 1): model + 5.2 GB KV
+   fits comfortably at 27 GB resident on 48 GB system. Probe 1's
+   benches at d=65k/131k preroll exceeded 60-min budget so the actual
+   TG@131k number is extrapolated (~5-8 t/s); use llama-server with
+   slot-save/load for a real measurement.
+3. **Delta-prefill with cache_prompt** (probe 3,
+   `results/csv/probe3_delta_prefill_2026-05-13.md`): turn-1 cold @
+   5457 tokens = 86.8 s wall; turn-2 same prefix + 524 delta tokens =
+   13.5 s wall; turn-3 rerun = 1.6 s. Cache reuse works perfectly on
+   OpenCL `-ngl 0` — 4941/5461 tokens reused on turn 2.
+
+**Updated canonical (session 27)**:
+
+- **Primary**: `build-opencl + MXFP4_MOE + -ngl 0 -t 18 + f16 KV`.
+  No env vars. No `--no-warmup`. No `--flash-attn off` (FA livelock
+  isn't triggered on this path; still leaving `-fa` unset for
+  consistency with the CPU fallback).
+- **CPU fallback**: `build-cpu-kleidiai + Q4_K_M + -t 18 + f16 KV`.
+  Slightly slower (10-20% lower TG at every depth) but simpler env.
+- **Vulkan deprecated** until upstream restores the F16-off path.
+
+**Why OpenCL `-ngl 0` not `-ngl 99`**: full GPU offload craters TG
+(16 t/s vs 28-31 t/s at `-ngl 0` for d=0). Kernel-launch overhead per
+AR=1 token + GPU-resident-weights bandwidth penalty dominate. The
+agent loop is TG-bound (long cumulative ctx, short per-turn output);
+`-ngl 0` wins.
+
+**Open from this revision**:
+- Real TG@131k via slot-save/load (not bench-prefill).
+- MTP for 35B-A3B (PR #22673 just demonstrated +45-55% on 27B — should
+  test on 35B-A3B once #22673 merges to mainline OR build the PR fork).
+- Quality probe (needle in haystack at 120k) — same as before but on
+  the new backend.
+
 ## TL;DR (after tonight's session, 2026-04-27)
 
 **Canonical config (post-Phase-10c, 2026-04-27)**:

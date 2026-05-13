@@ -119,69 +119,104 @@ If a backend OOMs or refuses to offload the full model:
 ## 3. Serve via llama-server
 
 The daily-driver target is a coding agent at 120k+ context (see
-`README.md` § Primary use case). After the Phase 1-4 sweeps
-(2026-04-27) the canonical serve config landed simpler than expected:
+`README.md` § Primary use case).
 
-- `-c 131072` — 128k ctx, the realistic operating point
-- **No `-ctk q8_0 -ctv q8_0`** — GQA-2 architecture makes f16 KV at
-  131k cost only ~5 GB; quantizing it doesn't buy memory headroom we
-  need, AND f16+no-FA is **faster than q8+FA** (Phase 4: 15.27 vs
-  14.16 t/s at d=32k).
-- **No `-fa 1`** — Flash Attention with f16 KV livelocks on this
-  llama.cpp commit (`f53577432`) for both CPU and Vulkan paths.
-  Without FA, llama.cpp uses the regular attention path which works
-  cleanly. FA is only required when KV ≠ f16 (and the FA-on path's
-  performance penalty exceeds the KV-bandwidth savings at our depth).
-- **`--spec-type ngram-mod` is intentionally NOT recommended** here.
+**Recipe revision history.** Phase 1-10c (2026-04-27) picked Vulkan
+`+DISABLE_F16+PREFER_HOST_MEMORY` as the primary backend. **That
+config is broken on llama.cpp `856c3adac`** (session 25 sweep) — the
+`DISABLE_F16` env var STATUS_ACCESS_VIOLATIONs at model load. With
+only `PREFER_HOST_MEMORY` set, Vulkan PP collapses to ~6 t/s, making
+the long-ctx cold-start unusable. **Session 27 (2026-05-13) re-tested
+all available backends at long context** and switched the primary to
+**OpenCL with `-ngl 0`** — the "coprocessor mode" discovered in the
+overnight perf sprint.
+
+### Canonical config (session 27)
+
+- `-c 131072` — 128k ctx, the realistic operating point.
+- **OpenCL build with `-ngl 0`** — Adreno backend registered as a
+  coprocessor; model weights stay in CPU RAM, but the GPU still
+  accelerates select ops. **Beats pure-CPU TG by 10-20% at every
+  context depth measured.**
+- `-t 18` — all physical cores. (The `-t 16` rule from session 26
+  applies only to ≤14B dense models; for 35B-A3B the extra thread
+  wins because the MoE active-param compute scales.)
+- **No `-ctk q8_0 -ctv q8_0`** — GQA-2 + KV @ 131k = 5.2 GB f16, no
+  memory pressure to quantize. f16+no-FA is faster than q8+FA.
+- **No `-fa 1`** — Flash Attention with f16 KV livelocks at this
+  commit on both CPU and Vulkan. OpenCL `-ngl 0` is the regular
+  attention path; no FA flag needed.
+- **`--no-warmup` not needed** — no shader-JIT to defer like Vulkan
+  had. First-request startup is reasonable (~30-90 s for first
+  long prompt cold prefill).
+- **`--spec-type ngram-mod` is intentionally NOT recommended.**
   Phase 9b made it look like a +11-15% short-ctx win, but Phase 10's
   multi-turn delta-prefill bench found ngram_mod adds ~200 tokens of
   spurious re-prefill per turn when `cache_prompt=true` (the agent-
   loop default) — net **−60% UX per turn at d=16k+**. Avoid until
   that interaction is fixed upstream. See `optimization.md` § Phase 10.
 
-**Two canonical configs** (2026-04-27 update from Phase 8):
+### Session 27 measurements
 
-- **Vulkan + MXFP4_MOE** for long-ctx agent loops (d ≥ 16k or so).
-  Wins TG by +10.6% over CPU at d=32k and the gap should grow at
-  longer ctx (Vulkan's TG slope vs ctx is gentler than CPU's).
-  Pays a cold-prefill cost (~3.5× slower than CPU) which the agent
-  loop only experiences once per session.
-- **CPU + Q4_K_M** for short-ctx work (chat, single-shot, d ≤ 8k)
-  and as the fallback when Vulkan is unavailable. Wins TG at d=8k
-  by +19% over Vulkan.
+Probe 1 — TG vs ctx depth (`results/csv/probe1_35b_ngl0_longctx_2026-05-13.md`):
+
+| depth | OpenCL `-ngl 0` PP/TG | CPU-kleidiai PP/TG | OpenCL wins by |
+|---:|---:|---:|---:|
+|     0 | 198 / **28.7** | 176 / 24.9 | TG +15% |
+|  8192 | 132 / **24.8** | 126 / 20.8 | TG +19% |
+| 32768 |  59 / **14.5** |  59 / 13.2 | TG +10%, PP equal |
+
+(d=65k/131k bench preroll exceeded 60-min budget; trend extrapolates
+to TG ~5-8 t/s at d=131k. OpenCL is still expected to hold its
+~10-20% lead over CPU at any depth based on the curve.)
+
+Probe 3 — delta-prefill with `cache_prompt=true`
+(`results/csv/probe3_delta_prefill_2026-05-13.md`):
+
+| turn | prompt_n | cache_n | wall (s) | PP (t/s) | TG (t/s) |
+|---|---:|---:|---:|---:|---:|
+| 1 cold (5457 toks) | 5457 |    0 | 86.8 | 64.8 | 27.6 |
+| 2 (same prefix + 524 delta) | 524 | 4941 | **13.5** | 44.0 | 28.0 |
+| 3 (rerun, full cache hit)   |   4 | 5461 |  **1.6** | 57.8 | 28.4 |
+
+**Prefix-cache works flawlessly on OpenCL `-ngl 0`.** Turn 2 saved
+73 seconds by reusing 4941 cached tokens; turn 3 saved another 85
+seconds. The agentic loop is fast on the warm path.
+
+### Serve commands
 
 ```bash
-# Vulkan server — daily-driver default for the agent loop (Phase 10c)
-# --flash-attn off: FA + f16 KV livelocks on both CPU and Vulkan in
-#   this llama.cpp commit (Phase 4); default --flash-attn auto enables
-#   it during warmup and the server hangs. Will revisit once upstream
-#   fixes FA — could give Vulkan extra TG headroom.
-# --no-warmup: defers Vulkan shader-compilation to the first real
-#   request (otherwise it blocks startup beyond any reasonable health
-#   timeout). The first request pays a ~5 min one-time cost on top of
-#   its prefill; subsequent requests are normal.
-# Spec-decode flags (--spec-type / --lookup-cache-*) are NOT wired
-# into the Vulkan build at this commit and aren't recommended on CPU
-# either (Phase 10 found a slot-cache penalty).
+# Primary (session-27 canonical): OpenCL -ngl 0 + MXFP4_MOE
+llama.cpp/build-opencl/bin/llama-server.exe \
+    -m models/Qwen3.6-35B-A3B-MXFP4_MOE.gguf \
+    -ngl 0 -t 18 \
+    -c 131072 \
+    --alias daily-driver \
+    --host 127.0.0.1 --port 8080
+
+# CPU fallback — simpler env, ~10-20% lower TG, same memory footprint.
+# Use when troubleshooting OpenCL or running without GPU drivers.
+llama.cpp/build-cpu-kleidiai/bin/llama-server.exe \
+    -m models/Qwen3.6-35B-A3B-Q4_K_M.gguf \
+    -t 18 \
+    -c 131072 \
+    --alias daily-driver \
+    --host 127.0.0.1 --port 8080
+
+# Vulkan rollback (DEPRECATED at this commit) — kept for if/when
+# upstream restores the F16-off path. Currently segfaults at model
+# load with DISABLE_F16=1. With only HOST_MEMORY=1 set, PP drops
+# to ~6 t/s (unusable for cold prefill of long ctx).
 GGML_VK_DISABLE_F16=1 GGML_VK_PREFER_HOST_MEMORY=1 \
     llama.cpp/build-vulkan/bin/llama-server.exe \
         -m models/Qwen3.6-35B-A3B-MXFP4_MOE.gguf \
-        -ngl 99 \
-        -c 131072 \
+        -ngl 99 -c 131072 \
         --flash-attn off --no-warmup \
+        --alias daily-driver \
         --host 127.0.0.1 --port 8080
-
-# CPU fallback — only when Vulkan is unavailable, or for trivially
-# short single-turn chat. Phase 10c measured the agent-loop UX as
-# 21.8 s/turn here vs 13.2 s/turn on Vulkan at d=16k+.
-llama.cpp/build-cpu/bin/llama-server.exe \
-    -m models/Qwen3.6-35B-A3B-Q4_K_M.gguf \
-    -t 8 \
-    -c 131072 \
-    --host 127.0.0.1 --port 8080
 ```
 
-Both run with default KV (f16) and no `-fa`. KV stays f16 because:
+All run with default KV (f16) and no `-fa`. KV stays f16 because:
 
 - GQA-2 architecture makes the KV small (5.2 GB at 131k) — no
   memory pressure to quantize.
@@ -190,13 +225,18 @@ Both run with default KV (f16) and no `-fa`. KV stays f16 because:
   Vulkan.
 
 **Memory at 131k ctx**: model 22 GB + f16 KV 5.2 GB ≈ 27 GB resident.
-Comfortable on 48 GB system.
+Comfortable on 48 GB system. Adreno's default OpenCL 24 GB cap is not
+a problem at `-ngl 0` (weights live in CPU RAM, not GPU). If you ever
+need `-ngl 99` for a smaller model on 35B-A3B, set
+`GGML_OPENCL_ADRENO_USE_LARGE_BUFFER=1` to unlock the full 44 GB BIOS
+allocation via the `cl_qcom_large_buffer` extension — but `-ngl 99`
+on this MoE craters TG (16 vs 28-31 at `-ngl 0`) so don't.
 
-**OpenCL is not the recommended GPU path** despite winning Phase 1
-PP (180 t/s). At long ctx its TG drops to half of Vulkan's
-(8.58 vs 16.89 at d=32k) — Adreno OpenCL's per-token kernel-launch
-overhead dominates AR=1 decode. Use OpenCL only if Vulkan's
-~3.5× slower cold-prefill is unacceptable for your workload.
+**OpenCL `-ngl 99` is not recommended.** Phase 1 showed it winning PP
+(180 t/s on the old commit; 210 today) but TG drops by half (15-17
+t/s at `-ngl 99` vs 28-31 at `-ngl 0`). Per-token kernel-launch
+overhead and the bandwidth penalty of GPU-resident weights for AR=1
+decode dominate. The agent loop is TG-bound, so we want `-ngl 0`.
 
 OpenAI-compatible endpoint at `http://127.0.0.1:8080/v1/chat/completions`.
 Web UI at `http://127.0.0.1:8080`.
