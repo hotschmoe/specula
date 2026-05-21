@@ -2295,3 +2295,11 @@ numerically wrong? (It was verified to *run*, not to be *correct*.)
 4B w4a16 production run launched (`runs/qwen3_4b_w4a16`) — stages
 1-5 (~1h) run while the cos root cause is chased; if a stage-6 fix
 lands before 4B reaches AIMET, 4B restarts `--force-stage 6`.
+
+### cos: CPU == CUDA (2026-05-21 ~08:20)
+
+QuantSim w8a16 tf_enhanced run fully on CPU → cos 0.6548; CUDA →
+0.6568. Identical → the AIMET CUDA custom op on Blackwell is NOT the
+cause. The structural ~0.65 ceiling is real on both. `quant_ablation.py`
+running to bisect (disable param/activation/input quantizer groups).
+4B w4a16 run is in stage 6 (SEQ_MSE).
