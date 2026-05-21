@@ -67,11 +67,18 @@ def stage_optimum_export(
     out_dir.mkdir(parents=True, exist_ok=True)
     log = out_dir / "optimum_export.log"
     t0 = time.time()
+    # --opset 17: optimum 2.x / transformers 4.51 default to opset 18,
+    # which emits ReduceMean with `axes` as an INPUT tensor. qairt-converter
+    # 2.45 (and onnx2torch in AdaScale) only handle `axes` as an ATTRIBUTE,
+    # so opset 18 makes qairt-converter read a garbage Reduce axis and abort
+    # ("Reduce param axis must be >= 0 ..."). Opset 17 is the highest opset
+    # where ReduceMean still carries `axes` as an attribute. (2026-05-21)
     cmd = [
         str(venv_python.parent / "optimum-cli"),
         "export", "onnx",
         "--model", str(model_path),
         "--task", "text-generation-with-past",
+        "--opset", "17",
         str(out_dir),
     ]
     rc = _run(cmd, log_path=log)
