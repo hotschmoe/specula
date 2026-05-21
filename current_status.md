@@ -2086,26 +2086,39 @@ an incremental A/B vs Phase 4's 27B result.
 - Tokens: operator confirmed HF + AI Hub not needed (direct
   download; AI Hub configure step skipped). `gh` already authed.
 
-### BLOCKER: no AIMET build supports Blackwell (sm_120)
+### Blackwell (sm_120) compat — diagnosed, then RESOLVED
 
-- `torch 2.4.1+cu121` cannot run on this GPU — a real matmul fails
-  with `no kernel image is available`; `torch.cuda.get_arch_list()`
-  caps at sm_90. RTX Pro 6000 Blackwell is sm_120.
-- Binary-verified (cuobjdump on the wheels): **every** `aimet_onnx`
-  release through the latest 2.31.0 ships CUDA custom-op kernels
-  (`libaimet_onnxrt_ops.so`, an onnxruntime custom-op library) with
-  cubins/PTX only up to sm_90 / compute_90. No sm_120, no cu128
-  build. `compute_90` PTX cannot JIT forward-compile across the
-  major-version gap to sm_120.
-- torch ≥2.7 (cu128) and onnxruntime-gpu ≥1.24 (CUDA 13) DO support
-  Blackwell. AIMET does not, in any released version.
+Initial finding: `torch 2.4.1+cu121` cannot run on this GPU — a real
+matmul fails with `no kernel image is available`;
+`torch.cuda.get_arch_list()` caps at sm_90 and ships **no PTX**
+(`compute_*`). RTX Pro 6000 Blackwell is sm_120.
 
-### Adaptation plan (in progress)
+A research pass claimed AIMET would also be a hard blocker (its CUDA
+custom-op lib `libaimet_onnxrt_ops.so` ships cubins/PTX only to
+sm_90/compute_90). **That conclusion was wrong and we validated it
+empirically rather than assuming:**
 
-Rebuild the venv for Blackwell: `torch` cu128 (GPU) + `onnxruntime-gpu`
-≥1.24 Blackwell build (GPU) + `aimet_onnx` **`+cpu`** wheel (AIMET
-quant custom-ops on CPU; torch/ORT forward + AdaScale on GPU). Keep
-the venv path name unchanged so hard-coded scripts still resolve.
-AIMET stage will be partly CPU-bound — COLD_START's 6-8 hr estimate
-for 4B may extend. Smoke-test `aimet_onnx` QuantSim before the long
-runs. Then COLD_START steps 9-12.
+- **torch:** swapped to `torch 2.7.1+cu128` — arch list now includes
+  `sm_120` + `compute_120`; fp32 + bf16 matmul on the GPU verified.
+- **onnxruntime-gpu 1.23.2:** CUDA EP runs a real MatMul on Blackwell
+  fine — no version bump needed (research's #26177 concern N/A here).
+- **aimet_onnx 2.26.0+cu121:** the gamble. Smoke test
+  (`/workspace/runs/aimet_smoke.py`) — `QuantizationSimModel` with
+  `CUDAExecutionProvider`, `compute_encodings`, and `apply_seq_mse`
+  **all run on sm_120**. AIMET's `compute_90` PTX *does* JIT-forward-
+  compile onto Blackwell (PTX forward-compat spans major versions —
+  that is exactly what PTX is for). No `+cpu` wheel needed; GPU
+  AIMET is live.
+
+**Net change vs COLD_START spec:** only `torch` 2.4.1+cu121 →
+2.7.1+cu128. `onnxruntime-gpu 1.23.2` and `aimet_onnx 2.26.0+cu121`
+unchanged. Venv path name kept (`aimet-2.26-cu121-py310`) so
+hard-coded scripts still resolve. AdaScale (torch + onnx2torch, GPU)
+not yet isolated-tested — will be exercised by the COLD_START step 9
+0.6B run, which is the real gate.
+
+### Next: COLD_START steps 8b/9-12
+
+Configure dev `.bashrc` env vars, verify `qairt-converter` +
+`optimum-cli export onnx` end-to-end, then run 0.6B w8a16 (gate:
+cos ≥ 0.99), 0.6B w4a16, 4B w4a16.
