@@ -185,24 +185,45 @@ source ~/.bashrc       # picks up uv on PATH
 # Create the venv on the persistent volume so it survives teardown.
 uv venv /workspace/venvs/aimet-2.26-cu121-py310 --python 3.10
 
-# Activate + install Qualcomm's exact published line
+# Activate the venv
 source /workspace/venvs/aimet-2.26-cu121-py310/bin/activate
 
+# Core line. NOTE (verified 2026-05-21, qai-hub-models 0.54.0):
+#  - there is NO `qwen3-0_6b` extra (only `qwen3-4b`); 0.6B uses the
+#    same toolchain, it just isn't a qai-hub-models target.
+#  - qai-hub-models does NOT pull `optimum`; install it + `optimum-onnx`
+#    (optimum 2.x moved the `export onnx` subcommand into optimum-onnx)
+#    and `accelerate` (transformers 4.51 references init_empty_weights
+#    unconditionally — without accelerate the export dies NameError).
 uv pip install "qai-hub-models[qwen3-4b]" \
-               "qai-hub-models[qwen3-0_6b]" \
                onnxruntime-gpu==1.23.2 \
                https://github.com/quic/aimet/releases/download/2.26.0/aimet_onnx-2.26.0+cu121-cp310-cp310-manylinux_2_34_x86_64.whl \
+               optimum optimum-onnx accelerate \
                -f https://download.pytorch.org/whl/torch_stable.html
 ```
 
 This is the slow step (~10-15 min, ~6 GB of wheels). It's the
 one-time cost; future pods just `source` the venv.
 
+**Blackwell pods only (RTX Pro 6000, sm_120):** the torch pulled in
+above is a cu121 build with no sm_120 kernels — a real GPU matmul
+fails `no kernel image is available`. Swap the whole torch family to
+a cu128 build. `aimet_onnx 2.26`'s CUDA custom op JIT-compiles fine
+onto sm_120 from its `compute_90` PTX, and `onnxruntime-gpu 1.23.2`'s
+CUDA EP also runs on Blackwell — so **only torch** needs changing.
+(On A100/H100, sm_80-90, skip this — the cu121 stack runs native.)
+
+```bash
+uv pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 \
+               --index-url https://download.pytorch.org/whl/cu128
+```
+
 Sanity:
 
 ```bash
-python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
-# Expected: True NVIDIA RTX Pro 6000 (or NVIDIA A100-SXM4-80GB)
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0), torch.cuda.get_arch_list()[-1])"
+# Blackwell: True NVIDIA RTX PRO 6000 Blackwell ... compute_120
+# A100:      True NVIDIA A100-SXM4-80GB sm_90
 
 python -c "import aimet_onnx, onnxruntime; print(aimet_onnx.__version__, onnxruntime.__version__)"
 # Expected: 2.26.0+cu121 1.23.2
@@ -218,8 +239,12 @@ qai-hub configure --api_token "$AIHUB_TOKEN"
 qai-hub configure --api_token_query        # confirms it took
 ```
 
-Required for `qai-hub-models` package imports. AIMET itself pulls
-weights from HF, not AI Hub.
+Required only if you `import qai_hub_models` directly. **The
+`quantize_to_npu.py` pipeline does NOT** — it drives optimum +
+aimet_onnx + qairt-converter, none of which touch AI Hub. Verified
+2026-05-21: a full run reaches AIMET stage 6 with no AI Hub config.
+**This step is skippable** for the end-to-end pipeline. AIMET pulls
+weights from HF (or a local `--model-path`), not AI Hub.
 
 ### 6. Download QAIRT 2.45.40.260406 SDK to `/workspace/sdks/`
 
@@ -233,6 +258,17 @@ curl -sL -A "Mozilla/5.0" \
 unzip -q qairt-2.45.40.260406.zip
 rm qairt-2.45.40.260406.zip
 
+# NOTE (2026-05-21): the zip extracts to `qairt/<version>/`, not
+# `qairt-<version>/`. The scripts + ~dev/.bashrc hard-code the
+# `qairt-<version>` form — relocate it:
+mv /workspace/sdks/qairt/2.45.40.260406 /workspace/sdks/qairt-2.45.40.260406
+rmdir /workspace/sdks/qairt
+
+# qairt-converter's native bindings (libDlModelToolsPy.so) link
+# libc++, which is absent on the Ubuntu base image. Install it now
+# or `qairt-converter` fails with `ImportError: libc++.so.1`.
+sudo apt-get update && sudo apt-get install -y libc++1 libc++abi1
+
 # Verify the binaries are where dev's .bashrc expects them
 ls /workspace/sdks/qairt-2.45.40.260406/bin/x86_64-linux-clang/qairt-converter
 ls /workspace/sdks/qairt-2.45.40.260406/bin/x86_64-linux-clang/qnn-context-binary-generator
@@ -245,7 +281,8 @@ Re-source so PATH picks up the SDK:
 
 ```bash
 source ~/.bashrc
-qairt-converter --version       # expect 2.45.40.260406
+qairt-converter --help | head -1   # smoke test — should print usage,
+                                   # not an ImportError traceback
 ```
 
 ### 7. Pre-fetch the HF model weights
