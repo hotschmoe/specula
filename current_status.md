@@ -2444,3 +2444,22 @@ fully-fixed pipeline runs all 9 stages end-to-end and produces a
 structurally-correct, HTP-compilable bundle. Probe cos 0.557 (int16
 activation gap — documented open item). Launching 0.6B w4a16
 (`--force-stage 6`) alongside the 4B run.
+
+### V/O pin ↔ AdaScale conflict (2026-05-21 ~12:25)
+
+0.6B w4a16 (V/O pin + AdaScale) failed stage 7: qairt-converter
+`weights: For Per-channel, offset must be 0 or -2^(bw-1)`. Cause:
+AdaScale uses a single global `ADASCALE_PARAM_BW` (=4 for w4a16) to
+write weight encodings; the V/O-pinned w8 weights then get a bw-4
+offset (−8) in a bw-8 slot → invalid. AdaScale doesn't compose with
+mixed-bitwidth weights. (The repo never hit this — V/O pin bumped
+0/72 before the lookup fix.)
+
+**Resolution:** run w4a16 with `--no-use-ada-scale`. SEQ_MSE computes
+per-tensor encodings at each quantizer's own bitwidth (w8 V/O, w4
+rest) → valid offsets → qairt-converter passes. AdaScale was not
+moving the probe cos anyway (the cos gap is int16 activations, a
+weight technique can't fix it), and it's the ~2 h bottleneck — so
+dropping it for w4a16 is the right call. Both w4a16 runs restarted
+`--no-use-ada-scale`. (Proper fix for later: make AdaScale honor
+per-quantizer bitwidth, or recompute V/O encodings post-pin.)
