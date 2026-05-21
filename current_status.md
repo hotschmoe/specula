@@ -2255,3 +2255,18 @@ w8a16 ONNX cleanly → `INFO_CONVERSION_SUCCESS`, 732 MB DLC. Only
   (numpy 2.2.6, torch 2.7.1+cu128). Stages 1-6.
 - `/workspace/venvs/qairt-py310` — qairt-converter only (numpy
   1.26.4). Stage 7.
+
+### MILESTONE (2026-05-21 ~07:50) — first complete end-to-end bundle
+
+The full 9-stage pipeline ran end-to-end on Qwen3-0.6B w8a16:
+`runs/qwen3_0p6b_w8a16_op17_ada/09_bundle_w8a16/qwen3-0p6b-w8a16-pathb-ctx512-x2e.tar`
+(0.81 GB). Stages 7-9 (qairt-converter → 732 MB DLC →
+qnn-context-binary-generator → 728 MB .bin → bundle tar) all pass
+with the numpy-1.x venv fix. **The pipeline is structurally
+unblocked** — optimum/pathb/AIMET+AdaScale/qairt/qnn all work on
+the Blackwell pod.
+
+**Open: quantization quality.** Probe cos(fp,q) = 0.557 (gate 0.99).
+AdaScale ran 28/28 blocks but only nudged cos 0.535→0.557.
+`runs/cos_diag.py` is sweeping quant schemes / bitwidths to localise
+the cause (min_max-forced-by-SEQ_MSE vs tf_enhanced vs structural).
