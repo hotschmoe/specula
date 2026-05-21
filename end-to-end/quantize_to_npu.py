@@ -100,6 +100,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--vo-pin-w8", action=argparse.BooleanOptionalAction, default=None,
                    help="Pin V/O proj weight bw to 8 (mitigates W4A16 V/O collapse). "
                         "Default: on for w4a16, off for w8a16.")
+    p.add_argument("--mask-clip-min", type=float, default=None,
+                   help="P2 (docs/w4a16_ablation.md A1): clamp the causal-mask "
+                        "additive sentinel (-3.4e38) to this value. Qualcomm uses "
+                        "-100.0. Default: off (no clamp).")
 
     # Infra knobs.
     p.add_argument("--qairt-root", type=Path, default=DEFAULT_QAIRT_ROOT)
@@ -218,6 +222,7 @@ def main() -> int:
             cuda=args.cuda, log_path=log_path,
             export_prefix=export_prefix,
             model_info=model_info,
+            mask_clip_min=args.mask_clip_min,
         )
         with open(aimet_done_marker, "w") as f:
             json.dump(info, f, indent=2, default=str)

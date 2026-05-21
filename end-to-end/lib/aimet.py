@@ -380,6 +380,42 @@ def _bump_vo_to_w8(qsim, vo_weight_names: list[str]) -> int:
     return bumped
 
 
+def _clamp_mask_sentinels(model_proto, clip_min: float, log) -> int:
+    """P2 (docs/qai_hub_recipe.md §(c) P2 / docs/w4a16_ablation.md A1):
+    clamp the causal-mask additive sentinel from -FLT_MAX (-3.4e38) to
+    `clip_min` (Qualcomm's value is -100).
+
+    The pathb `fold-pathbmask` rewrite builds the causal mask with a
+    -3.4e38 "−inf" fill (Constant / ConstantOfShape). The folded mask
+    tensor `/model/ScatterND_output_0` IS int16 activation-quantized
+    (verified: P0 encoding scale ~1.5e-7) — a -3.4e38 sentinel is wildly
+    outside any int16 range, so masked positions saturate. Clamping to
+    -100 keeps the mask functionally -inf for softmax (e^-100 ≈ 4e-44)
+    while quantizing cleanly. Rewrites every Constant / ConstantOfShape
+    whose (min) value is <= -1e4. Returns the count clamped.
+    """
+    import onnx.numpy_helper as _nh
+    n_clamped = 0
+    for node in model_proto.graph.node:
+        if node.op_type not in ("Constant", "ConstantOfShape"):
+            continue
+        for attr in node.attribute:
+            if attr.type != onnx.AttributeProto.TENSOR:
+                continue
+            try:
+                arr = _nh.to_array(attr.t)
+            except Exception:
+                continue
+            if not np.issubdtype(arr.dtype, np.floating) or arr.size == 0:
+                continue
+            if float(np.min(arr)) <= -1e4:
+                new = np.full(arr.shape, clip_min, dtype=arr.dtype)
+                attr.t.CopyFrom(_nh.from_array(new, attr.t.name))
+                n_clamped += 1
+                log(f"  [P2] clamped {node.name} ({node.op_type}) -> {clip_min}")
+    return n_clamped
+
+
 def run_aimet(
     *,
     src_dir: Path,
@@ -398,6 +434,7 @@ def run_aimet(
     log_path: Path,
     export_prefix: str,
     model_info=None,  # lib.model_config.ModelInfo (optional for back-compat)
+    mask_clip_min=None,  # P2: clamp causal-mask sentinel to this (e.g. -100.0)
 ) -> dict:
     """Run the AIMET stage. Returns a dict of metrics + paths."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -482,6 +519,14 @@ def run_aimet(
     _log(f"[aimet 4] building QuantSim "
          f"param={param_type} activation={activation_type} scheme={effective_quant_scheme}")
     model_proto = onnx.load(str(src_dir / "model.onnx"), load_external_data=True)
+    # ---- 4a. P2 mask-clip (optional) — clamp the causal-mask sentinel
+    # BEFORE QuantSim build so the quantizer observes the clamped range.
+    if mask_clip_min is not None:
+        n_clamped = _clamp_mask_sentinels(model_proto, float(mask_clip_min), _log)
+        _log(f"[aimet 4a] P2 mask-clip: clamped {n_clamped} mask sentinel "
+             f"constant(s) to {mask_clip_min}")
+        info["stages"]["4a_mask_clip"] = {"clamped": n_clamped,
+                                          "clip_min": float(mask_clip_min)}
     # Detect V/O proj weight names on the CLEAN graph — QuantizationSimModel
     # mutates model_proto in place (wraps weights in QcQuantizeOp), so a
     # v_proj/o_proj MatMul's input[1] becomes `<weight>_qdq` afterwards and
