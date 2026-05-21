@@ -2434,3 +2434,13 @@ Runs restarted with int16: 4B w4a16 + 0.6B w8a16 (`--force-stage 6`).
 They will produce **complete, HTP-compilable bundles** (structural
 end-to-end recreation); probe cos is expected low pending the int16
 calibration fix.
+
+### 0.6B w8a16 int16 — complete bundle (2026-05-21 ~11:46)
+
+`runs/qwen3_0p6b_w8a16_fix/09_bundle_w8a16/qwen3-0p6b-w8a16-pathb-ctx512-x2e.tar`
+(806 MB): `.bin` (763 MB HTP context binary) + `.encodings` (32 MB) +
+`bin_info.json` + `metadata.json` + config/tokenizer. Confirms the
+fully-fixed pipeline runs all 9 stages end-to-end and produces a
+structurally-correct, HTP-compilable bundle. Probe cos 0.557 (int16
+activation gap — documented open item). Launching 0.6B w4a16
+(`--force-stage 6`) alongside the 4B run.
