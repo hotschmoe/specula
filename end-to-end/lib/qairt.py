@@ -10,6 +10,13 @@ import subprocess
 import time
 from pathlib import Path
 
+# qairt-converter is a Python script and QAIRT 2.45's compiled bindings
+# (ir_graph / libDlModelToolsPy) are built against the numpy 1.x C ABI.
+# Run under a numpy-2.x venv and every IrStaticTensor handoff (Reduce
+# axes, Reshape shapes) reads garbage in C++ ("Reduce param axis ...
+# get:<garbage>"). This dedicated venv pins numpy 1.26.4 for stage 7.
+CONVERTER_VENV = Path("/workspace/venvs/qairt-py310")
+
 
 def env_with_qairt(qairt_root: Path, venv_root: Path) -> dict[str, str]:
     """PATH/LD_LIBRARY_PATH/PYTHONPATH set up so qairt-converter +
@@ -42,16 +49,21 @@ def run_qairt_converter(
     accepts {SM8845, SM8850, SM8850L} which don't map to v75 anyway;
     HTP arch gets pinned at the binary-generator step instead.
     """
-    env = env_with_qairt(qairt_root, venv_root)
+    # Run the qairt-converter Python script under the numpy-1.x venv
+    # (see CONVERTER_VENV note above) — invoke its interpreter explicitly
+    # rather than relying on the shebang + PATH.
+    conv_venv = CONVERTER_VENV if CONVERTER_VENV.exists() else venv_root
+    env = env_with_qairt(qairt_root, conv_venv)
+    converter = qairt_root / "bin" / "x86_64-linux-clang" / "qairt-converter"
     cmd = [
-        "qairt-converter",
+        str(conv_venv / "bin" / "python"), str(converter),
         "--input_network", str(onnx_path),
         "--output_path", str(dlc_path),
         "--quantization_overrides", str(encodings_path),
         "--preserve_io_datatype",
     ]
     t0 = time.time()
-    print(f"[qairt-converter] {' '.join(cmd)}")
+    print(f"[qairt-converter] (venv={conv_venv.name}) {' '.join(cmd)}")
     with open(log_path, "w") as logf:
         rc = subprocess.run(cmd, env=env, stdout=logf, stderr=subprocess.STDOUT).returncode
     wall = time.time() - t0
