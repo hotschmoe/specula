@@ -389,46 +389,59 @@ def _bump_vo_to_w8(qsim, vo_weight_names: list[str]) -> int:
     return bumped
 
 
-def _build_kv_io_map(sim) -> dict[str, str]:
+def _build_kv_io_map(sim, log=None) -> dict[str, str]:
     """Build the past->present KV tensor map for OUR pathb graph.
 
     docs/qai_hub_recipe.md §(c) P1. qai-hub-models' `_get_kv_io_map`
     matches `"past_key"`/`"past_value"` substrings in BOTH graph input
-    AND output names. That works for Qualcomm's own export (their KV
-    outputs are `past_key_*_out` etc.) but NOT for ours: our pathb
-    rewrite (`lib/split.py`) names KV INPUTS `past_key_values.{i}.key`
-    / `past_key_values.{i}.value` (these contain "past_key"/"past_value"
-    — fine) and KV OUTPUTS `present.{i}.key` / `present.{i}.value`
-    (these do NOT contain "past_key" — so `_get_kv_io_map` would yield
-    an empty/wrong map). We therefore build the map ourselves by
-    inspecting the actual QuantSim graph inputs/outputs and pairing
-    `past_key_values.{i}.{key,value}` with `present.{i}.{key,value}`.
+    AND output names. That works for Qualcomm's own export (KV outputs
+    `past_key_*_out`) but NOT for ours: our pathb rewrite names KV
+    INPUTS `past_key_values.{i}.{key,value}` and KV OUTPUTS
+    `present.{i}.{key,value}` — `present.*` contains no "past_key"
+    substring, so qai-hub's map would be empty. We build it ourselves.
 
-    Returns {input_tensor_name: output_tensor_name}. Only pairs where
-    BOTH names are present in the graph are included (so the downstream
-    `_get_enabled_quantizer` calls — which raise KeyError on a missing
-    tensor — are safe).
+    Two things this MUST get right (the first version got both wrong
+    and the map silently came back empty -> KV int8 tying skipped):
+      * graph access — AIMET's QuantizationSimModel exposes the graph
+        as `sim.model.graph()` (a METHOD; that is what aimet's own
+        quantsim.py and qai-hub's `_get_kv_io_map` use). `sim.model.
+        model.graph` is not it.
+      * `_updated` suffix — QuantSim may rename `present.*` outputs to
+        `present.{i}.{kind}_updated`; qai-hub's `_get_kv_io_map` strips
+        exactly that. We match on the parsed (layer, kind) so suffixes
+        don't matter, and strip `_updated` from the returned value.
+
+    Returns {past_input_name: present_output_name}, present name
+    `_updated`-stripped (mirrors qai-hub). Only pairs where both sides
+    exist (`_get_enabled_quantizer` KeyErrors on a missing tensor).
     """
-    graph = sim.model.model.graph
-    in_names = {t.name for t in graph.input}
-    out_names = {t.name for t in graph.output}
+    graph = sim.model.graph()
+    in_names = [t.name for t in graph.input]
+    out_names = [t.name for t in graph.output]
 
-    # Discover layer indices from the `past_key_values.{i}.key` inputs.
-    layer_ids: set[int] = set()
-    for name in in_names:
-        if name.startswith("past_key_values.") and name.endswith(".key"):
-            try:
-                layer_ids.add(int(name.split(".")[1]))
-            except (IndexError, ValueError):
-                continue
+    def _parse(name: str):
+        # -> (layer_idx, "key"|"value") or None; tolerates a trailing
+        # `_updated` and any past_key_values./present. style prefix.
+        m = re.search(r"\.(\d+)\.(key|value)(?:_updated)?$", name)
+        return (int(m.group(1)), m.group(2)) if m else None
 
-    kv_io_map: dict[str, str] = {}
-    for i in sorted(layer_ids):
-        for kind in ("key", "value"):
-            in_t = f"past_key_values.{i}.{kind}"
-            out_t = f"present.{i}.{kind}"
-            if in_t in in_names and out_t in out_names:
-                kv_io_map[in_t] = out_t
+    past_in: dict[tuple, str] = {}
+    for n in in_names:
+        if "past_key" in n or "past_value" in n:
+            k = _parse(n)
+            if k is not None:
+                past_in[k] = n
+    present_out: dict[tuple, str] = {}
+    for n in out_names:
+        if n.startswith("present.") or "past_key" in n or "past_value" in n:
+            k = _parse(n)
+            if k is not None:
+                present_out[k] = n.replace("_updated", "")
+
+    kv_io_map = {past_in[k]: present_out[k] for k in past_in if k in present_out}
+    if log is not None and not kv_io_map:
+        log(f"[aimet 4d] _build_kv_io_map: 0 pairs — inputs sample="
+            f"{in_names[:4]} outputs sample={out_names[:4]}")
     return kv_io_map
 
 
@@ -465,7 +478,7 @@ def _apply_w4a16_precision_config(sim, log) -> dict:
         _apply_int8_kv_cache_tying_and_lm_head,
     )
 
-    kv_io_map = _build_kv_io_map(sim)
+    kv_io_map = _build_kv_io_map(sim, log)
     log(f"[aimet 4d] P1: built kv_io_map with {len(kv_io_map)} entries "
         f"(pathb past_key_values.* -> present.*)")
     if not kv_io_map:
