@@ -2532,13 +2532,24 @@ precision, AIMET quant-config op exclusions matching Qualcomm.
 **B. 4B multi-part split.** A 4B model's single `.bin` exceeds the
 HTP 3.5 GB serializer limit → must split (Qualcomm ships 4 parts).
 `compile_split_bundle.py`/`lib/split.py` extracts parts but parts ≥3
-fail — `extract_part` walks back to `input_ids` because the layers
-consume *processed* shared-preamble tensors (cos/sin/mask) that the
-PartSpec doesn't declare as cross-part I/O (same root cause as the
-AdaScale shared-preamble bug). Fix: `build_part_specs` must declare
-the real preamble-output tensors as part inputs (and thread them
-through the multi-part I/O contract). This is the last mile for a
-complete 4B bundle.
+fail. **Precise diagnosis:** exactly ONE shared tensor —
+`/model/ScatterND_output_0` (the internal attention mask, produced by
+`/model/ScatterND`, consumed by every layer's `self_attn/Slice_4`,
+all 36 layers) — is a real cross-part dependency that
+`build_part_specs` does not declare. Parts 1-2 absorb the preamble
+that produces it; parts 3-4 consume it but their PartSpec only
+declares `attention_bias` — which is DEAD in this graph (part2
+warned "declared inputs not reached: ['attention_bias']"). So
+`extract_part` for part3 walks the undeclared mask back to the embed
+Gather → `input_ids` → error.
+**Fix recipe** (next session): in `lib/split.py build_part_specs`,
+thread `/model/ScatterND_output_0` as cross-part I/O — part2 (and any
+middle part) adds it to `outputs`, parts 3..N add it to `inputs`
+(drop the dead `attention_bias`); needs the tensor's shape via
+`onnx.shape_inference` (not in value_info) and verification that
+genie routes a part-2 output to parts 3-4 (X2E-side, untestable on
+the cloud pod). 4B is fully quantized (`06_aimet_*`); this packaging
+step is the only thing between here and a complete 4B bundle.
 
 ### Environment (persistent on /workspace, for WARM_START)
 
