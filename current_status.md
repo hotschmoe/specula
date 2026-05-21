@@ -2463,3 +2463,11 @@ weight technique can't fix it), and it's the ~2 h bottleneck — so
 dropping it for w4a16 is the right call. Both w4a16 runs restarted
 `--no-use-ada-scale`. (Proper fix for later: make AdaScale honor
 per-quantizer bitwidth, or recompute V/O encodings post-pin.)
+
+### w4a16 path UNBLOCKED — embed fix works (2026-05-21 ~13:15)
+
+0.6B w4a16 produced a **complete bundle** (940 MB) — embed pin
+(`[aimet 4c] 1/1 → int16 per-tensor`) + V/O pin (56/56) +
+`--no-use-ada-scale`. All stages 1-9 pass. The full w4a16 recipe is:
+SEQ_MSE (no AdaScale) + V/O-w8 pin + embed-w16 pin. 4B w8a16 is
+finishing; 4B w4a16 to run next (reusing pathb stages).
