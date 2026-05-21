@@ -297,6 +297,49 @@ def _detect_vo_proj_weight_tensors(model: onnx.ModelProto) -> list[str]:
     return found
 
 
+def _detect_embedding_weight(model: onnx.ModelProto) -> list[str]:
+    """Find the embedding-table weight (input[0] of the embed Gather).
+
+    A Gather is a row copy — no arithmetic — so QNN requires its output
+    encoding to equal its input (table) encoding. With w4a16 the table
+    defaults to int4/per-channel while the Gather output activation is
+    int16/per-tensor; qnn-context-binary-generator then rejects the op
+    (`/model/embed_tokens/Gather ... offset -8, expected -136`). The
+    table must be pinned to match the int16 per-tensor activation.
+    """
+    found: list[str] = []
+    for node in model.graph.node:
+        if node.op_type == "Gather" and node.name and "embed" in node.name.lower():
+            if node.input:
+                found.append(node.input[0])  # data tensor = embedding table
+    return found
+
+
+def _pin_embedding_w16(qsim, emb_weight_names: list[str]) -> int:
+    """Pin embedding-table weight quantizers to int16, per-tensor — so the
+    embed Gather's table encoding matches its int16 per-tensor output."""
+    qmap = getattr(qsim, "qc_quantize_op_dict", None) or {}
+    pinned = 0
+    for w in emb_weight_names:
+        q = qmap.get(w)
+        if q is None:
+            continue
+        try:
+            q.bitwidth = 16
+        except Exception:
+            try:
+                q.set_bitwidth(16)
+            except Exception:
+                continue
+        # per-tensor (the Gather output activation is per-tensor)
+        try:
+            q.enable_per_channel_quantization = False
+        except Exception:
+            pass
+        pinned += 1
+    return pinned
+
+
 def _bump_vo_to_w8(qsim, vo_weight_names: list[str]) -> int:
     """Override the param-quantizer bitwidth for V/O proj weights to 8.
 
@@ -445,6 +488,7 @@ def run_aimet(
     # no longer matches qc_quantize_op_dict keys. Detecting post-build is
     # why the V/O w8 pin silently bumped 0/N. (2026-05-21)
     vo_weight_names = _detect_vo_proj_weight_tensors(model_proto)
+    emb_weight_names = _detect_embedding_weight(model_proto)
     sim = QuantizationSimModel(
         model_proto,
         param_type=param_type, activation_type=activation_type,
@@ -470,6 +514,17 @@ def run_aimet(
         info["stages"]["4b_vo_pin_w8"] = {"wall_s": time.time() - t0,
                                           "detected": len(vo_weight_names),
                                           "bumped": bumped}
+
+    # ---- 4c. embedding-table pin — int16 per-tensor, pre-SEQ_MSE.
+    # Only matters when weights would otherwise be < 16-bit (w4a16):
+    # the embed Gather needs its table encoding == its int16 output.
+    if param_type != "int16":
+        t0 = time.time()
+        pinned = _pin_embedding_w16(sim, emb_weight_names)
+        _log(f"[aimet 4c] embedding pin: {pinned}/{len(emb_weight_names)} "
+             f"embed-table weights → int16 per-tensor ({time.time() - t0:.1f}s)")
+        info["stages"]["4c_embedding_pin"] = {"detected": len(emb_weight_names),
+                                              "pinned": pinned}
 
     # ---- 5. SEQ_MSE (optional, run BEFORE compute_encodings) ----
     if use_seq_mse:
