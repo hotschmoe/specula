@@ -2575,3 +2575,101 @@ QAIRT 2.45 SDK, models, Qualcomm reference. The 4B w4a16 run was
 stopped (no bundle — blocked by task #13). All monitors + background
 shells removed. **Op note:** keep `/workspace` lean — 200 GB cap;
 AIMET stage 1-5 intermediates are ~16 GB each for 4B, prune them.
+
+---
+
+## Session 29 (2026-05-21) — 4B split fixed; first complete 4B bundle
+
+**Outcome:** the two open items from Session 28's task #13 are resolved.
+`lib/split.py` now splits the 4B pathb graph into 4 weight-sharing
+parts that compile all the way through qairt-converter +
+qnn-context-binary-generator, and the first **complete 4B bundle**
+(w8a16, 4-part genie, 4.53 GB) is on disk. The 4B w4a16 AIMET run
+that was interrupted mid-SEQ_MSE has been re-run to completion.
+
+### split.py — root cause + fix (2026-05-21 ~14:40)
+
+Two bugs, both now fixed in `lib/split.py`:
+
+1. **Cross-part attention mask.** transformers exports the causal
+   mask as an internal `ScatterND`; the pathb `fold-pathbmask`
+   rewrite folds it in and leaves the original `attention_bias`
+   graph input **dead** (0 consumers — confirmed). The folded mask
+   `/model/ScatterND_output_0` is built once in a 173-node preamble
+   and consumed by a `Slice` in all 36 layers' `self_attn`. After a
+   4-way split the preamble lands wholly inside part2, so parts 3-4
+   had no producer for the mask and `extract_part`'s back-walk fell
+   through to `input_ids` → the `RuntimeError`.
+   **Fix:** `detect_shared_attn_mask()` finds the tensor structurally
+   (fed to a `Slice` in >=2 distinct layers). `build_part_specs`
+   threads it as cross-part I/O — part2 exports it, the last part
+   imports it, middle parts pass it through (import + re-export, a
+   bare input==output graph edge). The dead `attention_bias` is
+   dropped from every decoder part. Mask shape `[1,1,1,ctx]` FLOAT
+   (== the old `attention_bias` shape; verified by running the mask
+   subgraph). This matches Qualcomm's reference topology — every
+   decoder part takes the mask per-part (their genie feeds it; ours
+   threads the folded one).
+2. **Encodings schema.** `split_encodings` only handled the legacy
+   name-keyed-dict schema; AIMET 2.26 emits the **1.0.0 list**
+   schema (`activation_encodings`/`param_encodings` are lists of
+   `{"name": ...}` objects). Added a format-aware subsetter
+   (`_subset_encoding_section`) handling both.
+
+Validated end-to-end on the 4B w8a16 AIMET output: all 4 parts
+extract (part3 = 3112 nodes, previously crashed), `onnx.checker`
+passes on every part (incl. part3's mask passthrough), all 4 parts
+clear qairt-converter (`INFO_CONVERSION_SUCCESS`) and
+qnn-context-binary-generator. **Untested (X2E-side):** whether the
+genie runtime routes part2's mask output through to parts 3-4 — the
+pass-through design covers a strict consecutive-wiring runtime.
+
+### First complete 4B bundle — w8a16 (2026-05-21 ~14:59)
+
+`compile_split_bundle.py --precision w8a16 --num-parts 4 --dsp-arch
+v81` ran clean: split → qairt ×4 → qnn ×4 → genie bundle.
+`runs/qwen3_4b_w4a16/09b_bundle_w8a16/qwen3-4b_w8a16_pathb_ctx512_x2e_v81.tar`
+(4.53 GB). Per-part `.bin`: 389 MB / 1221 MB / 1221 MB / 1613 MB —
+**all under the 3.5 GB HTP serializer ceiling** that blocked the
+single-bin path. Bundle carries `genie_config.json`,
+`htp_backend_ext_config.json`, `metadata.json`, `bin_info/`,
+`encodings/`, tokenizer — matches the Qualcomm reference layout.
+Probe cos 0.44 (the int16-activation quality gap, still open).
+
+### 4B w4a16 AIMET re-run — complete (2026-05-21 ~14:53)
+
+The Session-28 4B w4a16 run (interrupted mid-SEQ_MSE) was re-run.
+Stages 1-5 regenerated (they had been pruned in cleanup), then AIMET
+stage 6 with the full fixed recipe: SEQ_MSE, `--no-use-ada-scale`,
+**V/O-w8 pin bumped 72/72**, embed-w16 pin 1/1. Output at
+`runs/qwen3_4b_w4a16/06_aimet_w4a16/`. Probe cos 0.51 (int16 gap).
+The single-bin stages 7-9 were skipped (not valid for 4B); the
+multi-part `compile_split_bundle.py --precision w4a16` is the path.
+
+### 4B w4a16 bundle — complete (2026-05-21 ~15:12)
+
+`compile_split_bundle.py --precision w4a16` ran clean through the
+fixed split. `09b_bundle_w4a16/qwen3-4b_w4a16_pathb_ctx512_x2e_v81.tar`
+(3.72 GB). Per-part `.bin`: 778 / 694 / 694 / 1475 MB — part1 (embed)
+is ~2× the w8a16 389 MB because w4a16 pins the embed table to int16.
+Both 4B bundles are now on disk; the Session-28 4B packaging blocker
+(task #13) is closed.
+
+Cleanup: pruned the split/DLC/bin intermediates + the w4a16 stage-5
+ONNX (~50 GB). Kept on `runs/qwen3_4b_w4a16/`: both `06_aimet_*`
+AIMET outputs (16 GB each), both `09b_bundle_*` bundles (tar + dir).
+`/workspace` at 84 GB.
+
+### Still open
+
+- **int16 activation cos gap** — unchanged from Session 28. 4B probe
+  cos 0.44 (w8a16) / 0.51 (w4a16). Structural pipeline is correct;
+  this is a calibration/quant-config gap vs Qualcomm's recipe.
+- **Genie part-to-part mask routing** — needs X2E hardware to confirm
+  the threaded mask reaches parts 3-4. Note Qualcomm's reference
+  bundle instead feeds `attention_mask` to every decoder part from
+  the runtime (genie computes it, like RoPE) — if our genie wiring
+  turns out to need that, the alternative is to expose the mask as a
+  per-part input named `attention_mask` rather than threading the
+  pathb-folded one. Decided to thread (preserves pathb's
+  self-contained-mask design); revisit if hardware says otherwise.

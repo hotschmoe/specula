@@ -26,7 +26,9 @@ encodings JSON the same way so qairt-converter
 from __future__ import annotations
 
 import json
+import re
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -43,14 +45,62 @@ class PartSpec:
     outputs: list[tuple]
 
 
+def detect_shared_attn_mask(model: onnx.ModelProto) -> Optional[str]:
+    """Return the pathb internal attention-mask tensor name, or None.
+
+    transformers 4.51 exports the causal mask as an internal subgraph
+    (a `ScatterND`); the pathb `fold-pathbmask` rewrite folds that in and
+    leaves the original `attention_bias` graph input dead. The folded mask
+    is built ONCE in the model preamble and then consumed by a `Slice`
+    inside every decoder layer's `self_attn`.
+
+    In a single-bin model that is fine. In an N-part split the preamble
+    lands wholly inside the first decoder part, so the mask becomes a
+    genuine cross-part tensor — it must be threaded from the part that
+    produces it into every later part that consumes it. We identify it
+    structurally: the one tensor fed to a `Slice` in >=2 distinct layers'
+    `self_attn` (no false positives — per-layer Slices touch per-layer
+    tensors; only the shared mask spans layers).
+    """
+    layers_for_tensor: dict[str, set[int]] = defaultdict(set)
+    for n in model.graph.node:
+        if n.op_type != "Slice":
+            continue
+        mm = re.match(r"/model/layers\.(\d+)/self_attn/", n.name or "")
+        if not mm:
+            continue
+        li = int(mm.group(1))
+        for inp in n.input:
+            if inp:
+                layers_for_tensor[inp].add(li)
+    shared = sorted(t for t, ls in layers_for_tensor.items() if len(ls) >= 2)
+    if not shared:
+        return None
+    if len(shared) > 1:
+        raise RuntimeError(
+            "split: expected exactly one cross-layer self_attn mask tensor, "
+            f"found {len(shared)}: {shared}. The cross-part threading logic "
+            "assumes a single shared mask — extend it before proceeding."
+        )
+    return shared[0]
+
+
 def build_part_specs(
     *, num_layers: int, hidden_size: int, vocab_size: int,
     num_kv_heads: int, head_dim: int, ctx: int,
-    num_parts: int = 4,
+    num_parts: int = 4, shared_mask: Optional[str] = None,
 ) -> list[PartSpec]:
     """Layout: part 1 is embed-only; the remaining (num_parts - 1) parts
     each take an even slice of layers; the last part absorbs the residual
-    layers + norm + lm_head → logits."""
+    layers + norm + lm_head → logits.
+
+    `shared_mask`, if given, is the pathb internal attention-mask tensor
+    (see `detect_shared_attn_mask`). It is threaded as cross-part I/O: the
+    first decoder part produces and exports it, the last part imports it,
+    and middle parts pass it through (import + re-export) so it reaches
+    every decoder part even under a strict consecutive-wiring runtime.
+    The dead `attention_bias` graph input is dropped from every part.
+    """
     if num_parts < 2:
         raise ValueError("num_parts must be >= 2 (embed + at least one decoder part)")
 
@@ -59,10 +109,13 @@ def build_part_specs(
 
     past = ctx - 1
     hidden_shape = [1, 1, hidden_size]
+    mask_shape = [1, 1, 1, ctx]
 
     def decode_inputs(start: int, end: int) -> list[tuple]:
+        # `attention_bias` is intentionally absent — the pathb rewrite folds
+        # the mask into the graph (see `shared_mask` threading below) and
+        # leaves the original `attention_bias` input dead.
         items = [
-            ("attention_bias", TensorProto.FLOAT, [1, 1, 1, ctx]),
             ("position_ids_cos", TensorProto.FLOAT, [1, 1, head_dim]),
             ("position_ids_sin", TensorProto.FLOAT, [1, 1, head_dim]),
         ]
@@ -112,10 +165,28 @@ def build_part_specs(
             seam_out = (f"/model/layers.{layer_end}/Add_1_output_0",
                         TensorProto.FLOAT, hidden_shape)
 
+        part_inputs = ([(seam_in, TensorProto.FLOAT, hidden_shape)]
+                       + decode_inputs(layer_start, layer_end))
+        part_outputs = [seam_out] + decode_outputs(layer_start, layer_end)
+
+        # Thread the pathb internal attention mask across parts. The first
+        # decoder part (pi == 2) produces it natively in the preamble it
+        # absorbs, so it only re-exports it. Every later part imports it.
+        # Any part with a later consumer also exports it — part2 produces +
+        # exports; middle parts import + re-export (pass-through); the last
+        # part only imports. With num_parts == 2 the mask stays internal.
+        if shared_mask is not None:
+            produces_mask = (pi == 2)
+            has_later_consumer = (pi < num_parts)
+            if not produces_mask:
+                part_inputs.append((shared_mask, TensorProto.FLOAT, mask_shape))
+            if has_later_consumer:
+                part_outputs.append((shared_mask, TensorProto.FLOAT, mask_shape))
+
         specs.append(PartSpec(
             name=f"part{pi}",
-            inputs=[(seam_in, TensorProto.FLOAT, hidden_shape)] + decode_inputs(layer_start, layer_end),
-            outputs=[seam_out] + decode_outputs(layer_start, layer_end),
+            inputs=part_inputs,
+            outputs=part_outputs,
         ))
 
     if layer_cursor != num_layers:
@@ -257,45 +328,62 @@ def extract_part(
     return info
 
 
+def _subset_encoding_section(sec_value, names: set) -> tuple:
+    """Subset one encodings section to entries whose tensor name is in
+    `names`. Handles both AIMET schemas:
+      * 1.0.0  — section is a list of {"name": <tensor>, ...} objects.
+      * legacy — section is a dict keyed by tensor name.
+    Returns (subset, kept_count)."""
+    if isinstance(sec_value, list):
+        sub = [e for e in sec_value
+               if isinstance(e, dict) and e.get("name") in names]
+        return sub, len(sub)
+    if isinstance(sec_value, dict):
+        sub = {k: v for k, v in sec_value.items() if k in names}
+        return sub, len(sub)
+    # Unknown shape — leave untouched rather than corrupt it.
+    return sec_value, 0
+
+
 def split_encodings(
     *, src_encodings: Path, parts_info: list[dict],
     dst_dirs: list[Path],
 ) -> list[Path]:
     """Subset src_encodings into per-part encodings JSONs based on each
     part's tensor name set. Tensors absent from a part are dropped from
-    that part's encoding file. Returns list of written encoding paths."""
+    that part's encoding file. Returns list of written encoding paths.
+
+    AIMET 2.x emits the 1.0.0 schema — `activation_encodings` and
+    `param_encodings` are lists of per-tensor objects carrying a `name`
+    field, alongside sibling metadata (`version`, `quantizer_args`). The
+    legacy name-keyed-dict schema and a bare flat dict are also handled.
+    """
     raw = json.loads(src_encodings.read_text())
-    # AIMET emits either {activation_encodings, param_encodings} (v1)
-    # or just a flat dict. Handle both.
     sections = ["activation_encodings", "param_encodings"]
-    if not any(k in raw for k in sections):
-        # Flat dict — wrap as a single section for uniform handling.
-        flat_in = raw
-        encs_root = {"_flat": flat_in}
-        sections = ["_flat"]
-    else:
-        encs_root = raw
+    is_sectioned = any(k in raw for k in sections)
 
     written: list[Path] = []
     for part_info, dst_dir in zip(parts_info, dst_dirs):
         names = part_info["tensor_names"]
-        out_root = {}
-        for sec in sections:
-            sec_in = encs_root.get(sec, {})
-            sub = {k: v for k, v in sec_in.items() if k in names}
-            out_root[sec] = sub
-        # If wrapped, unwrap.
-        if "_flat" in out_root:
-            out_root = out_root["_flat"]
-        # Carry over any sibling metadata (version, quantizer_args, etc).
-        for k, v in raw.items():
-            if k not in sections and k not in out_root:
-                out_root[k] = v
+        if is_sectioned:
+            # Carry version / quantizer_args / etc. through unchanged,
+            # overwrite only the two encoding sections with their subsets.
+            out_root = dict(raw)
+            counts = {}
+            for sec in sections:
+                if sec not in raw:
+                    continue
+                out_root[sec], counts[sec] = _subset_encoding_section(
+                    raw[sec], names)
+            n_act = counts.get("activation_encodings", 0)
+            n_par = counts.get("param_encodings", 0)
+        else:
+            # Bare flat dict — the whole document is a name-keyed map.
+            out_root, n_act = _subset_encoding_section(raw, names)
+            n_par = 0
 
         dst_path = dst_dir / "model.encodings"
         dst_path.write_text(json.dumps(out_root, indent=2))
-        n_act = sum(1 for sec in ("activation_encodings",) if sec in out_root for _ in out_root[sec])
-        n_par = sum(1 for sec in ("param_encodings",) if sec in out_root for _ in out_root[sec])
         print(f"  [{part_info['part']}] encodings: act={n_act}, param={n_par} → {dst_path.name}")
         written.append(dst_path)
 
@@ -329,13 +417,20 @@ def split_aimet_output(
     print(f"  graph: {len(m.graph.node)} nodes, {len(m.graph.initializer)} inits "
           f"({time.perf_counter() - t0:.1f}s)")
 
+    shared_mask = detect_shared_attn_mask(m)
+    if shared_mask is not None:
+        print(f"[split] cross-part attention mask: {shared_mask} "
+              f"(threaded part2 → parts 3..{num_parts})")
+    else:
+        print("[split] no shared cross-part attention mask detected")
+
     specs = build_part_specs(
         num_layers=model_info.num_hidden_layers,
         hidden_size=model_info.hidden_size,
         vocab_size=model_info.vocab_size,
         num_kv_heads=model_info.num_key_value_heads,
         head_dim=model_info.head_dim,
-        ctx=ctx, num_parts=num_parts,
+        ctx=ctx, num_parts=num_parts, shared_mask=shared_mask,
     )
 
     parts_info: list[dict] = []
