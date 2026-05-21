@@ -73,6 +73,31 @@ and needs no convert op.** That is the seam to exploit.
 Ordered by expected value / effort. Each track is an experiment with a
 measured cos delta, validated 0.6B-w8a16 first then 4B.
 
+> **Update (Session 29 — Track 4 landed).** The qai-hub-models diff
+> (`docs/qai_hub_recipe.md`) found the root cause and the principled
+> fix: we built QuantSim with `config_file=None`; Qualcomm passes
+> `default_config_llama.json` (now vendored into the repo), whose
+> `RMSNormalization` supergroup pass auto-disables the norm-internal
+> activation quantizers — and brings the LayerNorm pass, the op-type
+> exclusion set, and Softmax/Sigmoid range constraints with it. This
+> **collapses Tracks 1, 2 and 3 into one change**: adopt that config
+> file (the **P0** fix). Track 3 (a hand-written RMSNorm fusion pass)
+> is no longer needed — AIMET's pass already does it. Track 5
+> (percentile observer) is dropped — the diff showed our observer
+> config (`min_max` + SEQ_MSE) already matches Qualcomm. The remaining
+> work is the P1-P4 refinements; see `docs/qai_hub_recipe.md` §(c).
+>
+> - **P0** — adopt `default_config_llama.json` + the Concat-tie /
+>   Slice-Constant-ignore quantsim flags. Expected: cos 0.5 → ~0.99.
+> - **P1** — int8-symmetric, in/out-tied KV cache + 16x8 matmuls
+>   (`_set_matmul_second_input_to_8b`); likely removes the need for
+>   our `_bump_vo_to_w8` workaround.
+> - **P2** — clip the additive attention mask to `[-100, 0]` (we
+>   currently feed `-65504`, which wrecks int16 granularity nearby).
+> - **P3** — AdaScale `NUM_RMSNORM_PER_BLK = heads + kv + 1` (=41 for
+>   4B), only if AdaScale is re-enabled.
+> - **P4** — verify calibration data is real text, not random tokens.
+
 ### Track 0 — quality baseline harness (do first; everything needs it)
 Without a trusted metric the other tracks are guesswork.
 - Numerical baseline: FP-vs-quant first-decode logit cosine + argmax
