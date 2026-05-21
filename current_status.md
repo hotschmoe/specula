@@ -2324,3 +2324,22 @@ the additive attention mask sentinel `-65504.0` (fp16 −inf) blows up
 the post-mask score-tensor quantizer range so normal scores get ~1.0
 int16 granularity. Sweeping the sentinel; if cos jumps as |sentinel|
 shrinks, the fix is a quantization-friendly mask value.
+
+### cos ROOT CAUSE confirmed (2026-05-21 ~08:45) — RMSNorm internals + mask constants
+
+Mask-sentinel swept (-65504..-30): cos flat at 0.6559 → not the input
+mask. The quantizer-range dump found the real offenders:
+- `/model/Constant_27_output_0`, `/model/ConstantOfShape_output_0` —
+  range **~4.2e37** (internal mask "−inf" constants).
+- every `layers.N/{input,post_attention}_layernorm/Pow_output_0` —
+  range **~4.8e6** (RMSNorm `x²`; the residual stream has massive
+  activations so x² hits millions).
+
+int16 activation quantizers on tensors with range 5e6–4e37 →
+catastrophic granularity → model destroyed. **RMSNorm internals and
+the mask constant must not be activation-quantized** — transformers
+4.51 exports RMSNorm *decomposed* (Pow/ReduceMean/Add/Sqrt/Div/Mul)
+so AIMET quantizes every intermediate. `cos_threshold.py` validating
+the fix (disable activation quantizers above a range threshold).
+The fix applies post-`compute_encodings`; AdaScale disables
+activation quantizers internally so the 4B AdaScale work is unaffected.
