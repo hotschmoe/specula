@@ -2687,11 +2687,30 @@ This collapses old Tracks 1/2/3 into one config change; the harness
 count) are tracked in `docs/e2e_optimizations.md`. 4B w8a16/w4a16
 re-validation with P0 is in flight.
 
+### 4B P0 validated; P1 landed (2026-05-21 ~17:30)
+
+P0 confirmed on the Qwen3-4B replication anchor:
+- **4B w8a16: cos 0.44 → 0.9962**, argmax matches FP — gate cleared.
+- **4B w4a16: cos 0.51 → 0.9751**, argmax matches FP — P0 closes most
+  of the gap but misses the 0.99 gate by ~1.5%.
+
+**P1** (int8-symmetric in/out-tied KV cache + 16x8 attention matmuls +
+int8 per-channel lm_head, imported from qai-hub-models — `lib/aimet.py`
+stage 4d, w4a16-only) merged to master (`7d12df5`). It is the w4a16
+precision config expected to close the residual gap (and structurally
+replaces the `_bump_vo_to_w8` workaround; matches Qualcomm's int8
+lm_head, which also fixes the part4 +38% size delta). 4B w4a16 P0+P1
+re-validation in flight (`runs/qwen3_4b_p0p1`).
+
+Disk hygiene: pruned superseded pre-P0 4B AIMET outputs + bundles + the
+spent 0.6B P0 validation run (~66 GB freed). `/workspace` 85 GB / 200,
+local `/` 38 GB / 100.
+
 ### Still open
 
-- **int16 activation cos gap — fix landed (P0), 4B validation in
-  flight.** 0.6B w8a16 cleared (0.9984); Qwen3-4B w8a16/w4a16 re-runs
-  with the P0 config pending. Was: 4B probe cos 0.44 / 0.51.
+- **w4a16 residual ~1.5% cos** — P0 gives 4B w4a16 0.9751; P1 (just
+  landed) validation pending; P2 (clip attention mask to [-100,0]) is
+  the next lever. w8a16 is done — 4B w8a16 P0 cleared at 0.9962.
 - **Genie part-to-part mask routing** — needs X2E hardware to confirm
   the threaded mask reaches parts 3-4. Note Qualcomm's reference
   bundle instead feeds `attention_mask` to every decoder part from
