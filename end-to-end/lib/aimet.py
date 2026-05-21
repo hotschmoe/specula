@@ -524,6 +524,41 @@ def run_aimet(
     _log(f"[aimet 7] compute_encodings ({time.time() - t0:.1f}s)")
     info["stages"]["7_compute_encodings"] = {"wall_s": time.time() - t0}
 
+    # ---- 7b. activation precision -> fp16 (the 'a16' in w8a16/w4a16) ----
+    # int16 FIXED-POINT activation quantization cannot span an LLM's
+    # activation dynamic range ("massive activations") — per-tensor int16
+    # collapses the model (probe cos 0.65, argmax wrong). The 'a16' in
+    # w8a16/w4a16 is fp16, not int16: weights are int4/int8 (memory),
+    # activations stay fp16 (HTP-native, near-lossless). BUT a few tensors
+    # — RMSNorm x^2 (`Pow`, range ~5e6) and the internal mask "-inf"
+    # constants (range ~1e37) — overflow fp16's 65504 ceiling -> NaN. So:
+    # fp16 for every fp16-safe activation, fp32 (quantizer disabled) for
+    # the few overflow-prone ones. Verified 2026-05-21: 0.6B w8a16 probe
+    # cos 0.65 -> 0.9994. The QuantSim is BUILT with int16 activations so
+    # compute_encodings above doesn't overflow; we down-convert here.
+    t0 = time.time()
+    from aimet_onnx.common.defs import QuantizationDataType
+    _init_names = {init.name for init in sim.model.model.graph.initializer}
+    n_fp16 = n_fp32 = 0
+    for _name, _q in sim.qc_quantize_op_dict.items():
+        if _name in _init_names:
+            continue  # weight quantizer — stays int4/int8
+        try:
+            _enc = _q.get_encodings()
+            _mabs = max((max(abs(e.min), abs(e.max)) for e in _enc), default=0.0)
+        except Exception:
+            _mabs = float("inf")
+        if _mabs > 60000.0:  # fp16 max ~65504 — overflow-prone -> keep fp32
+            _q.enabled = False
+            n_fp32 += 1
+        else:
+            _q.data_type = QuantizationDataType.float
+            _q.bitwidth = 16
+            n_fp16 += 1
+    _log(f"[aimet 7b] activation precision: {n_fp16} → fp16, {n_fp32} → "
+         f"fp32 (fp16-overflow); weights stay {param_type} ({time.time()-t0:.1f}s)")
+    info["stages"]["7b_act_fp16"] = {"n_fp16": n_fp16, "n_fp32": n_fp32}
+
     # ---- 8. V/O w8 pin (optional, for w4a16) ----
     if use_vo_pin_w8:
         t0 = time.time()
