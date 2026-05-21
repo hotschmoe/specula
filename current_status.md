@@ -2401,3 +2401,36 @@ run; added a disk watchdog. 0.6B w4a16 (Lever C) deferred —
 `cos_final.py` already gave the w4 0.6B datapoint (basic cos 0.93).
 Op note: AdaScale tempdirs are ephemeral-overlay-bound; don't run
 many AIMET jobs concurrently without watching `/tmp`.
+
+### Activation precision: fp16 vs int16 — resolved to int16 (2026-05-21 ~11:00)
+
+The fp16 activation fix (cos 0.65→0.9994) is **HTP-incompatible**:
+qnn-context-binary-generator (stage 8) aborts —
+`no properties registered for q::QNN_Convert` — every fp16 quantizer
+becomes an `fp32→fp16 QNN_Convert` the HTP graph-prep cannot create
+(the source ONNX is fp32; fp16 anywhere needs a convert). 0.6B w8a16
+reached stage 8 and failed there.
+
+Inspected Qualcomm's reference bundle: its w4a16 HTP `.bin`s use
+**integer activations** — metadata.json boundary tensors are 1440×
+`uint8` + 160× `uint16` + 10× `int32`, each with per-tensor scales.
+**The HTP wants integer activations; fp16 is out.**
+
+So `lib/aimet.py` 7b reverted — activations stay **int16** (the
+QuantSim build type). int16 bundles DO compile on HTP (op17_ada
+produced a complete 728 MB .bin). The **int16 probe-cos collapse
+(~0.55-0.65) is now the single open quality gap**:
+- It is NOT precision (w16a16 also 0.65), NOT one op-type, NOT the
+  pathological-range tensors, NOT the AIMET CUDA op (CPU==CUDA),
+  NOT the mask sentinel. Disabling ALL activation quantizers → 0.99.
+- Qualcomm achieves good quality with int16 activations, so the gap
+  is a **calibration / quant-config difference** — likely candidates
+  for next session: per-channel activation quant, a non-min_max
+  activation observer that survives SEQ_MSE, KV-cache precision
+  handling, or AIMET's quant config (op exclusions) matching
+  Qualcomm's recipe.
+
+Runs restarted with int16: 4B w4a16 + 0.6B w8a16 (`--force-stage 6`).
+They will produce **complete, HTP-compilable bundles** (structural
+end-to-end recreation); probe cos is expected low pending the int16
+calibration fix.
