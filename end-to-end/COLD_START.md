@@ -229,6 +229,26 @@ python -c "import aimet_onnx, onnxruntime; print(aimet_onnx.__version__, onnxrun
 # Expected: 2.26.0+cu121 1.23.2
 ```
 
+### 4b. Second venv for `qairt-converter` (numpy 1.x)
+
+QAIRT 2.45's compiled bindings (`ir_graph`/`libDlModelToolsPy`) are
+built against the **numpy 1.x C ABI**. Run `qairt-converter` (stage 7,
+a Python script) under the numpy-2.x AIMET venv and every static-tensor
+handoff (Reduce axes, Reshape shapes) reads garbage in C++ — the
+"Reduce param axis ... get:<garbage>" abort. So stage 7 needs its own
+numpy-1.x venv (`lib/qairt.py` looks for it at this exact path):
+
+```bash
+uv venv /workspace/venvs/qairt-py310 --python 3.10
+source /workspace/venvs/qairt-py310/bin/activate
+uv pip install "numpy==1.26.4" onnx protobuf pyyaml packaging
+deactivate
+```
+
+The AIMET stages (1-6) keep using the numpy-2.x `aimet-2.26-cu121-py310`
+venv; only `qairt-converter` uses `qairt-py310`. `qnn-context-binary-
+generator` (stage 8) is a compiled binary — numpy-agnostic.
+
 ### 5. Configure the AI Hub token
 
 Uses `$AIHUB_TOKEN` from the preamble:
