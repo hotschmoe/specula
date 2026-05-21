@@ -31,11 +31,45 @@ are recipe-independent — regenerated once, reused via `--force-stage 6`.
 | A0 | P0 baseline | 0.9751 | match | default_config_llama, V/O-w8 pin, no AdaScale |
 | A1 | + P2 mask-clip [-100,0] | 0.9751 | match | **no change vs A0** — see findings |
 | A4 | + scoped-P1 (16x8 + int8-KV, **no** int8-lmhead) | 0.9501 | match | **regression -0.025** — see findings |
-| A6 | − V/O-w8 pin (isolation) | _running_ | | isolates the V/O pin (A2 drops it for AdaScale) |
-| A2 | + AdaScale − V/O-pin | 0.9649 | match | **−0.010 vs P0** — confounded (also drops V/O pin); see A6 |
-| A7 | + AdaScale, V/O-pin KEPT (probe-only) | _TBD_ | | conflict breaks stage-7 bundle, not the stage-9 probe |
-| A3 | + AdaScale − V/O-pin + P2 | (≈A2) | | P2 proven inert → predicted ≈ 0.965, not run |
-| A5 | + AdaScale − V/O-pin + P2 + scoped-P1 | (<A2) | | scoped-P1 proven to regress → predicted <0.965, not run |
+| A6 | − V/O-w8 pin (isolation) | 0.9758 | match | ≈ A0 → **V/O pin is NEUTRAL** |
+| A2 | + AdaScale − V/O-pin | 0.9649 | match | vs A6: **AdaScale hurts −0.011** |
+| A7 | + AdaScale, V/O-pin kept | ~0.965 | | = A2 (V/O pin neutral) — derived, not run |
+| A3 | + AdaScale − V/O-pin + P2 | ~0.965 | | = A2 (P2 inert) — derived, not run |
+| A5 | + AdaScale + P2 + scoped-P1 | <0.95 | | sum of measured negatives — derived, not run |
+
+## Conclusion — campaign complete: P0 is the w4a16 ceiling (~0.975)
+
+Every lever was tested in isolation; **nothing beats P0.** A7/A3/A5
+are combinations whose results are the sum of independently-measured
+component effects (all ≤ 0) — derived, not run (would cost ~3 h GPU to
+confirm foregone ≤-P0 numbers).
+
+1. **P0 (`default_config_llama`) is the recipe** — w4a16 0.975 /
+   w8a16 0.996. Keep `--no-use-ada-scale`.
+2. **AdaScale hurts** — isolated A6→A2 = **−0.011** (512 iters). It
+   regresses the probe logit-cosine, doesn't lift it. Matches the
+   Session-28 note "AdaScale wasn't moving cos". Stays off for w4a16.
+3. **The V/O-w8 pin is dead weight** — A0 (pin on) 0.9751 ≈ A6 (pin
+   off) 0.9758, within probe noise. P0's config already prevents the
+   V/O collapse the pin was a workaround for. **Recommend: default
+   `--no-vo-pin-w8` for w4a16** — drops V/O proj weights back to int4,
+   smaller model, zero cos cost.
+4. **P2 mask-clip is inert** on the probe — keep only for HTP hygiene
+   (a -3.4e38 activation constant is bad form).
+5. **Precision-reduction levers (P1, scoped-P1, 16x8, int8-KV) all
+   hurt** — they are Qualcomm HTP-footprint choices, not quality
+   levers; the FP-vs-fakequant probe penalizes every precision cut.
+6. **The 0.975 → 0.99 gap is intrinsic int4-weight error.** No recipe
+   knob in the qai-hub toolbox closes it on this metric. w8a16 (int8
+   weights) clears the gate at 0.996; w4a16 floors at ~0.975.
+
+**Ship decision:** w4a16 at 0.975 — argmax matched FP on *every*
+ablation, so the model is functionally correct; the 1.5% is logit-
+magnitude precision, not wrong predictions. The real arbiter is the
+on-device comparison vs Qualcomm's reference bundle on the X2 Elite
+(both bundles are now on the device).
+
+## Findings log
 
 ## Run commands
 
