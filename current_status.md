@@ -2343,3 +2343,29 @@ so AIMET quantizes every intermediate. `cos_threshold.py` validating
 the fix (disable activation quantizers above a range threshold).
 The fix applies post-`compute_encodings`; AdaScale disables
 activation quantizers internally so the 4B AdaScale work is unaffected.
+
+### cos FIX implemented + validated (2026-05-21 ~09:40)
+
+`cos_final.py` confirmed the fix (build int16 QuantSim, compute_encodings,
+then reconfigure activations):
+
+| config                      | cos    |
+|-------------------------------|--------|
+| w8 + fp16-mixed activations   | 0.9994 |
+| w8 + activations off (fp32)   | 0.9994 |
+| w4 + fp16-mixed activations   | 0.9300 |
+| w4 + activations off (fp32)   | 0.9302 |
+
+**The 'a16' in w8a16/w4a16 is fp16, not int16.** `lib/aimet.py` now
+(stage 7b, post-`compute_encodings`): every fp16-safe activation
+quantizer → float16; the ~53 fp16-overflow ones (RMSNorm x², mask
+constants, |val|>60000) → disabled (fp32); weights stay int8/int4.
+0.6B w8a16 probe cos **0.65 → 0.9994**. w4 basic 0.93 — SEQ_MSE +
+AdaScale (+ V/O pin) in the full pipeline should lift it.
+
+Runs launched: 4B w4a16 `--force-stage 6` (fixed) + fresh 0.6B w8a16
+full validation (`runs/qwen3_0p6b_w8a16_fix`).
+
+**Known bug (logged):** `_bump_vo_to_w8` in aimet.py detected 72 V/O
+weights but bumped 0/72 — the w4a16 V/O-collapse mitigation is a
+no-op (quantizer-name lookup mismatch). To fix.
