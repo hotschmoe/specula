@@ -489,10 +489,42 @@ def run_aimet(
     # why the V/O w8 pin silently bumped 0/N. (2026-05-21)
     vo_weight_names = _detect_vo_proj_weight_tensors(model_proto)
     emb_weight_names = _detect_embedding_weight(model_proto)
+    # ---- P0 fix (docs/qai_hub_recipe.md §(c) P0): pass an explicit AIMET
+    # config file. With config_file=None AIMET falls back to its built-in
+    # default_config_per_channel.json whose supergroup_pass_list is just
+    # ["MatmulAdd"] — it has NO RMSNorm pass, so QuantSim puts int16
+    # activation quantizers on every RMSNorm intermediate (the `x²` tensor
+    # @ range ~5e6, ReduceMean/Sqrt/Add/Div outputs). int16 over those
+    # ranges annihilates signal → probe cos ~0.55.
+    #
+    # We vendor Qualcomm's default_config_llama.json (copied verbatim from
+    # qai_hub_models/utils/aimet/) as lib/aimet_config_llama.json. Its
+    # supergroup_pass_list is ["LayerNormalization","RMSNormalization"],
+    # which triggers aimet_onnx's RMSNormalization graph pass — that pass
+    # matches the decomposed Pow/ReduceMean/Add/Sqrt/Div/Mul cluster and
+    # disables the output quantizers on every intermediate (HTP float
+    # fallback, no QNN_Convert). It also brings the op-type exclusion set
+    # and Softmax/Sigmoid [0,1] constraints. Compatible with param_type
+    # int4/int8 + activation int16 (Qualcomm ships it with int4).
+    #
+    # The path is resolved relative to this lib/ dir, not cwd.
+    _aimet_config_path = str(Path(__file__).resolve().parent / "aimet_config_llama.json")
+    _log(f"[aimet 4] using config_file={_aimet_config_path}")
+    # Mirror qai_hub_models _shared/llm/model.py::_build_quantsim — tie
+    # Concat quantizers and skip Slice/Constant outputs. All three module
+    # attributes verified present in aimet_onnx 2.26 quantsim.
+    from aimet_onnx import quantsim as _qs_mod
+    _qs_mod.op_types_to_tie_qtzrs = ["Concat"]
+    _qs_mod._tie_qtzrs = True
+    if "Slice" not in _qs_mod.op_outputs_to_ignore:
+        _qs_mod.op_outputs_to_ignore.append("Slice")
+    if "Constant" not in _qs_mod.op_outputs_to_ignore:
+        _qs_mod.op_outputs_to_ignore.append("Constant")
     sim = QuantizationSimModel(
         model_proto,
         param_type=param_type, activation_type=activation_type,
         quant_scheme=quant_scheme_map[effective_quant_scheme],
+        config_file=_aimet_config_path,
         providers=providers,
     )
     _log(f"[aimet 4] QuantSim built ({time.time() - t0:.1f}s); "
@@ -599,17 +631,9 @@ def run_aimet(
     _log(f"[aimet 7] compute_encodings ({time.time() - t0:.1f}s)")
     info["stages"]["7_compute_encodings"] = {"wall_s": time.time() - t0}
 
-    # NOTE on activation precision (2026-05-21): activations are kept at
-    # int16 (the QuantSim build type). An experiment converting them to
-    # fp16 here lifted the probe cos 0.65 -> 0.9994 — but fp16 is
-    # HTP-INCOMPATIBLE: every fp16 quantizer becomes an `fp32->fp16
-    # QNN_Convert` that qnn-context-binary-generator (stage 8) cannot
-    # create ("no properties registered for q::QNN_Convert"). Qualcomm's
-    # own w4a16 HTP bundle uses integer activations (uint8/uint16), so
-    # int16 is the right target. The int16 probe-cos collapse (~0.55-0.65)
-    # is a real OPEN quality gap — see current_status.md "cos" section;
-    # the fix is a calibration/quant-config change (Qualcomm achieves
-    # good int16 quality), NOT fp16.
+    # ---- 7b. RMSNorm-internal quantizers are handled structurally by
+    # the RMSNormalization supergroup pass (config_file in stage 4,
+    # docs/qai_hub_recipe.md P0) — no post-encodings manual disable. ----
 
     # ---- 8. V/O w8 pin (optional, for w4a16) ----
     # V/O w8 pin already applied at stage 4b (pre-SEQ_MSE) — see above.
