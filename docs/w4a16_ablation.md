@@ -35,6 +35,23 @@ are recipe-independent — regenerated once, reused via `--force-stage 6`.
 | A4 | + scoped-P1 (16x8 + int8-KV, **no** int8-lmhead) | _TBD_ | | full-P1 hurt — see findings |
 | A5 | + AdaScale + P2 + scoped-P1 | _TBD_ | | kitchen sink |
 
+## Run commands
+
+All ablations reuse the cached pathb stages 1-5 in `qwen3_4b_sweep`
+via `--force-stage 6` (only AIMET re-runs). Base flags: `--model-id
+Qwen/Qwen3-4B --workdir runs/qwen3_4b_sweep --precision w4a16 --ctx
+512 --force-stage 6`. AdaScale rows use `--ada-scale-iters 512`
+(Qualcomm's value) and `--no-vo-pin-w8` (the V/O-pin↔AdaScale
+single-param-bw conflict only bites when both are on).
+
+| ID | extra flags |
+|----|-------------|
+| A1 | `--no-use-ada-scale --mask-clip-min -100` |
+| A2 | `--use-ada-scale --no-vo-pin-w8 --ada-scale-iters 512` |
+| A3 | `--use-ada-scale --no-vo-pin-w8 --ada-scale-iters 512 --mask-clip-min -100` |
+| A4 | `--no-use-ada-scale --scoped-p1` |
+| A5 | `--use-ada-scale --no-vo-pin-w8 --ada-scale-iters 512 --mask-clip-min -100 --scoped-p1` |
+
 ## Findings log
 
 - **P1 (full): negative — reverted (a3f7416).** int8-tied KV + 16x8
