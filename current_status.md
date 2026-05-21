@@ -2144,60 +2144,67 @@ Bringing the toolchain up surfaced four more gaps vs the doc (all
 `qnn-context-binary-generator` load. dev `.bashrc` got the
 SETUP_DEV_USER §6 env block.
 
-### Run results — pipeline runs, but two real breakages found
+### Run results — pipeline runs stages 1-6; two real breakages
 
-First 0.6B w8a16 run (workdir `qwen3_0p6b_w8a16`) exposed that the
-pipeline is **broken by optimum 2.x / transformers 4.51 toolchain
-drift**. Both breakages trace to the **same root cause: opset 18**.
+First 0.6B w8a16 runs exposed two **independent** breakages, both
+from optimum 2.x / transformers 4.51 toolchain drift (the pipeline
+last passed end-to-end in session 11 on an older optimum).
 
-**Breakage 1 — `qairt-converter` (stage 7) aborts on ReduceMean.**
-`Node /model/layers.0/input_layernorm/ReduceMean: canonicalizeOp:
-Reduce param axis ... get:841261557` (garbage axis). At opset 18
-ReduceMean takes `axes` as an *input tensor*; qairt-converter 2.45
-(and onnx2torch) only read `axes` as an *attribute* (≤ opset 17).
-**Fix applied + committed:** `lib/stages.py` now exports with
-`--opset 17` (highest opset where ReduceMean keeps `axes` as an
-attribute — verified: opset 17 → `attrs=['axes','keepdims']`, opset
-18 → 2 inputs). An opset-17 0.6B w8a16 run is in flight to confirm
-stage 7 clears.
+**Breakage A — AIMET quant quality.** SEQ_MSE-only 0.6B w8a16 probe:
+**cos(fp,q) = 0.535** (gate ≥ 0.99; argmax FP `' Paris'` vs Q `'-'`).
+Identical 0.535 at opset 17 and 18 → opset does not affect quant
+quality. README's "cos 0.07 → 0.99" framing means **AdaScale is
+load-bearing**, not optional. So AdaScale must work.
 
-**Breakage 2 — AIMET quant quality collapse.** SEQ_MSE-only 0.6B
-w8a16 probe: **cos(fp,q) = 0.535** (gate is ≥ 0.99; argmax FP
-`' Paris'` vs Q `'-'`). Per the COLD_START gate that is the
-"pipeline regression — STOP" band. README claims SEQ_MSE alone
-carries ~80-90%, but its own "cos 0.07 → 0.99" framing means
-**AdaScale is load-bearing**, not optional, for this model.
+**AdaScale — diagnosed AND fixed (this session).**
+- It crashed in `onnx2torch.convert`: `Got unexpected input value
+  type (ValueType.UNKNOWN)`. Diagnosed via `runs/debug_adascale.py`:
+  AIMET's per-block onnx extraction is correct *size* (~one block,
+  ~440 nodes) but the optimum/pathb graph routes one **shared
+  preamble** (embedding, RoPE/mask/shape prep) into every block's
+  extracted subgraph. Its leaf inputs — `input_ids` (embedding
+  `Gather`) and `past_key_values.0.*` (a `/model/Shape` reads
+  seq-len off layer-0 KV) — were undeclared → dangling → UNKNOWN.
+- **Fix 1 (committed, `lib/aimet.py`):** declare `input_ids` +
+  `past_key_values.0.*` as shared block inputs in the patched
+  `apply_adascale_pathb`. Extraction is then dangling-free.
+- **Fix 2 (committed, `lib/stages.py`):** export at `--opset 17`.
+  onnx2torch in aimet_onnx 2.26 has no ScatterND-18 / ReduceMean-18
+  converter; opset 17 emits ScatterND-16 / ReduceMean-13 which it
+  handles. Verified: with both fixes, per-block `onnx2torch.convert()`
+  succeeds for blocks 0/5/27 — **first time AdaScale block
+  conversion works in this repo.** An opset-17 + AdaScale 0.6B run
+  is in flight (`runs/qwen3_0p6b_w8a16_op17_ada`) to confirm the
+  full AdaScale optimisation loop runs and lifts cos.
 
-**AdaScale is broken** — separate bug, *not* fixed by opset 17:
-- aimet.py's `_patch_apply_adascale_for_pathb_kv` applies, gets past
-  the ReduceMean-v18 onnx2torch patch, then crashes in
-  `onnx2torch.convert`: `Got unexpected input value type
-  (ValueType.UNKNOWN)`.
-- Root cause (diagnosed via `runs/debug_adascale.py`): AIMET's
-  per-block onnx subgraph extraction does **not isolate blocks** on
-  this optimum/pathb graph. Blocks 0, 1, 5 all extract to an
-  identical 440-node graph that pulls in the embedding `Gather`
-  (dangling `input_ids`) and layer-0 KV (dangling
-  `past_key_values.0.key`). The declared block-start tensor
-  (`get_block_start_end_name` → `blocks_end_points[i][0].inputs[0]`)
-  is not cutting the onnx Extractor DFS — likely a
-  quantized-vs-unquantized tensor-name mismatch in the
-  `DecoderBlockQwen3` graph pass. This is *why the repo "never got
-  AdaScale to run"* — now diagnosed to the node level.
+**Breakage B — `qairt-converter` (stage 7), still OPEN.**
+`Node .../input_layernorm/ReduceMean: canonicalizeOp: Reduce param
+axis must be >= 0 ... get:<garbage>` (value differs each run →
+uninitialised read). **Not opset-related** — fails identically at
+opset 17 (ReduceMean-13, `axes` attribute `[-1]`) and opset 18
+(ReduceMean-18, `axes` input), and also with `axes` rewritten to a
+positive `[2]`. qairt-converter 2.45's ONNX ReduceMean importer
+simply never populates the reduce axis for this RMSNorm ReduceMean.
+The `rewrite_qwen3_*` scripts have no RMSNorm/ReduceMean handling,
+so the op reaches qairt-converter raw. This blocks producing any
+`.bin` bundle and **must be solved** — likely via a new graph-rewrite
+pass that fuses or reshapes the decomposed RMSNorm
+(`Pow→ReduceMean→Add→Sqrt→Div→Mul`) into a form qairt-converter 2.45
+lowers cleanly.
 
 ### Open items / next steps
 
-1. Confirm the opset-17 run clears `qairt-converter` (stage 7) and
-   produces a bundle — validates the compile path.
-2. **Fix AdaScale block extraction** — the cos gate needs it.
-   Investigate the `blocks_end_points` start-tensor name vs the
-   actual (post-QuantSim) graph tensor names; the declared input
-   must land on a real tensor so the Extractor DFS cuts there.
-3. **opset tension to resolve:** AIMET int16/int4 QDQ export may
-   want opset ≥ 21; we now export at 17. Verify `sim.export` +
-   qairt still agree on the encodings, or add a ReduceMean-18→13
-   graph-rewrite pass instead of down-opset-ing the whole model.
-4. Only after 0.6B w8a16 clears cos ≥ 0.99 → 0.6B w4a16 → 4B w4a16.
+1. **qairt-converter ReduceMean (Breakage B)** — the hard blocker
+   for shipping any bundle. Options to try: (a) a graph-rewrite that
+   fuses RMSNorm to a single op qairt handles; (b) replace
+   `ReduceMean` with `ReduceSum`+`Mul(1/N)` or `GlobalAveragePool`-
+   style ops; (c) check whether a newer QAIRT SDK fixes the importer.
+2. **Confirm AdaScale lifts cos** — watch
+   `runs/qwen3_0p6b_w8a16_op17_ada`; expect cos ≫ 0.535 toward 0.99.
+3. **opset ≥ 21 check** — AIMET int16/int4 QDQ export at opset 17:
+   verify `sim.export` encodings are still well-formed.
+4. Only after 0.6B w8a16 clears cos ≥ 0.99 *and* a bundle builds →
+   0.6B w4a16 → 4B w4a16.
 
 ### Environment delta (works, for WARM_START)
 
