@@ -2213,3 +2213,45 @@ onnxruntime-gpu `1.23.2`; aimet_onnx `2.26.0+cu121`; optimum
 `2.1.0` + optimum-onnx `0.1.0`; accelerate `1.13.0`; transformers
 `4.51.0`. System: `libc++1 libc++abi1` apt-installed for
 qairt-converter.
+
+### BREAKTHROUGH (2026-05-21 ~07:40) — all three blockers root-caused & fixed
+
+**qairt-converter (Breakage B) — ROOT CAUSE: numpy 2.x ABI mismatch.**
+Not opset, not version, not ReduceMean. QAIRT 2.45's
+`bin/check-python-dependency` declares `numpy: 1.26.4` — its compiled
+bindings (`ir_graph` / `libDlModelToolsPy`) are built against the
+**numpy 1.x C ABI**. The AIMET venv has **numpy 2.2.6**. Every
+`IrStaticTensor(numpy_array,…)` handoff (Reduce axes, Reshape shapes,
+…) then reads garbage in C++ → the "Reduce param axis … get:<garbage>"
+abort. Instrumented `op_adapter.ReduceOp` proved Python passes
+`axes=[2]` correctly; C++ reads garbage. Confirmed by version sweep
+(2.42/2.44/2.45 all fail) and op sweep (ReduceSum, MatMul/Reshape
+all fail) — systemic, not op-specific.
+**Fix:** created `/workspace/venvs/qairt-py310` with `numpy==1.26.4`
++ onnx. With it, qairt-converter converts the real Qwen3-0.6B pathb
+w8a16 ONNX cleanly → `INFO_CONVERSION_SUCCESS`, 732 MB DLC. Only
+`qairt-converter` (a Python script) needs this venv;
+`qnn-context-binary-generator` is a compiled binary (no numpy).
+
+**AdaScale (Breakage A) — FIXED & validated.** The opset-17 +
+`aimet.py` shared-preamble-input fix works: the opset-17 + AdaScale
+0.6B run optimised **all 28 decoder blocks** end-to-end (no
+`ValueType.UNKNOWN` crash) — first time AdaScale has run in this repo.
+
+**Blackwell — fixed earlier** (torch 2.7.1+cu128).
+
+### Remaining work
+
+1. Patch `lib/qairt.py` to run `qairt-converter` with the
+   `qairt-py310` (numpy-1.x) venv python.
+2. Re-run stage 7-9 on the AdaScale'd 0.6B output (`--force-stage 7`)
+   → first complete bundle.
+3. Full clean 0.6B w8a16 run → check cos ≥ 0.99 gate.
+4. Then 0.6B w4a16, 4B w4a16, compare to Qualcomm reference.
+
+### Persistent venvs (for WARM_START)
+
+- `/workspace/venvs/aimet-2.26-cu121-py310` — AIMET/AdaScale + pathb
+  (numpy 2.2.6, torch 2.7.1+cu128). Stages 1-6.
+- `/workspace/venvs/qairt-py310` — qairt-converter only (numpy
+  1.26.4). Stage 7.
