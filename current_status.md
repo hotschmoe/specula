@@ -2660,11 +2660,38 @@ ONNX (~50 GB). Kept on `runs/qwen3_4b_w4a16/`: both `06_aimet_*`
 AIMET outputs (16 GB each), both `09b_bundle_*` bundles (tar + dir).
 `/workspace` at 84 GB.
 
+### Quantization quality — P0 fix found and landed (2026-05-21 ~16:30)
+
+Stood up `docs/e2e_optimizations.md` (the quality plan) and ran a
+parallel agent sweep. **Track 4 (qai-hub-models diff,
+`docs/qai_hub_recipe.md`) found the root cause:** we built
+`QuantizationSimModel` with `config_file=None` → AIMET's default
+`default_config_per_channel.json` (supergroup_pass_list `["MatmulAdd"]`,
+no RMSNorm pass), so int16 activation quantizers landed on every
+decomposed-RMSNorm intermediate (the `x²` tensor @ range ~5e6 etc.) →
+signal annihilation → cos ~0.55.
+
+**P0 fix (committed):** vendor Qualcomm's `default_config_llama.json`
+as `end-to-end/lib/aimet_config_llama.json` and pass it as
+`config_file`. Its `supergroup_pass_list`
+`["LayerNormalization","RMSNormalization"]` triggers aimet_onnx's
+RMSNorm graph pass, which disables the norm-internal output quantizers
+(HTP float fallback). Also tie Concat quantizers + ignore
+Slice/Constant outputs (mirrors qai-hub-models `_build_quantsim`).
+
+**0.6B w8a16 probe cos 0.557 → 0.9984**, argmax now matches FP. The
+int16 gap was never precision — it was the missing QuantSim config.
+This collapses old Tracks 1/2/3 into one config change; the harness
+(`end-to-end/eval_quality.py`) and the P1-P4 refinements
+(int8-tied KV + 16x8 matmuls, mask clip to [-100,0], AdaScale block
+count) are tracked in `docs/e2e_optimizations.md`. 4B w8a16/w4a16
+re-validation with P0 is in flight.
+
 ### Still open
 
-- **int16 activation cos gap** — unchanged from Session 28. 4B probe
-  cos 0.44 (w8a16) / 0.51 (w4a16). Structural pipeline is correct;
-  this is a calibration/quant-config gap vs Qualcomm's recipe.
+- **int16 activation cos gap — fix landed (P0), 4B validation in
+  flight.** 0.6B w8a16 cleared (0.9984); Qwen3-4B w8a16/w4a16 re-runs
+  with the P0 config pending. Was: 4B probe cos 0.44 / 0.51.
 - **Genie part-to-part mask routing** — needs X2E hardware to confirm
   the threaded mask reaches parts 3-4. Note Qualcomm's reference
   bundle instead feeds `attention_mask` to every decoder part from
