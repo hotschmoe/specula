@@ -174,6 +174,24 @@ pins `ctx=512`, `ar=1`. Two axes:
    hardware.
 5. ctx 512→4096 all build from the one parametric pipeline.
 
+## Baseline vs Qualcomm — structural (Session 29)
+
+`compare_to_qualcomm.py` on our w4a16 4-part bundle vs the shipped
+reference (both w4a16):
+
+- **Matches:** part1 .bin exact (778 MB == 778 MB), parts 2-3 within
+  3.8%, every `genie_config.json` / `htp_backend_ext_config.json`
+  field, tokenizer sha256. The pipeline is structurally sound.
+- **Deltas:** `ctx` 512 vs 4096 — our build param, not a defect (the
+  ctx sweep covers it). **part4 +38%** (1475 vs 1070 MB) — part4
+  carries the lm_head; ours is int16 (the `_pin_embedding_w16` pin),
+  Qualcomm's is int8 (`_set_lm_head_to_8b`). **P1 closes this** — it
+  is both a quality and a size fix.
+- Total 3642 vs 3186 MB (+14%), almost all of it the part4 lm_head.
+
+Re-run after P0/P1 land to confirm convergence; numerical (on-device
+cos) parity still needs X2E hardware.
+
 ## Task index
 
 See the session task list. Tracks 0→4 are sequential-ish (0 first,
