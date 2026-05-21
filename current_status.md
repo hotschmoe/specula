@@ -2369,3 +2369,20 @@ full validation (`runs/qwen3_0p6b_w8a16_fix`).
 **Known bug (logged):** `_bump_vo_to_w8` in aimet.py detected 72 V/O
 weights but bumped 0/72 — the w4a16 V/O-collapse mitigation is a
 no-op (quantizer-name lookup mismatch). To fix.
+
+### Full fixed pipeline — runs relaunched (2026-05-21 ~09:55)
+
+`lib/aimet.py` now carries both fixes:
+- **7b activation precision**: int16→fp16 (fp16-safe) / fp32 (overflow).
+- **4b V/O w8 pin**: detect V/O weights on the clean graph (pre-QuantSim
+  mutation) and bump to w8 *before* SEQ_MSE (so w8 scales are searched
+  at the pinned bitwidth). Previously bumped 0/N — name mismatch.
+
+Relaunched:
+- `runs/qwen3_0p6b_w8a16_fix` — 0.6B w8a16 full validation (cos fix;
+  no V/O pin — off for w8a16).
+- `runs/qwen3_4b_w4a16` — 4B w4a16 production, `--force-stage 6`,
+  complete fixed recipe (cos fix + working V/O pin). ~2.5-3 h.
+
+Both monitored. Expect 0.6B w8a16 probe cos ~0.99; 4B w4a16 cos to
+be the Lever-C datapoint.
