@@ -2144,9 +2144,65 @@ Bringing the toolchain up surfaced four more gaps vs the doc (all
 `qnn-context-binary-generator` load. dev `.bashrc` got the
 SETUP_DEV_USER §6 env block.
 
-### Run status
+### Run results — pipeline runs, but two real breakages found
 
-- **0.6B w8a16** — launched 2026-05-21 ~06:33 UTC, workdir
-  `/workspace/runs/qwen3_0p6b_w8a16`, log `qwen3_0p6b_w8a16.log`.
-  Gate: AIMET probe cos ≥ 0.99 vs FP32.
-- Then 0.6B w4a16 (Lever C), then 4B w4a16 (production).
+First 0.6B w8a16 run (workdir `qwen3_0p6b_w8a16`) exposed that the
+pipeline is **broken by optimum 2.x / transformers 4.51 toolchain
+drift**. Both breakages trace to the **same root cause: opset 18**.
+
+**Breakage 1 — `qairt-converter` (stage 7) aborts on ReduceMean.**
+`Node /model/layers.0/input_layernorm/ReduceMean: canonicalizeOp:
+Reduce param axis ... get:841261557` (garbage axis). At opset 18
+ReduceMean takes `axes` as an *input tensor*; qairt-converter 2.45
+(and onnx2torch) only read `axes` as an *attribute* (≤ opset 17).
+**Fix applied + committed:** `lib/stages.py` now exports with
+`--opset 17` (highest opset where ReduceMean keeps `axes` as an
+attribute — verified: opset 17 → `attrs=['axes','keepdims']`, opset
+18 → 2 inputs). An opset-17 0.6B w8a16 run is in flight to confirm
+stage 7 clears.
+
+**Breakage 2 — AIMET quant quality collapse.** SEQ_MSE-only 0.6B
+w8a16 probe: **cos(fp,q) = 0.535** (gate is ≥ 0.99; argmax FP
+`' Paris'` vs Q `'-'`). Per the COLD_START gate that is the
+"pipeline regression — STOP" band. README claims SEQ_MSE alone
+carries ~80-90%, but its own "cos 0.07 → 0.99" framing means
+**AdaScale is load-bearing**, not optional, for this model.
+
+**AdaScale is broken** — separate bug, *not* fixed by opset 17:
+- aimet.py's `_patch_apply_adascale_for_pathb_kv` applies, gets past
+  the ReduceMean-v18 onnx2torch patch, then crashes in
+  `onnx2torch.convert`: `Got unexpected input value type
+  (ValueType.UNKNOWN)`.
+- Root cause (diagnosed via `runs/debug_adascale.py`): AIMET's
+  per-block onnx subgraph extraction does **not isolate blocks** on
+  this optimum/pathb graph. Blocks 0, 1, 5 all extract to an
+  identical 440-node graph that pulls in the embedding `Gather`
+  (dangling `input_ids`) and layer-0 KV (dangling
+  `past_key_values.0.key`). The declared block-start tensor
+  (`get_block_start_end_name` → `blocks_end_points[i][0].inputs[0]`)
+  is not cutting the onnx Extractor DFS — likely a
+  quantized-vs-unquantized tensor-name mismatch in the
+  `DecoderBlockQwen3` graph pass. This is *why the repo "never got
+  AdaScale to run"* — now diagnosed to the node level.
+
+### Open items / next steps
+
+1. Confirm the opset-17 run clears `qairt-converter` (stage 7) and
+   produces a bundle — validates the compile path.
+2. **Fix AdaScale block extraction** — the cos gate needs it.
+   Investigate the `blocks_end_points` start-tensor name vs the
+   actual (post-QuantSim) graph tensor names; the declared input
+   must land on a real tensor so the Extractor DFS cuts there.
+3. **opset tension to resolve:** AIMET int16/int4 QDQ export may
+   want opset ≥ 21; we now export at 17. Verify `sim.export` +
+   qairt still agree on the encodings, or add a ReduceMean-18→13
+   graph-rewrite pass instead of down-opset-ing the whole model.
+4. Only after 0.6B w8a16 clears cos ≥ 0.99 → 0.6B w4a16 → 4B w4a16.
+
+### Environment delta (works, for WARM_START)
+
+torch `2.7.1+cu128`, torchvision `0.22.1`, torchaudio `2.7.1`;
+onnxruntime-gpu `1.23.2`; aimet_onnx `2.26.0+cu121`; optimum
+`2.1.0` + optimum-onnx `0.1.0`; accelerate `1.13.0`; transformers
+`4.51.0`. System: `libc++1 libc++abi1` apt-installed for
+qairt-converter.
