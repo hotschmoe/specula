@@ -439,17 +439,37 @@ def run_aimet(
     _log(f"[aimet 4] building QuantSim "
          f"param={param_type} activation={activation_type} scheme={effective_quant_scheme}")
     model_proto = onnx.load(str(src_dir / "model.onnx"), load_external_data=True)
+    # Detect V/O proj weight names on the CLEAN graph — QuantizationSimModel
+    # mutates model_proto in place (wraps weights in QcQuantizeOp), so a
+    # v_proj/o_proj MatMul's input[1] becomes `<weight>_qdq` afterwards and
+    # no longer matches qc_quantize_op_dict keys. Detecting post-build is
+    # why the V/O w8 pin silently bumped 0/N. (2026-05-21)
+    vo_weight_names = _detect_vo_proj_weight_tensors(model_proto)
     sim = QuantizationSimModel(
         model_proto,
         param_type=param_type, activation_type=activation_type,
         quant_scheme=quant_scheme_map[effective_quant_scheme],
         providers=providers,
     )
-    _log(f"[aimet 4] QuantSim built ({time.time() - t0:.1f}s)")
+    _log(f"[aimet 4] QuantSim built ({time.time() - t0:.1f}s); "
+         f"detected {len(vo_weight_names)} V/O proj weights pre-build")
     info["stages"]["4_qsim_build"] = {"wall_s": time.time() - t0,
                                        "param_type": param_type,
                                        "activation_type": activation_type,
                                        "effective_quant_scheme": effective_quant_scheme}
+
+    # ---- 4b. V/O w8 pin — bump BEFORE SEQ_MSE so the w8 scales are
+    # searched/calibrated at the pinned bitwidth (bumping after
+    # compute_encodings would leave w4-derived encodings on w8
+    # quantizers). w4a16-only mitigation for the V-projection collapse.
+    if use_vo_pin_w8:
+        t0 = time.time()
+        bumped = _bump_vo_to_w8(sim, vo_weight_names)
+        _log(f"[aimet 4b] V/O pin: bumped {bumped}/{len(vo_weight_names)} "
+             f"V/O proj weights to w8 (pre-SEQ_MSE) ({time.time() - t0:.1f}s)")
+        info["stages"]["4b_vo_pin_w8"] = {"wall_s": time.time() - t0,
+                                          "detected": len(vo_weight_names),
+                                          "bumped": bumped}
 
     # ---- 5. SEQ_MSE (optional, run BEFORE compute_encodings) ----
     if use_seq_mse:
@@ -560,15 +580,7 @@ def run_aimet(
     info["stages"]["7b_act_fp16"] = {"n_fp16": n_fp16, "n_fp32": n_fp32}
 
     # ---- 8. V/O w8 pin (optional, for w4a16) ----
-    if use_vo_pin_w8:
-        t0 = time.time()
-        vo_names = _detect_vo_proj_weight_tensors(model_proto)
-        _log(f"[aimet 8] V/O pin: detected {len(vo_names)} V/O proj weights "
-             f"(expect 2 × num_layers); bumping bitwidth to 8 ...")
-        bumped = _bump_vo_to_w8(sim, vo_names)
-        _log(f"[aimet 8] V/O pin: bumped {bumped}/{len(vo_names)} ({time.time() - t0:.1f}s)")
-        info["stages"]["8_vo_pin_w8"] = {"wall_s": time.time() - t0,
-                                          "detected": len(vo_names), "bumped": bumped}
+    # V/O w8 pin already applied at stage 4b (pre-SEQ_MSE) — see above.
 
     # ---- 9. probe cos vs FP on a held-out prompt (informational) ----
     try:
