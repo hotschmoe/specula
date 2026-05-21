@@ -2117,8 +2117,36 @@ hard-coded scripts still resolve. AdaScale (torch + onnx2torch, GPU)
 not yet isolated-tested — will be exercised by the COLD_START step 9
 0.6B run, which is the real gate.
 
-### Next: COLD_START steps 8b/9-12
+### Toolchain bring-up — more COLD_START doc drift fixed
 
-Configure dev `.bashrc` env vars, verify `qairt-converter` +
-`optimum-cli export onnx` end-to-end, then run 0.6B w8a16 (gate:
-cos ≥ 0.99), 0.6B w4a16, 4B w4a16.
+Bringing the toolchain up surfaced four more gaps vs the doc (all
+2026-05-21, on Ubuntu 24.04 / py3.10):
+
+1. **`optimum` not pulled by `qai-hub-models`** — installed `optimum
+   2.1.0` + `optimum-onnx 0.1.0` explicitly (optimum 2.x moved the
+   `export onnx` subcommand into `optimum-onnx`).
+2. **`qairt-converter` needs `libc++`** — its native bindings
+   (`libDlModelToolsPy.so`) link `libc++.so.1`, absent on the base
+   image. Fix: `sudo apt-get install -y libc++1 libc++abi1`.
+3. **torchvision/torchaudio version skew** — after the torch 2.7.1
+   cu128 swap, the stale `torchvision 0.19.1` broke optimum's import
+   (`torchvision::nms does not exist`). Re-pin the whole family from
+   the cu128 index: `torch==2.7.1 torchvision==0.22.1
+   torchaudio==2.7.1`. Installing torchvision unpinned drags torch
+   to 2.11 — pin all three.
+4. **`accelerate` missing** — `transformers 4.51.0` references
+   `init_empty_weights` unconditionally; without `accelerate` the
+   export dies with `NameError`. Fix: `uv pip install accelerate`
+   (got 1.13.0).
+
+`optimum-cli export onnx` then exported Qwen3-0.6B cleanly
+(`model.onnx` + 2.4 GB `model.onnx_data`). `qairt-converter` and
+`qnn-context-binary-generator` load. dev `.bashrc` got the
+SETUP_DEV_USER §6 env block.
+
+### Run status
+
+- **0.6B w8a16** — launched 2026-05-21 ~06:33 UTC, workdir
+  `/workspace/runs/qwen3_0p6b_w8a16`, log `qwen3_0p6b_w8a16.log`.
+  Gate: AIMET probe cos ≥ 0.99 vs FP32.
+- Then 0.6B w4a16 (Lever C), then 4B w4a16 (production).
