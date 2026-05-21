@@ -2303,3 +2303,24 @@ QuantSim w8a16 tf_enhanced run fully on CPU → cos 0.6548; CUDA →
 cause. The structural ~0.65 ceiling is real on both. `quant_ablation.py`
 running to bisect (disable param/activation/input quantizer groups).
 4B w4a16 run is in stage 6 (SEQ_MSE).
+
+### cos: ROOT CAUSE isolated — activation quantization (2026-05-21 ~08:30)
+
+`runs/quant_ablation.py` (QuantSim w16a16, disable quantizer groups):
+
+| ablation                  | cos    |
+|----------------------------|--------|
+| baseline (all on)          | 0.6545 |
+| ALL quantizers disabled    | 1.0000 |
+| graph-INPUT disabled       | 0.6586 |
+| PARAM (weight) disabled    | 0.6540 |
+| **ACTIVATION disabled**    | 0.9921 |
+
+ALL-off → cos 1.0 proves the QuantSim graph transform + probe are
+correct. Disabling **activation** quantizers recovers cos 0.99 →
+**activation quantization of intermediate tensors is the whole
+problem**, even at int16. Hypothesis under test (`cos_maskval.py`):
+the additive attention mask sentinel `-65504.0` (fp16 −inf) blows up
+the post-mask score-tensor quantizer range so normal scores get ~1.0
+int16 granularity. Sweeping the sentinel; if cos jumps as |sentinel|
+shrinks, the fix is a quantization-friendly mask value.
