@@ -2386,3 +2386,18 @@ Relaunched:
 
 Both monitored. Expect 0.6B w8a16 probe cos ~0.99; 4B w4a16 cos to
 be the Lever-C datapoint.
+
+### Disk-full incident + recovery (2026-05-21 ~10:15)
+
+3 concurrent runs + ~50 GB of orphaned AdaScale tempdirs (from earlier
+diagnostic scripts / killed runs) filled the 100 GB ephemeral overlay
+(`/tmp`) — AdaScale writes a `copy.deepcopy` fp32 model there (~16 GB
+for 4B). The 4B run died with `OSError: No space left on device`;
+cleanup then deleted live 0.6B tempdirs too. **Recovery:** purged
+orphaned `/tmp/tmp*` (overlay → 78 GB free), restarted **4B w4a16 +
+0.6B w8a16** `--force-stage 6` (stages 1-5 cached on `/workspace`,
+unaffected — `/workspace` never filled). Skipped the 3rd concurrent
+run; added a disk watchdog. 0.6B w4a16 (Lever C) deferred —
+`cos_final.py` already gave the w4 0.6B datapoint (basic cos 0.93).
+Op note: AdaScale tempdirs are ephemeral-overlay-bound; don't run
+many AIMET jobs concurrently without watching `/tmp`.
