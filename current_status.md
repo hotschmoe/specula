@@ -2471,3 +2471,80 @@ per-quantizer bitwidth, or recompute V/O encodings post-pin.)
 `--no-use-ada-scale`. All stages 1-9 pass. The full w4a16 recipe is:
 SEQ_MSE (no AdaScale) + V/O-w8 pin + embed-w16 pin. 4B w8a16 is
 finishing; 4B w4a16 to run next (reusing pathb stages).
+
+---
+
+## Session 28 SUMMARY (2026-05-21) — Blackwell cold-start, pipeline brought up
+
+**Outcome:** the AIMET→NPU pipeline was completely broken on the new
+RTX Pro 6000 Blackwell pod; it now runs **end-to-end and produces
+complete HTP-compilable bundles for ≤1B models**. Qwen3-4B is
+quantized through AIMET; the multi-part packaging is the last blocker.
+
+### Delivered (committed to master)
+
+Complete bundles on `/workspace/runs/`:
+- `qwen3_0p6b_w8a16_fix/09_bundle_w8a16/…tar` — 0.6B w8a16, 806 MB,
+  763 MB `.bin`. All 9 stages.
+- `qwen3_0p6b_w4a16_fix/09_bundle_w4a16/…tar` — 0.6B w4a16, 940 MB,
+  898 MB `.bin`. All 9 stages.
+- `qwen3_4b_w4a16/06_aimet_w8a16/` + `07_dlc_w8a16/` — 4B w8a16
+  quantized + 4.4 GB DLC (multi-part split pending).
+- 4B w4a16 AIMET stage 6 running at session end.
+
+### Eight root-caused fixes (all committed)
+
+1. **Blackwell sm_120** — torch 2.4.1+cu121 has no sm_120 kernels;
+   swapped to `torch 2.7.1+cu128`. (onnxruntime-gpu 1.23.2 + AIMET
+   2.26 cu121 both run on Blackwell as-is.)
+2. **COLD_START doc drift** — `optimum`+`optimum-onnx`+`accelerate`
+   not pulled by qai-hub-models; `libc++` needed for qairt-converter;
+   QAIRT zip extract path. (COLD_START.md updated.)
+3. **AdaScale** — opset-18 ReduceMean/ScatterND crashed onnx2torch
+   (→ export `--opset 17`); block extraction missed shared-preamble
+   inputs (→ declare `input_ids`+`pkv0` in `lib/aimet.py`). First
+   time AdaScale runs in this repo.
+4. **qairt-converter** — QAIRT 2.45 bindings are numpy-1.x ABI; the
+   numpy-2.x venv made every IrStaticTensor read garbage. Added
+   `/workspace/venvs/qairt-py310` (numpy 1.26.4); `lib/qairt.py`
+   runs the converter under it.
+5. **V/O w8 pin** — detected post-QuantSim (mutated names) → bumped
+   0/N; now detect on the clean graph, bump pre-SEQ_MSE.
+6. **Embedding pin** — w4a16 int4 embed table vs int16 Gather output
+   → QNN rejects (Gather needs in==out encoding). Pin embed table to
+   int16 per-tensor (`lib/aimet.py` stage 4c).
+7. **V/O-pin ↔ AdaScale conflict** — AdaScale's global `ADASCALE_
+   PARAM_BW` writes bw-4 offsets into bw-8 V/O slots → qairt rejects.
+   w4a16 runs use `--no-use-ada-scale` (AdaScale wasn't moving cos).
+8. **fp16 vs int16 activations** — see "cos" below.
+
+### Two OPEN items (next session)
+
+**A. int16 activation cos gap.** Probe cos: 0.6B w8a16 0.557, 0.6B
+w4a16 0.61, 4B w8a16 0.44 (gate 0.99). Root-caused: int16 fixed-point
+can't span LLM activation dynamic range. fp16 activations → cos
+0.9994 BUT HTP-incompatible (fp32→fp16 `QNN_Convert` rejected).
+Qualcomm's reference uses integer activations (uint8/uint16) at good
+quality → the gap is a calibration/quant-config difference, not
+precision. Candidates: per-channel activation quant, KV-cache
+precision, AIMET quant-config op exclusions matching Qualcomm.
+
+**B. 4B multi-part split.** A 4B model's single `.bin` exceeds the
+HTP 3.5 GB serializer limit → must split (Qualcomm ships 4 parts).
+`compile_split_bundle.py`/`lib/split.py` extracts parts but parts ≥3
+fail — `extract_part` walks back to `input_ids` because the layers
+consume *processed* shared-preamble tensors (cos/sin/mask) that the
+PartSpec doesn't declare as cross-part I/O (same root cause as the
+AdaScale shared-preamble bug). Fix: `build_part_specs` must declare
+the real preamble-output tensors as part inputs (and thread them
+through the multi-part I/O contract). This is the last mile for a
+complete 4B bundle.
+
+### Environment (persistent on /workspace, for WARM_START)
+
+- `venvs/aimet-2.26-cu121-py310` — AIMET stages 1-6. torch
+  2.7.1+cu128, numpy 2.2.6, aimet_onnx 2.26.0+cu121, onnxruntime-gpu
+  1.23.2, transformers 4.51.0, optimum 2.1.0.
+- `venvs/qairt-py310` — qairt-converter only. numpy 1.26.4.
+- `sdks/qairt-2.45.40.260406`; `models/Qwen3-0.6B`, `Qwen3-4B`;
+  `reference/qwen3_4b_qualcomm/` (Qualcomm w4a16 X2E reference).
