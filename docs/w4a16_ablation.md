@@ -31,10 +31,11 @@ are recipe-independent — regenerated once, reused via `--force-stage 6`.
 | A0 | P0 baseline | 0.9751 | match | default_config_llama, V/O-w8 pin, no AdaScale |
 | A1 | + P2 mask-clip [-100,0] | 0.9751 | match | **no change vs A0** — see findings |
 | A4 | + scoped-P1 (16x8 + int8-KV, **no** int8-lmhead) | 0.9501 | match | **regression -0.025** — see findings |
-| A6 | − V/O-w8 pin (isolation) | _TBD_ | | isolates the V/O pin (A2 drops it for AdaScale) |
-| A2 | + AdaScale − V/O-pin | _TBD_ | | weight-quality lever — the campaign's real shot |
-| A3 | + AdaScale − V/O-pin + P2 | _TBD_ | | P2 proven inert → expect ≈ A2 |
-| A5 | + AdaScale − V/O-pin + P2 + scoped-P1 | _TBD_ | | expect < A2 (scoped-P1 regresses) |
+| A6 | − V/O-w8 pin (isolation) | _running_ | | isolates the V/O pin (A2 drops it for AdaScale) |
+| A2 | + AdaScale − V/O-pin | 0.9649 | match | **−0.010 vs P0** — confounded (also drops V/O pin); see A6 |
+| A7 | + AdaScale, V/O-pin KEPT (probe-only) | _TBD_ | | conflict breaks stage-7 bundle, not the stage-9 probe |
+| A3 | + AdaScale − V/O-pin + P2 | (≈A2) | | P2 proven inert → predicted ≈ 0.965, not run |
+| A5 | + AdaScale − V/O-pin + P2 + scoped-P1 | (<A2) | | scoped-P1 proven to regress → predicted <0.965, not run |
 
 ## Run commands
 
@@ -81,4 +82,15 @@ single-param-bw conflict only bites when both are on).
   Qualcomm makes for deployment, not quality levers. The only lever
   that can *raise* w4a16 cos is one that improves the int4 *weights*
   without cutting precision elsewhere — i.e. AdaScale (A2).
-- _(rows A6, A2, A3, A5 appended as runs land)_
+- **A2 (AdaScale − V/O-pin): 0.9649, −0.010 vs P0.** AdaScale (512
+  iters, the qai-hub value) did not lift cos. Two reasons it's not a
+  clean win: (1) it is confounded — the V/O-pin↔AdaScale single-param-
+  bw conflict forced `--no-vo-pin-w8`, so A2 also *lost* the V/O w8
+  pin (a precision increase); A6 isolates that. (2) consistent with
+  the Session-28 note that "AdaScale wasn't moving the probe cos" —
+  AdaScale tunes weight scales but the w4 quantization grid itself is
+  the limit. AdaScale wall: 2974 s (50 min) at 512 iters. Next: A6
+  isolates the V/O pin; A7 measures AdaScale *with* the V/O pin kept
+  (probe-only — the conflict breaks the stage-7 bundle compile, not
+  the stage-9 probe).
+- _(A6, A7 appended as runs land)_
