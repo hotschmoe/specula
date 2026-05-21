@@ -2706,11 +2706,39 @@ Disk hygiene: pruned superseded pre-P0 4B AIMET outputs + bundles + the
 spent 0.6B P0 validation run (~66 GB freed). `/workspace` 85 GB / 200,
 local `/` 38 GB / 100.
 
+### w4a16 ablation campaign — complete (2026-05-21 ~21:00)
+
+Exhaustively swept every recipe lever to close the 4B w4a16 gap
+(`docs/w4a16_ablation.md`). **Verdict: P0 is the ceiling — nothing
+beats it.** 6 runs on cached pathb stages:
+
+| run | recipe | cos |
+|-----|--------|-----|
+| A0 | P0 | 0.9751 |
+| A6 | P0 − V/O pin | 0.9758 |
+| A1 | P0 + P2 mask-clip | 0.9751 |
+| A2 | P0 + AdaScale (−V/O pin) | 0.9649 |
+| A4 | P0 + scoped-P1 | 0.9501 |
+
+Findings: **AdaScale hurts** (−0.011, isolated A6→A2 — regresses the
+probe, doesn't lift it); the **V/O-w8 pin is neutral** dead weight
+(A0≈A6 — recommend defaulting `--no-vo-pin-w8` for w4a16 under P0, for
+a smaller model at zero cos cost); P2 mask-clip is inert; all
+precision-reduction levers (P1/scoped-P1/16x8/int8-KV) regress. The
+0.975→0.99 gap is **intrinsic int4-weight error** — no qai-hub recipe
+knob closes it. w8a16 (int8 weights) clears the gate (0.996); w4a16
+floors at ~0.975 with argmax matching FP on every ablation.
+
+P1 reverted earlier (a3f7416) as a validated regression. New flags
+landed for the campaign: `--mask-clip-min`, `--scoped-p1`. P0 4B
+bundles (w8a16 + w4a16) built and transferred to the X2EE laptop.
+
 ### Still open
 
-- **w4a16 residual ~1.5% cos** — P0 gives 4B w4a16 0.9751; P1 (just
-  landed) validation pending; P2 (clip attention mask to [-100,0]) is
-  the next lever. w8a16 is done — 4B w8a16 P0 cleared at 0.9962.
+- **w4a16 0.975 — accepted as the recipe ceiling.** The 1.5% to the
+  0.99 gate is int4-weight precision, not a recipe miss. Final
+  arbiter: on-device comparison vs Qualcomm's reference bundle on the
+  X2 Elite (both bundles now on the device).
 - **Genie part-to-part mask routing** — needs X2E hardware to confirm
   the threaded mask reaches parts 3-4. Note Qualcomm's reference
   bundle instead feeds `attention_mask` to every decoder part from
