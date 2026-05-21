@@ -29,7 +29,7 @@ are recipe-independent — regenerated once, reused via `--force-stage 6`.
 | ID | recipe (on top of P0) | cos_fp_q | argmax | notes |
 |----|------------------------|---------:|--------|-------|
 | A0 | P0 baseline | 0.9751 | match | default_config_llama, V/O-w8 pin, no AdaScale |
-| A1 | + P2 mask-clip [-100,0] | _TBD_ | | clamp the folded additive mask |
+| A1 | + P2 mask-clip [-100,0] | 0.9751 | match | **no change vs A0** — see findings |
 | A2 | + AdaScale | _TBD_ | | needs V/O-pin↔AdaScale conflict resolved |
 | A3 | + AdaScale + P2 | _TBD_ | | |
 | A4 | + scoped-P1 (16x8 + int8-KV, **no** int8-lmhead) | _TBD_ | | full-P1 hurt — see findings |
@@ -61,4 +61,12 @@ single-param-bw conflict only bites when both are on).
   measures. Lesson: keep lm_head ≥ int16; if P1 is revisited, scope it
   to 16x8 matmuls + int8-KV only (→ row A4). KV-tying also silently
   no-op'd first (graph-accessor bug, fixed in fd98768 then reverted).
-- _(rows A1-A5 appended as runs land)_
+- **A1 (P2 mask-clip): no effect on probe cos.** Clamping the 2 mask
+  sentinel constants (`/model/ConstantOfShape`, `/model/Constant_27`:
+  -3.4e38 → -100) gave cos **0.975058** — bit-identical to A0. The
+  folded mask functionally masks regardless of sentinel magnitude
+  (clamped -100 and quantizer-saturated values both softmax to ~0
+  attention weight), so the probe logits are unchanged. P2 is **not a
+  probe-cos lever**. Worth keeping anyway for HTP hygiene (a -3.4e38
+  activation constant is bad practice) but it does not close the gap.
+- _(rows A2-A5 appended as runs land)_
