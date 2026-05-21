@@ -1,9 +1,9 @@
 """AIMET aimet_onnx PTQ stage with the full Qualcomm-quality recipe.
 
-Order: build QSM → V/O w8 pin (4b, w4a16) → embed pin (4c, sub-int16
-weights) → P1 precision config (4d, w4a16) → SEQ_MSE (per-tensor weight
-scale search) → AdaScale (per-block scale tuning, gradient-based) →
-compute_encodings (final activation observation) → export.
+Order: build QSM → SEQ_MSE (per-tensor weight scale search) → AdaScale
+(per-block scale tuning, gradient-based) → compute_encodings (final
+activation observation) → V/O w8 pin (optional, for w4a16 only) →
+export.
 
 Each optimizer runs on its own block of cal samples — they all consume
 the same iterable so we materialize the cal list up front.
@@ -12,15 +12,6 @@ V/O pin: identifies attention `v_proj` and `o_proj` weight quantizers
 (matching the Qwen3 graph's optimum-export naming) and overrides their
 bitwidth post-encodings to w8. Mitigates the W4A16 V/O collapse without
 needing a full mixed-precision rebuild.
-
-P1 (docs/qai_hub_recipe.md §(c) P1): for the w4a16 path, ports
-Qualcomm's precision config — int8-symmetric in/out-tied KV cache, 16x8
-attention matmuls, int8 per-channel lm_head — by importing
-`_apply_int8_kv_cache_tying_and_lm_head` from qai-hub-models. Applied
-pre-SEQ_MSE so the int8/16x8 scales are searched at the final bitwidth.
-The 4b V/O pin is likely made redundant by P1's 16x8 rule and the 4c
-embed pin overlaps P1's int8 lm_head — both kept conservatively pending
-GPU validation; see the stage 4d comment in `run_aimet`.
 """
 from __future__ import annotations
 
@@ -389,108 +380,6 @@ def _bump_vo_to_w8(qsim, vo_weight_names: list[str]) -> int:
     return bumped
 
 
-def _build_kv_io_map(sim, log=None) -> dict[str, str]:
-    """Build the past->present KV tensor map for OUR pathb graph.
-
-    docs/qai_hub_recipe.md §(c) P1. qai-hub-models' `_get_kv_io_map`
-    matches `"past_key"`/`"past_value"` substrings in BOTH graph input
-    AND output names. That works for Qualcomm's own export (KV outputs
-    `past_key_*_out`) but NOT for ours: our pathb rewrite names KV
-    INPUTS `past_key_values.{i}.{key,value}` and KV OUTPUTS
-    `present.{i}.{key,value}` — `present.*` contains no "past_key"
-    substring, so qai-hub's map would be empty. We build it ourselves.
-
-    Two things this MUST get right (the first version got both wrong
-    and the map silently came back empty -> KV int8 tying skipped):
-      * graph access — AIMET's QuantizationSimModel exposes the graph
-        as `sim.model.graph()` (a METHOD; that is what aimet's own
-        quantsim.py and qai-hub's `_get_kv_io_map` use). `sim.model.
-        model.graph` is not it.
-      * `_updated` suffix — QuantSim may rename `present.*` outputs to
-        `present.{i}.{kind}_updated`; qai-hub's `_get_kv_io_map` strips
-        exactly that. We match on the parsed (layer, kind) so suffixes
-        don't matter, and strip `_updated` from the returned value.
-
-    Returns {past_input_name: present_output_name}, present name
-    `_updated`-stripped (mirrors qai-hub). Only pairs where both sides
-    exist (`_get_enabled_quantizer` KeyErrors on a missing tensor).
-    """
-    graph = sim.model.graph()
-    in_names = [t.name for t in graph.input]
-    out_names = [t.name for t in graph.output]
-
-    def _parse(name: str):
-        # -> (layer_idx, "key"|"value") or None; tolerates a trailing
-        # `_updated` and any past_key_values./present. style prefix.
-        m = re.search(r"\.(\d+)\.(key|value)(?:_updated)?$", name)
-        return (int(m.group(1)), m.group(2)) if m else None
-
-    past_in: dict[tuple, str] = {}
-    for n in in_names:
-        if "past_key" in n or "past_value" in n:
-            k = _parse(n)
-            if k is not None:
-                past_in[k] = n
-    present_out: dict[tuple, str] = {}
-    for n in out_names:
-        if n.startswith("present.") or "past_key" in n or "past_value" in n:
-            k = _parse(n)
-            if k is not None:
-                present_out[k] = n.replace("_updated", "")
-
-    kv_io_map = {past_in[k]: present_out[k] for k in past_in if k in present_out}
-    if log is not None and not kv_io_map:
-        log(f"[aimet 4d] _build_kv_io_map: 0 pairs — inputs sample="
-            f"{in_names[:4]} outputs sample={out_names[:4]}")
-    return kv_io_map
-
-
-def _apply_w4a16_precision_config(sim, log) -> dict:
-    """Port Qualcomm's w4a16 precision config into our QuantSim.
-
-    docs/qai_hub_recipe.md §(c) P1. Replicates qai-hub-models
-    `_shared/llm/model.py::_configure_quant_sim` (w4a16 branch) which
-    calls `_apply_int8_kv_cache_tying_and_lm_head(sim, kv_io_map)` from
-    `_shared/llm/_utils.py`. That function (imported here, not
-    reimplemented) does, in order:
-      1. tie Concat quantizers + rebuild session,
-      2. KV-cache I/O tensors -> int8 symmetric,
-      3. lm_head weights -> int8 per-channel,
-      4. tie KV in/out quantizers (cache round-trips without
-         re-quantizing),
-      5. `_set_matmul_second_input_to_8b` -> attention BMMs run 16x8
-         (16-bit one operand, 8-bit the other; 8-bit propagated
-         upstream through Concat/Transpose/Reshape/Slice/Div).
-
-    The ONLY adaptation we make is the kv_io_map: see `_build_kv_io_map`
-    (our pathb KV outputs are `present.*`, which qai-hub's
-    `_get_kv_io_map` substring match would miss).
-
-    Call site: this MUST run right after the QuantSim is built and
-    BEFORE SEQ_MSE / AdaScale / compute_encodings — that is the order
-    qai-hub uses (`create_quantsim` -> `_configure_quant_sim` happens
-    inside `_build_quantsim`, strictly before `quantize()` runs
-    seq_mse/adascale/compute_encodings). Bitwidths must be pinned
-    before the scale search so the w8/int8 scales are searched and the
-    encodings observed at the final bitwidth.
-    """
-    from qai_hub_models.models._shared.llm._utils import (
-        _apply_int8_kv_cache_tying_and_lm_head,
-    )
-
-    kv_io_map = _build_kv_io_map(sim, log)
-    log(f"[aimet 4d] P1: built kv_io_map with {len(kv_io_map)} entries "
-        f"(pathb past_key_values.* -> present.*)")
-    if not kv_io_map:
-        log("[aimet 4d] WARNING: kv_io_map is empty — no KV inputs/outputs "
-            "matched; skipping KV int8 tying (lm_head + 16x8 still applied)")
-
-    _apply_int8_kv_cache_tying_and_lm_head(sim, kv_io_map, use_16x8_matmuls=True)
-    log("[aimet 4d] P1: applied int8-tied KV cache + int8 lm_head + 16x8 "
-        "attention matmuls")
-    return {"kv_io_map_entries": len(kv_io_map)}
-
-
 def run_aimet(
     *,
     src_dir: Path,
@@ -668,59 +557,6 @@ def run_aimet(
              f"embed-table weights → int16 per-tensor ({time.time() - t0:.1f}s)")
         info["stages"]["4c_embedding_pin"] = {"detected": len(emb_weight_names),
                                               "pinned": pinned}
-
-    # ---- 4d. P1 — Qualcomm w4a16 precision config (docs/qai_hub_recipe.md
-    # §(c) P1): int8-symmetric in/out-tied KV cache + 16x8 attention
-    # matmuls + int8 per-channel lm_head. Ported by IMPORTING the qai-hub
-    # functions (`_apply_int8_kv_cache_tying_and_lm_head` from
-    # qai_hub_models/.../_shared/llm/_utils.py) — not reimplemented — so
-    # we track Qualcomm's recipe exactly. The only local adaptation is the
-    # kv_io_map (`_build_kv_io_map`): our pathb graph names KV outputs
-    # `present.{i}.*`, which qai-hub's `_get_kv_io_map` substring match
-    # ("past_key"/"past_value") would miss.
-    #
-    # Call order: this runs AFTER the QuantSim build and BEFORE SEQ_MSE /
-    # AdaScale / compute_encodings — mirroring qai-hub, where
-    # `_configure_quant_sim` (inside `create_quantsim`) applies the
-    # precision config strictly before `quantize()` runs the optimizers.
-    # Bitwidths must be pinned before the scale search so the int8/16x8
-    # scales are searched and the encodings observed at the final
-    # bitwidth.
-    #
-    # SCOPE — w4a16 only. qai-hub's `_configure_quant_sim` applies
-    # `_apply_int8_kv_cache_tying_and_lm_head` ONLY on the `Precision.w4a16`
-    # branch; there is no w8a16 branch in qai-hub's LLM recipe (Qualcomm
-    # ships Qwen3-4B as w4a16). int8 KV + 16x8 matmuls would very likely
-    # also help our w8a16 path (smaller KV cache, attention range), but
-    # qai-hub gives us no w8a16 reference to match, so per the task's
-    # "match what qai-hub does per precision" we keep P1 w4a16-only and
-    # leave this comment. Revisit for w8a16 once w4a16 is GPU-validated.
-    #
-    # OVERLAP with the 4b V/O pin and 4c embed pin (left in place,
-    # conservatively, pending GPU validation — see docs/qai_hub_recipe.md
-    # §(c) P1):
-    #  - V/O pin (4b): P1's 16x8 matmul rule (`_set_matmul_second_input_to_8b`)
-    #    is the structural fix for the same V/O collapse `_bump_vo_to_w8`
-    #    works around, so 4b is *likely redundant* now. NOT removed —
-    #    needs on-GPU confirmation, which is unavailable here.
-    #  - embed pin (4c): DIRECT CONFLICT. `_pin_embedding_w16` sets the
-    #    embed-table weight to int16 per-tensor; P1's `_set_lm_head_to_8b`
-    #    sets the lm_head weight to int8 per-channel. Qwen3 ties
-    #    embeddings, so lm_head weight == embed table — both target the
-    #    same initializer. We resolve in favour of Qualcomm's recipe:
-    #    stage 4d runs AFTER 4c, so `_set_lm_head_to_8b` (int8 per-channel)
-    #    is applied last and WINS for the tied lm_head/embed weight. This
-    #    matches Qualcomm's shipped bundle (part4 lm_head is int8; ours
-    #    was int16 — the +38% part4 size delta noted in
-    #    e2e_optimizations.md). The 4c pin still covers any embed-table
-    #    weight that is NOT also a lm_head input; for fully-tied Qwen3
-    #    that set is empty, so 4c becomes effectively a no-op here — kept
-    #    for non-tied models and pending validation.
-    if precision == "w4a16":
-        t0 = time.time()
-        p1_info = _apply_w4a16_precision_config(sim, _log)
-        _log(f"[aimet 4d] P1 precision config applied ({time.time() - t0:.1f}s)")
-        info["stages"]["4d_p1_precision"] = {"wall_s": time.time() - t0, **p1_info}
 
     # ---- 5. SEQ_MSE (optional, run BEFORE compute_encodings) ----
     if use_seq_mse:
