@@ -104,6 +104,10 @@ def parse_args() -> argparse.Namespace:
                    help="P2 (docs/w4a16_ablation.md A1): clamp the causal-mask "
                         "additive sentinel (-3.4e38) to this value. Qualcomm uses "
                         "-100.0. Default: off (no clamp).")
+    p.add_argument("--scoped-p1", action=argparse.BooleanOptionalAction, default=False,
+                   help="A4 (docs/w4a16_ablation.md): apply Qualcomm's w4a16 "
+                        "int8-tied-KV + 16x8-matmul precision config, MINUS the "
+                        "int8 lm_head (which regressed cos in full P1). w4a16 only.")
 
     # Infra knobs.
     p.add_argument("--qairt-root", type=Path, default=DEFAULT_QAIRT_ROOT)
@@ -223,6 +227,7 @@ def main() -> int:
             export_prefix=export_prefix,
             model_info=model_info,
             mask_clip_min=args.mask_clip_min,
+            use_scoped_p1=args.scoped_p1,
         )
         with open(aimet_done_marker, "w") as f:
             json.dump(info, f, indent=2, default=str)

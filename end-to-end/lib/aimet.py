@@ -16,6 +16,7 @@ needing a full mixed-precision rebuild.
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Optional
@@ -380,6 +381,77 @@ def _bump_vo_to_w8(qsim, vo_weight_names: list[str]) -> int:
     return bumped
 
 
+def _build_kv_io_map(sim, log=None) -> dict[str, str]:
+    """Build the past->present KV tensor map for OUR pathb graph (for the
+    scoped-P1 KV int8 tying — docs/w4a16_ablation.md A4).
+
+    AIMET's QuantizationSimModel exposes the graph as `sim.model.graph()`
+    (a method — what aimet's own quantsim.py and qai-hub's `_get_kv_io_map`
+    use). Our pathb graph names KV inputs `past_key_values.{i}.{key,value}`
+    and KV outputs `present.{i}.{key,value}` (qai-hub's substring match
+    would miss `present.*`), and QuantSim may suffix outputs `_updated`.
+    We parse (layer, key|value) so prefixes/suffixes don't matter, and
+    strip `_updated` from the returned value (mirrors qai-hub).
+    """
+    graph = sim.model.graph()
+    in_names = [t.name for t in graph.input]
+    out_names = [t.name for t in graph.output]
+
+    def _parse(name: str):
+        m = re.search(r"\.(\d+)\.(key|value)(?:_updated)?$", name)
+        return (int(m.group(1)), m.group(2)) if m else None
+
+    past_in: dict[tuple, str] = {}
+    for n in in_names:
+        if "past_key" in n or "past_value" in n:
+            k = _parse(n)
+            if k is not None:
+                past_in[k] = n
+    present_out: dict[tuple, str] = {}
+    for n in out_names:
+        if n.startswith("present.") or "past_key" in n or "past_value" in n:
+            k = _parse(n)
+            if k is not None:
+                present_out[k] = n.replace("_updated", "")
+
+    kv_io_map = {past_in[k]: present_out[k] for k in past_in if k in present_out}
+    if log is not None and not kv_io_map:
+        log(f"[aimet 4d] _build_kv_io_map: 0 pairs — inputs sample="
+            f"{in_names[:4]} outputs sample={out_names[:4]}")
+    return kv_io_map
+
+
+def _apply_w4a16_scoped_p1(sim, log) -> dict:
+    """Scoped P1 (docs/w4a16_ablation.md A4): Qualcomm's w4a16 precision
+    config MINUS the int8 lm_head.
+
+    Full P1 regressed cos 0.9751 -> 0.9557 because `_set_lm_head_to_8b`
+    overrode our int16 lm_head and the lm_head feeds logits directly.
+    This applies only the parts that do not touch the lm_head weight:
+      - tie Concat quantizers,
+      - KV-cache I/O tensors -> int8 symmetric, in/out quantizers tied,
+      - 16x8 attention matmuls (`_set_matmul_second_input_to_8b`).
+    qai-hub sub-functions imported directly (not reimplemented). Runs
+    pre-SEQ_MSE so scales are searched at the final bitwidth.
+    """
+    from qai_hub_models.models._shared.llm._utils import (
+        _set_tensors_to_output_8b_sym, _tie_quantizers_for_kv_cache,
+        _set_matmul_second_input_to_8b,
+    )
+    sim._tie_quantizers_for_op_types(["Concat"])
+    sim._rebuild_session()
+    kv_io_map = _build_kv_io_map(sim, log)
+    log(f"[aimet 4d] scoped-P1: kv_io_map {len(kv_io_map)} entries")
+    if kv_io_map:
+        kv_io_list = list(kv_io_map.keys()) + list(kv_io_map.values())
+        _set_tensors_to_output_8b_sym(sim, kv_io_list)
+        _tie_quantizers_for_kv_cache(sim, kv_io_map)
+    _set_matmul_second_input_to_8b(sim)
+    log("[aimet 4d] scoped-P1: Concat-tie + int8-KV(tied) + 16x8 matmuls "
+        "applied (lm_head left at int16 — see A4 rationale)")
+    return {"kv_io_map_entries": len(kv_io_map)}
+
+
 def _clamp_mask_sentinels(model_proto, clip_min: float, log) -> int:
     """P2 (docs/qai_hub_recipe.md §(c) P2 / docs/w4a16_ablation.md A1):
     clamp the causal-mask additive sentinel from -FLT_MAX (-3.4e38) to
@@ -435,6 +507,7 @@ def run_aimet(
     export_prefix: str,
     model_info=None,  # lib.model_config.ModelInfo (optional for back-compat)
     mask_clip_min=None,  # P2: clamp causal-mask sentinel to this (e.g. -100.0)
+    use_scoped_p1=False,  # A4: int8-KV(tied) + 16x8 matmuls, no int8 lm_head
 ) -> dict:
     """Run the AIMET stage. Returns a dict of metrics + paths."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -602,6 +675,15 @@ def run_aimet(
              f"embed-table weights → int16 per-tensor ({time.time() - t0:.1f}s)")
         info["stages"]["4c_embedding_pin"] = {"detected": len(emb_weight_names),
                                               "pinned": pinned}
+
+    # ---- 4d. scoped-P1 (optional, w4a16) — Qualcomm's int8-KV + 16x8
+    # matmul precision config, minus the int8 lm_head (which regressed
+    # cos in full P1). Pre-SEQ_MSE so the bitwidths are searched. ----
+    if use_scoped_p1 and precision == "w4a16":
+        t0 = time.time()
+        sp1 = _apply_w4a16_scoped_p1(sim, _log)
+        _log(f"[aimet 4d] scoped-P1 applied ({time.time() - t0:.1f}s)")
+        info["stages"]["4d_scoped_p1"] = {"wall_s": time.time() - t0, **sp1}
 
     # ---- 5. SEQ_MSE (optional, run BEFORE compute_encodings) ----
     if use_seq_mse:
