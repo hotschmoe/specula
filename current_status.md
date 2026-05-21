@@ -2055,3 +2055,57 @@ an incremental A/B vs Phase 4's 27B result.
    lands, re-run the session-2 correctness matrix (B0-B7).
 10. **Upstream-issue search for X2-90 OpenCL** to see if anyone else
     is ahead of us. Low priority now that the backend works.
+
+---
+
+## Session 28 (2026-05-21): cold-start bootstrap on RTX Pro 6000 Blackwell — AIMET sm_120 blocker
+
+**Pod:** RunPod RTX PRO 6000 Blackwell Server Edition, 96 GB VRAM,
+~2 TB host RAM (cgroup limit ~233 GB), 128 vCPU. Driver 580.126.16
+(CUDA 13 capable). Network volume `/workspace` healthy. Following
+`end-to-end/COLD_START.md` to recreate the Qwen3-4B w4a16 NPU bundle.
+
+### Bootstrap done (COLD_START steps 3-7, token-free path)
+
+- Repo already on `/workspace/specula`. `uv` installed.
+- venv `/workspace/venvs/aimet-2.26-cu121-py310` created (py3.10).
+- Installed: `qai-hub-models[qwen3-4b]` 0.54.0, `aimet_onnx
+  2.26.0+cu121`, `onnxruntime-gpu 1.23.2`, `transformers 4.51.0`,
+  `torch 2.4.1+cu121`, plus `optimum 2.1.0` + `optimum-onnx 0.1.0`.
+- **Doc drift found:** COLD_START step 4 assumes `qai-hub-models`
+  pulls `optimum` — it does NOT. `optimum` + `optimum-onnx` must be
+  installed explicitly (optimum 2.x split the `export onnx`
+  subcommand into the `optimum-onnx` package; the `[exporters]`
+  extra is gone). Also `qai-hub-models` has no `qwen3-0_6b` extra
+  (only `qwen3-4b`).
+- QAIRT 2.45.40.260406 SDK at `/workspace/sdks/qairt-2.45.40.260406`
+  (zip extracts to `qairt/<ver>/`; relocated to the `qairt-<ver>`
+  path the scripts hard-code).
+- Qwen3-0.6B (1.5 GB) + Qwen3-4B (7.6 GB) downloaded via direct
+  `curl` (public HF repos — no token needed).
+- Tokens: operator confirmed HF + AI Hub not needed (direct
+  download; AI Hub configure step skipped). `gh` already authed.
+
+### BLOCKER: no AIMET build supports Blackwell (sm_120)
+
+- `torch 2.4.1+cu121` cannot run on this GPU — a real matmul fails
+  with `no kernel image is available`; `torch.cuda.get_arch_list()`
+  caps at sm_90. RTX Pro 6000 Blackwell is sm_120.
+- Binary-verified (cuobjdump on the wheels): **every** `aimet_onnx`
+  release through the latest 2.31.0 ships CUDA custom-op kernels
+  (`libaimet_onnxrt_ops.so`, an onnxruntime custom-op library) with
+  cubins/PTX only up to sm_90 / compute_90. No sm_120, no cu128
+  build. `compute_90` PTX cannot JIT forward-compile across the
+  major-version gap to sm_120.
+- torch ≥2.7 (cu128) and onnxruntime-gpu ≥1.24 (CUDA 13) DO support
+  Blackwell. AIMET does not, in any released version.
+
+### Adaptation plan (in progress)
+
+Rebuild the venv for Blackwell: `torch` cu128 (GPU) + `onnxruntime-gpu`
+≥1.24 Blackwell build (GPU) + `aimet_onnx` **`+cpu`** wheel (AIMET
+quant custom-ops on CPU; torch/ORT forward + AdaScale on GPU). Keep
+the venv path name unchanged so hard-coded scripts still resolve.
+AIMET stage will be partly CPU-bound — COLD_START's 6-8 hr estimate
+for 4B may extend. Smoke-test `aimet_onnx` QuantSim before the long
+runs. Then COLD_START steps 9-12.
