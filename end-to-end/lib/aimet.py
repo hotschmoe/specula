@@ -93,6 +93,22 @@ def _patch_apply_adascale_for_pathb_kv() -> None:
                     common_input_names.append(name)
                 if "position" in name:
                     common_input_names.append(name)
+            # ---- PATCH (2026-05-21): declare shared-preamble leaf inputs ----
+            # The optimum-cli + pathb graph routes one shared preamble
+            # (embedding, RoPE/mask/shape prep) into EVERY decoder block's
+            # extracted subgraph — a `/model/Shape` reads seq-len off
+            # `past_key_values.0.*`, and the embedding `Gather` consumes
+            # `input_ids`. With the upstream attention/position-only filter
+            # those leaves are undeclared, so `onnx.utils.Extractor` produces
+            # a block with dangling inputs and `onnx2torch.convert` dies with
+            # `Got unexpected input value type (ValueType.UNKNOWN)`. Declaring
+            # them makes every block's extraction self-contained. Verified on
+            # the opset-17 0.6B graph: blocks 0/5/27 all `convert()` clean.
+            for name in graph_input_names:
+                if (name == "input_ids"
+                        or name.startswith("past_key_values.0.")):
+                    if name not in common_input_names:
+                        common_input_names.append(name)
 
             del sim.session
             gc.collect()
@@ -125,6 +141,12 @@ def _patch_apply_adascale_for_pathb_kv() -> None:
                                 f"Got {block_kv_tensor_names!r}"
                             )
                         block_input_names.extend(block_kv_tensor_names)
+                    # block 0's KV is past_key_values.0.* — already added to
+                    # common_input_names as a shared-preamble leaf above.
+                    # Dedup, preserving order, so the extracted block doesn't
+                    # declare a duplicate input (which desyncs the fed input
+                    # list length below).
+                    block_input_names = list(dict.fromkeys(block_input_names))
 
                     qsim_sess = ActivationSampler(
                         blocks_end_points[idx][0].inputs[0].name,
