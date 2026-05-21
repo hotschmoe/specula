@@ -2559,3 +2559,19 @@ step is the only thing between here and a complete 4B bundle.
 - `venvs/qairt-py310` — qairt-converter only. numpy 1.26.4.
 - `sdks/qairt-2.45.40.260406`; `models/Qwen3-0.6B`, `Qwen3-4B`;
   `reference/qwen3_4b_qualcomm/` (Qualcomm w4a16 X2E reference).
+
+### Cleanup (2026-05-21 ~14:30) — /workspace quota is 200 GB
+
+`/workspace` hit ~178 GB (quota 200 GB). Cleaned to **59 GB**:
+- removed extra QAIRT SDKs from the version sweep (2.42, 2.44 — kept
+  only 2.45.40.260406);
+- 4B run: kept only `qwen3_4b_w4a16/06_aimet_w8a16/` (16 GB — the
+  quantized 4B w8a16 AIMET output, the input for the split-fix in
+  task #13); dropped regeneratable stages 1-5/7/8;
+- 0.6B runs: kept only the final `09_bundle_*` tars; dropped stage
+  intermediates.
+**Kept:** 2 complete 0.6B bundles, the 4B w8a16 AIMET output, venvs,
+QAIRT 2.45 SDK, models, Qualcomm reference. The 4B w4a16 run was
+stopped (no bundle — blocked by task #13). All monitors + background
+shells removed. **Op note:** keep `/workspace` lean — 200 GB cap;
+AIMET stage 1-5 intermediates are ~16 GB each for 4B, prune them.
