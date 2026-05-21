@@ -30,10 +30,11 @@ are recipe-independent — regenerated once, reused via `--force-stage 6`.
 |----|------------------------|---------:|--------|-------|
 | A0 | P0 baseline | 0.9751 | match | default_config_llama, V/O-w8 pin, no AdaScale |
 | A1 | + P2 mask-clip [-100,0] | 0.9751 | match | **no change vs A0** — see findings |
-| A2 | + AdaScale | _TBD_ | | needs V/O-pin↔AdaScale conflict resolved |
-| A3 | + AdaScale + P2 | _TBD_ | | |
-| A4 | + scoped-P1 (16x8 + int8-KV, **no** int8-lmhead) | _TBD_ | | full-P1 hurt — see findings |
-| A5 | + AdaScale + P2 + scoped-P1 | _TBD_ | | kitchen sink |
+| A4 | + scoped-P1 (16x8 + int8-KV, **no** int8-lmhead) | 0.9501 | match | **regression -0.025** — see findings |
+| A6 | − V/O-w8 pin (isolation) | _TBD_ | | isolates the V/O pin (A2 drops it for AdaScale) |
+| A2 | + AdaScale − V/O-pin | _TBD_ | | weight-quality lever — the campaign's real shot |
+| A3 | + AdaScale − V/O-pin + P2 | _TBD_ | | P2 proven inert → expect ≈ A2 |
+| A5 | + AdaScale − V/O-pin + P2 + scoped-P1 | _TBD_ | | expect < A2 (scoped-P1 regresses) |
 
 ## Run commands
 
@@ -69,4 +70,15 @@ single-param-bw conflict only bites when both are on).
   attention weight), so the probe logits are unchanged. P2 is **not a
   probe-cos lever**. Worth keeping anyway for HTP hygiene (a -3.4e38
   activation constant is bad practice) but it does not close the gap.
-- _(rows A2-A5 appended as runs land)_
+- **A4 (scoped-P1): regression -0.025 → 0.9501.** `_build_kv_io_map`
+  worked (72/72 KV pairs found via `sim.model.graph()`); Concat-tie +
+  int8-tied-KV + 16x8 matmuls applied, lm_head kept int16. Still
+  regressed: **16x8 matmuls and int8 KV both reduce precision**, and
+  the probe (FP-vs-fakequant logit cosine) penalizes every precision
+  reduction. Combined with A1 + the full-P1 result, the pattern is
+  firm: **precision-reduction levers (P1, scoped-P1, 16x8, int8-KV)
+  all hurt probe cos.** They are HTP-efficiency/footprint choices
+  Qualcomm makes for deployment, not quality levers. The only lever
+  that can *raise* w4a16 cos is one that improves the int4 *weights*
+  without cutting precision elsewhere — i.e. AdaScale (A2).
+- _(rows A6, A2, A3, A5 appended as runs land)_
