@@ -2270,3 +2270,28 @@ the Blackwell pod.
 AdaScale ran 28/28 blocks but only nudged cos 0.535→0.557.
 `runs/cos_diag.py` is sweeping quant schemes / bitwidths to localise
 the cause (min_max-forced-by-SEQ_MSE vs tf_enhanced vs structural).
+
+### cos diagnostic (2026-05-21 ~07:55) — the quality gap is STRUCTURAL
+
+`runs/cos_diag.py` swept QuantSim configs on the 0.6B pathb graph
+(probe cos vs FP, 64 cal samples):
+
+| config                | cos    |
+|------------------------|--------|
+| w8a16  min_max         | 0.5416 |
+| w8a16  tf_enhanced     | 0.6568 |
+| w8a16  percentile      | 0.6548 |
+| **w16a16 tf_enhanced** | 0.6545 |
+| w8a8   tf_enhanced     | 0.0000 |
+
+**w16a16 (near-lossless 16-bit weights) still caps at cos 0.65** —
+so the quality gap is NOT quantization precision. min_max only adds
+a small extra loss (0.65→0.54). w8a8 confirms activations need
+≥16-bit (8-bit acts fully collapse). There is a structural ~0.65
+ceiling independent of bitwidth. Next test: QuantSim CPU vs CUDA
+(`cos_cpu.py`) — is the AIMET CUDA custom op JIT'd onto Blackwell
+numerically wrong? (It was verified to *run*, not to be *correct*.)
+
+4B w4a16 production run launched (`runs/qwen3_4b_w4a16`) — stages
+1-5 (~1h) run while the cos root cause is chased; if a stage-6 fix
+lands before 4B reaches AIMET, 4B restarts `--force-stage 6`.
