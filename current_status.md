@@ -1,5 +1,43 @@
 # specula -- current status
 
+Last updated: 2026-05-21 (session 28 — **first on-device test of the
+three specula-built Qwen3-4B pathb NPU bundles** from the RunPod
+cloud-GPU pipeline. Full writeup: `docs/2026-05-21_specula_bundle_npu_testing.md`.
+
+**Results.** The two ctx512 bundles run through our ORT-QNN runtime and
+decode coherent on-topic text; w8a16 is visibly more fluent than w4a16.
+ORT-QNN throughput (256-tok prefill + 128-tok greedy decode, AC):
+specula w4a16 ctx512 **PP 5.26 / TG 5.21 t/s**; w8a16 ctx512
+**PP 4.48 / TG 4.40 t/s**; Qualcomm control (re-measured today)
+**PP 1604 / TG 23.4 t/s**. First-decode logit cos w4a16-vs-w8a16 0.972,
+same argmax.
+
+**Three blockers found:**
+1. **Genie can't load any pathb bundle** — `fold-pathbmask` removes the
+   `attention_mask` input Genie's KV-cache manager requires
+   (`Failed to create the dialog`).
+2. **Genie DSP transport is broken on this machine today** — even the
+   Qualcomm control fails (`DspTransport.openSession qnn_open failed
+   0x80000406`, skel-load 1002) despite the v81 skel being present.
+   ORT-QNN works on the same HTP — looks like NPU-driver drift
+   (driver 30.0.220.11010, 2026-01-26). **Genie produced zero numbers.**
+3. **ctx32768 bundle (19 parts) exceeds the HTP session ceiling** —
+   ORT-QNN load fails at part 5 (QNN 1002). 19 co-resident contexts is
+   not achievable under any runtime; fix is re-splitting into ≤8 parts,
+   not a swap engine (Genie has no swap mode anyway).
+
+**Why pathb TG is ~4.5× slower than control:** FP32 KV IO (Qualcomm
+uses uint8 — 4× fewer bytes), AR1-only prefill (no AR128 graph), and
+plain `sess.run()` dispatch (no IOBinding). Roughly half the gap is
+pipeline design (fix upstream on RunPod), half is harness overhead.
+
+New tooling: `npu_engine/bench_pathb_ortqnn.py` (generic pathb ORT-QNN
+driver). Next: quantize KV to uint8 + emit AR128 graph + re-expose mask
+in the pipeline; add IOBinding to the harness; root-cause Genie's DSP
+transport break.
+
+---
+
 Last updated: 2026-05-13 (session 27 — **Qwen3.6-27B MTP first
 numbers. Built PR #22673 (`gg/spec-mtp-experiments` rebased) at
 `e7b484815` into `build-opencl-mtp/` so the mainline binaries stay
