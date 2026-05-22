@@ -101,6 +101,11 @@ def parse_args() -> argparse.Namespace:
                         "(8b) stages. Parts are independent; each qnn worker is "
                         "~1 core / ~10 GB RAM. Long-ctx builds have many small "
                         "parts — raise this to compress wall time.")
+    p.add_argument("--quantize-io", action="store_true",
+                   help="Drop qairt's --preserve_io_datatype so graph I/O takes "
+                        "each tensor's encoding dtype (uint8 KV, uint16 rest) "
+                        "instead of fp32. Pair with an --uint8-kv AIMET run; "
+                        "see docs/2026-05-21_specula_bundle_npu_testing.md §5.")
     return p.parse_args()
 
 
@@ -277,6 +282,7 @@ def main() -> int:
             dlc_path=dlc_path,
             qairt_root=args.qairt_root, venv_root=args.venv,
             log_path=part_dlc_dir / "qairt.log",
+            preserve_io=not args.quantize_io,
         )
         done.write_text(json.dumps({
             "wall_s": time.time() - t0, "dlc_path": str(dlc_path),
@@ -358,6 +364,7 @@ def main() -> int:
             "dsp_arch": args.dsp_arch, "soc_model": args.soc_model,
             "rope_scaling": rope_mode,
             "calibration_decoupled": args.pathb_dir is not None,
+            "quantize_io": args.quantize_io,
         },
         tar_out=tar_out,
         model_info=model_info, ctx=args.ctx,

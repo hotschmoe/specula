@@ -108,6 +108,12 @@ def parse_args() -> argparse.Namespace:
                    help="A4 (docs/w4a16_ablation.md): apply Qualcomm's w4a16 "
                         "int8-tied-KV + 16x8-matmul precision config, MINUS the "
                         "int8 lm_head (which regressed cos in full P1). w4a16 only.")
+    p.add_argument("--uint8-kv", action=argparse.BooleanOptionalAction, default=False,
+                   help="Quantize the KV-cache I/O to 8-bit (the KV-only slice of "
+                        "scoped-P1, no 16x8 matmuls). 4x smaller KV: lets long-ctx "
+                        "bundles fit <=8 loadable parts and cuts on-device KV DMA "
+                        "4x. Compile the bundle with compile_split_bundle "
+                        "--quantize-io so the 8-bit encoding reaches the boundary.")
 
     # Infra knobs.
     p.add_argument("--qairt-root", type=Path, default=DEFAULT_QAIRT_ROOT)
@@ -233,6 +239,7 @@ def main() -> int:
             model_info=model_info,
             mask_clip_min=args.mask_clip_min,
             use_scoped_p1=args.scoped_p1,
+            use_uint8_kv=args.uint8_kv,
         )
         with open(aimet_done_marker, "w") as f:
             json.dump(info, f, indent=2, default=str)

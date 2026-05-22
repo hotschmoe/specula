@@ -452,6 +452,43 @@ def _apply_w4a16_scoped_p1(sim, log) -> dict:
     return {"kv_io_map_entries": len(kv_io_map)}
 
 
+def _apply_uint8_kv(sim, log) -> dict:
+    """Quantize ONLY the KV-cache I/O tensors to 8-bit (vs the default
+    int16 activation bitwidth) and tie each past↔present quantizer pair.
+
+    This is the KV-cache slice of scoped-P1 and nothing else — it does
+    NOT touch the attention matmuls (the `_set_matmul_second_input_to_8b`
+    16x8 lever that, bundled into A4, dragged w4a16 probe cos to 0.950).
+    Isolated, 8-bit KV is the load-bearing long-context lever:
+
+      * 8-bit KV I/O is 4x smaller than the current fp32 KV. It shrinks
+        the per-part qnn-context-binary estimate ~4x, so a long-ctx
+        bundle fits in <=8 parts that the HTP can actually co-load
+        (the many-parts route hit the ~4-5 session-binary ceiling —
+        docs/long_context_scaling.md §8).
+      * It cuts KV DMA 4x — the dominant on-device per-step cost
+        (docs/2026-05-21_specula_bundle_npu_testing.md §5).
+
+    Qualcomm's reference bundle ships uint8 KV for exactly this reason.
+    Run pre-SEQ_MSE so weight scales are searched at the final KV
+    bitwidth. Pair with `preserve_io=False` at qairt-convert so the
+    8-bit encoding actually reaches the graph boundary.
+    """
+    from qai_hub_models.models._shared.llm._utils import (
+        _set_tensors_to_output_8b_sym, _tie_quantizers_for_kv_cache,
+    )
+    kv_io_map = _build_kv_io_map(sim, log)
+    if not kv_io_map:
+        log("[aimet 4e] uint8-KV: WARNING — 0 KV pairs found; no-op")
+        return {"kv_pairs": 0}
+    kv_io_list = list(kv_io_map.keys()) + list(kv_io_map.values())
+    _set_tensors_to_output_8b_sym(sim, kv_io_list)
+    _tie_quantizers_for_kv_cache(sim, kv_io_map)
+    log(f"[aimet 4e] uint8-KV: {len(kv_io_map)} past↔present KV pairs "
+        f"→ 8-bit, in/out quantizers tied")
+    return {"kv_pairs": len(kv_io_map)}
+
+
 def _clamp_mask_sentinels(model_proto, clip_min: float, log) -> int:
     """P2 (docs/qai_hub_recipe.md §(c) P2 / docs/w4a16_ablation.md A1):
     clamp the causal-mask additive sentinel from -FLT_MAX (-3.4e38) to
@@ -508,6 +545,7 @@ def run_aimet(
     model_info=None,  # lib.model_config.ModelInfo (optional for back-compat)
     mask_clip_min=None,  # P2: clamp causal-mask sentinel to this (e.g. -100.0)
     use_scoped_p1=False,  # A4: int8-KV(tied) + 16x8 matmuls, no int8 lm_head
+    use_uint8_kv=False,  # 8-bit KV I/O only (long-ctx + throughput lever)
 ) -> dict:
     """Run the AIMET stage. Returns a dict of metrics + paths."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -684,6 +722,16 @@ def run_aimet(
         sp1 = _apply_w4a16_scoped_p1(sim, _log)
         _log(f"[aimet 4d] scoped-P1 applied ({time.time() - t0:.1f}s)")
         info["stages"]["4d_scoped_p1"] = {"wall_s": time.time() - t0, **sp1}
+
+    # ---- 4e. uint8 KV cache (optional, any precision) — 8-bit KV I/O,
+    # 4x smaller than the default fp32. Shrinks the per-part qnn compile
+    # estimate ~4x (long-ctx bundles fit <=8 loadable parts) and cuts
+    # KV DMA 4x (the on-device throughput fix). Pre-SEQ_MSE. ----
+    if use_uint8_kv:
+        t0 = time.time()
+        kvinfo = _apply_uint8_kv(sim, _log)
+        _log(f"[aimet 4e] uint8-KV applied ({time.time() - t0:.1f}s)")
+        info["stages"]["4e_uint8_kv"] = {"wall_s": time.time() - t0, **kvinfo}
 
     # ---- 5. SEQ_MSE (optional, run BEFORE compute_encodings) ----
     if use_seq_mse:

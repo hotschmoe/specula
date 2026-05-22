@@ -42,12 +42,21 @@ def run_qairt_converter(
     qairt_root: Path,
     venv_root: Path,
     log_path: Path,
+    preserve_io: bool = True,
 ) -> dict:
     """qairt-converter → DLC. Returns {wall_s, log_path}.
 
     No --target_soc_model: the SDK 2.45 BackendInfo allow-list only
     accepts {SM8845, SM8850, SM8850L} which don't map to v75 anyway;
     HTP arch gets pinned at the binary-generator step instead.
+
+    `preserve_io=True` keeps the ONNX-declared (fp32) I/O datatypes on
+    the graph boundary. `preserve_io=False` lets qairt quantize the I/O
+    to each tensor's encoding dtype — uint8 for 8-bit-quantized KV,
+    uint16 for the rest — which is what Qualcomm's reference bundle
+    ships and what the HTP consumes natively (no fp32↔fp16 boundary
+    conversion). Pair with uint8-KV builds; see
+    docs/2026-05-21_specula_bundle_npu_testing.md §5.
     """
     # Run the qairt-converter Python script under the numpy-1.x venv
     # (see CONVERTER_VENV note above) — invoke its interpreter explicitly
@@ -60,8 +69,9 @@ def run_qairt_converter(
         "--input_network", str(onnx_path),
         "--output_path", str(dlc_path),
         "--quantization_overrides", str(encodings_path),
-        "--preserve_io_datatype",
     ]
+    if preserve_io:
+        cmd.append("--preserve_io_datatype")
     t0 = time.time()
     print(f"[qairt-converter] (venv={conv_venv.name}) {' '.join(cmd)}")
     with open(log_path, "w") as logf:
