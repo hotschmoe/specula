@@ -77,6 +77,22 @@ Dug into whether Qualcomm AI Hub shortcuts any of this. Result:
 - **`submit_quantize_job` is int8-weights only — no int4.** So a
   full-AI-Hub flow yields **w8a16**; **w4a16 still needs local AIMET**.
 
+## Route 1 progress (session 33 — in flight)
+
+Started the w8a16-via-AI-Hub route. Done so far:
+
+- `qai-hub` installed; token configured + verified (`list-devices` OK).
+- **`Snapdragon X2 Elite CRD` confirmed as an AI Hub device** — AI Hub
+  can compile + validate directly for our v75 target.
+- optimum-cli cannot export Gemma 4 (no `gemma4` exporter; transformers
+  4.57.6 lacks the arch). **Switched stage 1** to consume the ungated
+  pre-export `onnx-community/gemma-4-E2B-it-ONNX` instead.
+- Downloading the fp16 `decoder_model_merged` (4.76 GB) →
+  `models/gemma-4-E2B-it-ONNX/`.
+
+Next: inspect the decoder ONNX (IO, dynamic dims), pin shapes, attempt
+`submit_compile_job` for X2 Elite, then `submit_quantize_job` (w8a16).
+
 ## Recommended path to a bundle
 
 Gemma 4 is a **better** long-context target than dense Qwen3-4B ever
@@ -102,13 +118,14 @@ Order:
 ## Open questions
 
 - ~~Does `qai-hub-models` have a Gemma 4 recipe?~~ **No** (resolved).
-- Does `optimum-cli` export the text decoder cleanly past the
-  multimodal wrapper? (decides whether `strip_multimodal_wrapper.py`
-  is needed)
-- Does partial RoPE + PLE survive the hoist at cos ≥ 0.99?
-- Is the elastic-E2B checkpoint exported as the full 35-layer decoder
-  or a sliced artifact?
-- Does `qai-hub list-devices` show an X2 Elite (v75) target, or only
-  X Elite (v73)?
+- ~~Does `qai-hub list-devices` show an X2 Elite target?~~ **Yes** —
+  `Snapdragon X2 Elite CRD` (resolved).
+- ~~Does `optimum-cli` export Gemma 4?~~ **No** — use the
+  `onnx-community` pre-export instead (resolved).
+- Can AI Hub `submit_compile_job` ingest the (shape-pinned) merged
+  decoder ONNX and produce an X2 Elite QNN context binary?
+- Does the `onnx-community` decoder need our HTP rewrites, or does AI
+  Hub's lowering handle the mask/rotary ops?
+- Does w8a16 server-side PTQ clear a usable quality bar (no SEQ_MSE)?
 
 All resolved by doing — capture answers here as they land.

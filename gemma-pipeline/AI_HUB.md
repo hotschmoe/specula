@@ -105,20 +105,42 @@ w4a16 quantize for one RunPod run, reusing every other stage.
 Either way the gating work is the same and is ours: the 4 Gemma
 rewrite scripts. AI Hub does not shortcut that.
 
+## The ONNX-source problem (and its solution)
+
+Producing the Gemma 4 ONNX ourselves via `optimum-cli` does **not work
+today**: `optimum` has no `gemma4` exporter config, and `transformers
+4.57.6` (the export venv) does not even recognise `model_type:
+gemma4`. Patched community attempts to route Gemma4 through the Gemma 3
+exporter produce a graph that fails at load with a ShapeInferenceError
+(incompatible matmul dims) — the variable head dims (256 vs 512) and
+PLE input are not handled.
+
+**Solution:** `onnx-community/gemma-4-E2B-it-ONNX` — an ungated,
+pre-exported ONNX of Gemma 4 E2B. It splits the model into
+`embed_tokens.onnx`, `decoder_model_merged.onnx` (the text decoder —
+our compute graph), plus vision/audio encoders. The decoder export
+already exposes the `per_layer_inputs` (PLE) tensor as a graph input.
+Sizes: fp16 decoder 4.76 GB, fp32 decoder 9.12 GB. We take the fp16
+decoder as the pipeline's stage-1 input — this *replaces* the
+optimum-export stage.
+
 ## Caveats
 
-- AI Hub's device is **Snapdragon X Elite** (HTP v73). The project's
-  laptop is **X2 Elite** (HTP v75). A binary compiled for the AI Hub
-  device validates on v73; the deployable bundle for our laptop must
-  be compiled for v75 (`configs/qnn_v75_*`). Check `qai-hub
-  list-devices` for whether an X2 Elite target is available yet.
 - `submit_quantize_job` is beta — schema may shift.
 - All AI Hub LLM context binaries are built with QAIRT 2.42, which
   matches our ORT-QNN 1.24.4 pin (`docs/npu_ort_qnn_version_match.md`).
+- The `decoder_model_merged.onnx` is a merged prefill+decode graph
+  with dynamic seq/ctx dims. AI Hub's QNN-context-binary compile needs
+  fixed shapes — shape pinning (`pin_shapes_gemma4.py`) is still
+  required before `submit_compile_job`.
 
-## Token status (2026-05-22)
+## Token + device status (2026-05-22, session 33 — VERIFIED)
 
-No AI Hub token on this machine — checked `~/.qai_hub/client.ini`,
-`$QAI_HUB_API_TOKEN`, and the venvs. `submit_ai_hub.py --check`
-reconfirms. Need `qai-hub configure --api_token <TOKEN>` before any
-job submission.
+- **Token configured and working.** `qai-hub configure` done;
+  `~/.qai_hub/client.ini` written. `qai-hub list-devices` succeeds.
+- **`Snapdragon X2 Elite CRD` IS an AI Hub device**
+  (`qualcomm-snapdragon-x2-elite, sc8480xp`, Windows 11). This is the
+  project's exact target silicon (HTP v75) — so AI Hub can compile AND
+  on-device-validate directly for X2 Elite. The earlier "v73 vs v75
+  mismatch" caveat is **resolved** — no mismatch, no physical laptop
+  needed in the AI Hub loop.
