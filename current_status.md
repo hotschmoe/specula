@@ -1,5 +1,49 @@
 # specula -- current status
 
+Last updated: 2026-05-22 (session 34 — **long-context prefill sweep
+for Qwen3.6-35B-A3B: the `-ngl 0` "blended" default is a TTFT loss
+for long prompts.** Track D, `results/csv/track_d_longctx_pp_2026-05-22.md`.)
+
+Triggered by external advice to try `--n-cpu-moe` (experts-on-CPU /
+attention-on-GPU split). That specific recommendation was already
+disproven — `results/csv/track_b_ncmoe_sweep_2026-05-13.md` shows
+`-ncmoe` loses monotonically (TG 17.3→12.0 as N rises). But the
+advice's *underlying* point — GPU offload should help prefill more at
+long context — is correct, and the lever is plain `-ngl 99`, not the
+split.
+
+Measured (OpenCL, `-t 16`, FA-off; `-fa 1` is a ~35% prefill
+regression on Adreno OpenCL — pp2048 119 vs 178 t/s — so FA stays off):
+
+| `-ngl` | `-ub` | pp512 | pp8192 | pp32768 |
+|--------|-------|-------|--------|---------|
+| 0      | 512   | ~190  | 148.8  | 90.0    |
+| 0      | 2048  | —     | 129.4  | 81.8    |
+| 99     | 512   | ~197  | 159.5  | 114.6   |
+| 99     | 2048  | —     | **174.4** | (pending) |
+
+- **`-ngl 99` beats `-ngl 0` on prefill, gap widens with context** —
+  +4% at 512, +7% at 8K, **+27% at 32K** (114.6 vs 90.0). For a
+  coding agent's TTFT (long prompt, prefill-bound) the GPU path wins.
+- **`-ub` cuts opposite ways** — bigger `-ub` *hurts* the `-ngl 0`
+  coprocessor path, *helps* `-ngl 99`. Best prefill config measured:
+  **`-ngl 99 -ub 2048` = 174.4 t/s at pp8192**, +17% vs the blended
+  `-ngl 0` default (148.8 t/s).
+- TG unchanged: `-ngl 0` still owns decode (~31 t/s vs ~13–17 for
+  ngl99). So the 35B default should be **context-dependent** —
+  `-ngl 99 -ub 2048` for prefill-heavy / long-context turns,
+  `-ngl 0` for decode-heavy / short-prompt.
+
+Sweep stopped early (laptop needed for other work). Pending —
+overnight via `scripts/track_d_overnight_2026-05-22.ps1`: the
+ngl99/ub2048/pp32768 cell (A1 dropped it — investigate, likely a
+runtime error), PP at 131072 for ngl {0,99} (and whether ngl99 OOMs:
+20.2 GB model + 128K KV in 24.4 GB GPU memory), and TG-128 at depth
+4K/32K/128K. Run `powershell -File scripts/track_d_overnight_2026-05-22.ps1`;
+results land in `results/csv/track_d_longctx_pp_2026-05-22_tail.md`.
+
+---
+
 Last updated: 2026-05-22 (session 33 — **side quest: Gemma 4 → Hexagon
 NPU.** Scaffolded a new `gemma-pipeline/` subdirectory (sibling of
 `end-to-end/`) for a non-RunPod attempt at converting **Gemma 4 E2B**
