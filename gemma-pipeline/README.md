@@ -60,11 +60,13 @@ The AIMET step is the only hard CUDA gate. Two ways past it:
    ~$3–10. The Gemma rewrites must be built first so the cloud run has
    something to execute.
 2. **Qualcomm AI Hub cloud** — `submit_ai_hub.py`. AI Hub compiles +
-   quantizes + profiles on Qualcomm's own cloud devices; needs only an
-   API token, no local CUDA and no local NPU. If Gemma 4 is in
-   `qai-hub-models` (model released 2026-04-02 — verify), this can skip
-   the local AIMET/QAIRT work entirely. **Needs a token configured:**
-   `qai-hub configure --api_token <TOKEN>` — none is set on this box.
+   (int8-only) quantizes + validates on Qualcomm's own cloud devices;
+   needs only an API token, no local CUDA and no local NPU. AI Hub has
+   **no Gemma recipe** (investigated — `AI_HUB.md`), so the graph
+   surgery is still ours; but AI Hub can take our ONNX and produce a
+   **w8a16** bundle end to end on a token alone (w4a16 still needs
+   local AIMET). **Needs a token configured:** `qai-hub configure
+   --api_token <TOKEN>` — none is set on this box.
 
 ## Quickstart (once the rewrite scripts exist)
 
@@ -103,6 +105,7 @@ and the blockers between here and a loadable bundle.
 gemma-pipeline/
 ├── README.md              # this file
 ├── ARCHITECTURE_NOTES.md  # Qwen3 vs Gemma 4 difference matrix — READ FIRST
+├── AI_HUB.md              # what Qualcomm AI Hub can/cannot do for Gemma 4
 ├── STATUS.md              # current state, blockers, next actions
 ├── quantize_to_npu.py     # orchestrator (stops cleanly at unbuilt stages)
 ├── submit_ai_hub.py       # Qualcomm AI Hub cloud path (token required)

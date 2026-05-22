@@ -7,18 +7,21 @@ Qualcomm's *own* cloud devices. All it needs from us is an API token —
 no local CUDA, no local NPU. That makes it the one full conversion
 path runnable from the current x86 dev box.
 
-Two ways AI Hub can help:
+As of 2026-05-22 (see AI_HUB.md) AI Hub has NO Gemma recipe — the
+pre-built LLM recipes are Llama/Qwen/Phi/Mistral only, and the
+bring-your-own path is architecture-locked. So the only usable AI Hub
+route is raw job submission with an ONNX we produced ourselves:
 
-  A. `qai-hub-models` recipe — if Gemma 4 has a pre-built recipe
-     (`qai_hub_models.models.gemma4_*`), its `export.py` does the whole
-     HF -> on-device-validated bundle in one command. Gemma 4 released
-     2026-04-02; whether a recipe exists yet must be checked at runtime
-     (this script does that).
+  B. Raw `qai-hub` job submission — take our own ONNX (pipeline stage-5
+     output) and submit:
+       - submit_quantize_job  (server-side PTQ; int8 weights ONLY, no
+         int4 -> w8a16 reachable, w4a16 NOT) [optional]
+       - submit_compile_job   (ONNX -> QNN context binary, X Elite)
+       - submit_inference_job (validate on a real cloud Snapdragon)
+     All run on Qualcomm's cloud — no local CUDA, no local NPU.
 
-  B. Raw `qai-hub` job submission — upload our own ONNX (the output of
-     pipeline stage 5) and submit compile + profile + inference jobs
-     against a target Snapdragon device. Works for any model; needs the
-     ONNX in hand.
+  A. `qai-hub-models` recipe — kept as a runtime check only, in case
+     Qualcomm adds a `gemma4` recipe later.
 
 This script is a PRE-FLIGHT + LAUNCHER: it verifies the token, lists
 what Gemma support exists, and prints the exact command to run. It does
@@ -94,6 +97,10 @@ def main() -> int:
     ap.add_argument("--onnx", type=Path, default=None,
                     help="Path B: submit a compile job for this ONNX "
                          "(pipeline stage-5 output).")
+    ap.add_argument("--quantize", action="store_true",
+                    help="Before compiling, submit a server-side quantize "
+                         "job. NOTE: AI Hub quantize is int8-weights only — "
+                         "this yields w8a16, NOT w4a16 (see AI_HUB.md).")
     args = ap.parse_args()
 
     print("=== Qualcomm AI Hub preflight ===\n")
@@ -129,11 +136,24 @@ def main() -> int:
         if not args.onnx.exists():
             print(f"FATAL: --onnx not found: {args.onnx}", file=sys.stderr)
             return 2
-        print(f"\n[path B] submitting compile job for {args.onnx} "
-              f"-> device {args.device!r}")
         import qai_hub as hub
+
+        compile_input = str(args.onnx)
+        if args.quantize:
+            print(f"\n[path B] submitting quantize job for {args.onnx}")
+            print("  NOTE: int8 weights only -> w8a16. For w4a16 quantize "
+                  "locally with AIMET instead (see AI_HUB.md Route 2).")
+            print("  NOTE: needs calibration data — wire a calibration "
+                  "Dataset here (500-1000 samples) before this will run.")
+            print("FATAL: quantize-job path needs a calibration Dataset "
+                  "uploaded first;\n       build that step before using "
+                  "--quantize.", file=sys.stderr)
+            return 2
+
+        print(f"\n[path B] submitting compile job for {compile_input} "
+              f"-> device {args.device!r}")
         job = hub.submit_compile_job(
-            model=str(args.onnx),
+            model=compile_input,
             device=hub.Device(args.device),
             options="--target_runtime qnn_context_binary",
         )
