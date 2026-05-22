@@ -9,6 +9,52 @@ Status started: 2026-05-21 (Session 29). See `current_status.md` for
 session-level progress; this doc holds the plan and the experiment
 matrix.
 
+---
+
+## ✅ RESULT — recipe locked, campaign complete (2026-05-22)
+
+The quality gap is resolved. **The recipe is P0**, and the w4a16
+ablation campaign (`docs/w4a16_ablation.md`, 6 runs) proved nothing
+improves on it.
+
+**THE RECIPE (locked):**
+- QuantSim `config_file = end-to-end/lib/aimet_config_llama.json`
+  (Qualcomm's `default_config_llama.json`, vendored). Its
+  `RMSNormalization` supergroup pass disables the norm-internal
+  activation quantizers that int16 was annihilating — **this single
+  change was the entire fix.** Brings the LayerNorm pass, op-type
+  exclusions, and Softmax/Sigmoid range constraints too.
+- Concat-quantizer tying + Slice/Constant outputs ignored.
+- SEQ_MSE (20 candidates, 128 real-text cal samples), `min_max`.
+- embedding table pinned int16 per-tensor (w4a16).
+- **AdaScale OFF** — campaign showed it regresses cos (−0.011).
+- **V/O-w8 pin: neutral dead weight** — recommend defaulting
+  `--no-vo-pin-w8` for w4a16 (P0's config prevents the V/O collapse
+  the pin worked around; dropping it shrinks the model, zero cos cost).
+- P1 / scoped-P1 / P2 mask-clip: implemented and tested, **NOT
+  adopted** — see the campaign doc.
+
+**Probe cos** (FP vs fake-quant first-decode logit cosine):
+
+| model / precision | pre-fix | P0 | 0.99 gate |
+|---|---|---|---|
+| 0.6B w8a16 | 0.557 | **0.9984** | ✅ |
+| 4B w8a16 | 0.44 | **0.9962** | ✅ |
+| 4B w4a16 | 0.51 | **0.9751** | ✗ — intrinsic int4 ceiling |
+
+**Campaign verdict:** every lever beyond P0 is neutral or negative
+(AdaScale −0.011, scoped-P1 −0.025, full-P1 −0.020 [reverted], P2
+inert, V/O pin neutral). The 4B-w4a16 0.975→0.99 gap is **intrinsic
+int4-weight error**, not a recipe miss — argmax matches FP on every
+ablation, so the model predicts correctly; the 1.5% is logit
+magnitude. w8a16 (int8 weights) clears the gate. Final quality
+arbiter: on-device comparison vs Qualcomm's bundle on the X2 Elite.
+
+*The planning sections below are the original Session-29 plan — kept
+as the record of how the recipe was found.*
+
+---
+
 ## North star
 
 1. **Replicate Qwen3-4B exactly.** Qualcomm ships a known-good
@@ -185,12 +231,14 @@ reference (both w4a16):
 - **Deltas:** `ctx` 512 vs 4096 — our build param, not a defect (the
   ctx sweep covers it). **part4 +38%** (1475 vs 1070 MB) — part4
   carries the lm_head; ours is int16 (the `_pin_embedding_w16` pin),
-  Qualcomm's is int8 (`_set_lm_head_to_8b`). **P1 closes this** — it
-  is both a quality and a size fix.
+  Qualcomm's is int8 (`_set_lm_head_to_8b`).
 - Total 3642 vs 3186 MB (+14%), almost all of it the part4 lm_head.
 
-Re-run after P0/P1 land to confirm convergence; numerical (on-device
-cos) parity still needs X2E hardware.
+**Update (campaign):** P1's int8 lm_head *would* close the part4 size
+delta, but the campaign showed it regresses cos (−0.020) — int8 on the
+lm_head coarsens the logits. So part4 stays int16 / +38%: a deliberate
+**size-for-quality trade**, not a defect. Numerical (on-device cos)
+parity still needs X2E hardware.
 
 ## Task index
 

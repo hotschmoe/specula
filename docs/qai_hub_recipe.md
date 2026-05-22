@@ -303,3 +303,41 @@ materially change `min_max` encodings.
   clear the 0.99 gate per the Session 28 "disable all activation
   quantizers → 0.99" experiment — P0 disables exactly the harmful
   subset (norm internals) while keeping the rest quantized for HTP.
+
+---
+
+## (d) Outcomes — what the campaign found (2026-05-22)
+
+P0-P4 were all implemented and tested — `docs/w4a16_ablation.md`, a
+6-run 4B-w4a16 sweep. Results vs the §(c) predictions:
+
+- **P0 — adopted; it IS the fix.** `config_file=default_config_llama`
+  took 0.6B w8a16 0.557→0.998, 4B w8a16 0.44→**0.996**, 4B w4a16
+  0.51→**0.975**. The §(c) prediction held for w8a16; w4a16 lands at
+  0.975 (see bottom line).
+- **P1 (int8-KV + 16x8 + int8 lm_head) — REJECTED, regresses cos.**
+  Full P1 −0.020, scoped-P1 (P1 minus the int8 lm_head) −0.025. The
+  int8 lm_head coarsens logits directly; 16x8 matmuls + int8 KV are
+  precision cuts the FP-vs-fakequant probe penalizes. P1 is an
+  HTP-footprint/throughput trade, **not** a quality lever. Reverted
+  (commit a3f7416).
+- **P2 (mask clip [-100,0]) — INERT.** Bit-identical probe cos. The
+  folded mask functionally masks regardless of sentinel magnitude.
+  Kept available (`--mask-clip-min`) for HTP hygiene, not quality.
+- **P3 (AdaScale RMSNorm-per-block) — MOOT.** AdaScale itself
+  regresses cos (−0.011, cleanly isolated), so it stays off for w4a16
+  and the block-count tuning is irrelevant. (Also: qai-hub's "41" is
+  SHA-specific — our optimum-cli MHA export differs.)
+- **P4 (calibration data) — VERIFIED fine.** `lib/cal.py` already
+  feeds 32 real-text prompts, not random tokens. No change needed.
+- **Bonus finding — the V/O-w8 pin is NEUTRAL.** It predates P0 as a
+  V/O-collapse workaround; P0's config makes it unnecessary (cos with
+  and without it is identical within probe noise). Recommend
+  defaulting `--no-vo-pin-w8` for w4a16 — smaller model, zero cost.
+
+**Bottom line:** P0 is the locked recipe. Every other qai-hub lever is
+neutral or negative on the probe metric — they are Qualcomm's
+HTP-deployment/footprint choices, not quality levers. The 4B-w4a16
+0.975→0.99 residual is **intrinsic int4-weight precision error**; no
+recipe knob closes it. Full matrix + per-run cos in
+`docs/w4a16_ablation.md`.
