@@ -407,6 +407,36 @@ cut over, not *if*.
   different RoPE variant, different norm, possibly different
   attention (sliding-window). Per-family pathb rewrite might
   need a Gemma-specific variant.
+  **Done in part (session 32):** audited from the Gemma 4 model card
+  + `llama.cpp` `Gemma4Model` converter. Lineup: **E2B** (2.3B eff.,
+  35 layers, 512 window, 128K ctx), **E4B** (4.5B eff., 42 layers, 512
+  window, 128K), **31B dense** (30.7B, 60 layers, 1024 window, 256K),
+  **26B-A4B MoE** (25.2B/3.8B active, 8/128 experts, 30 layers, 1024
+  window, 256K). All unified multimodal checkpoints (text+image, +audio
+  on E-models).
+  - **SWA is native** — every Gemma 4 model interleaves local
+    sliding-window + global attention at a 5:1 ratio, final layer
+    always global. Unlike Qwen3-4B (`sliding_window: null`), the
+    windowed layers are *trained* windowed → on the HTP their KV
+    `InputSlice` is window-sized (~4 MiB), tiles into VTCM with **zero
+    quality cost**. Only the ~1/6 global layers still carry O(ctx) KV
+    and hit the §8.8 TCM wall — the same residual as Qwen3.6-27B's
+    full-attention layers, on a smaller fraction.
+  - **Gemma 4-31B dense is the cleanest long-context NPU target** —
+    dense (no MoE dispatch), SWA-native, KV-layer-sharing
+    (`num_kv_shared_layers`), 256K ctx. But the export needs Gemma
+    work at every stage: current transformers (local `.venv-arm-export`
+    4.54.1 has no `Gemma4ForConditionalGeneration`), text-decoder
+    extraction from the multimodal checkpoint, a Gemma-specific pathb
+    rotary hoist (partial "proportional" RoPE, per-layer SWA-vs-global
+    rope), a `gemma4` `FamilyConfig` + per-layer attention-type map,
+    and an AIMET gemma adapter.
+  - **Sequencing:** do this *after* Qwen3.6-27B, not instead of it.
+    The hybrid/per-layer-attention machinery built for 27B
+    (per-layer attention-type map in `model_config.py`, window-sized
+    KV in `split.py`, the ring-buffer KV manager) transfers almost
+    directly to Gemma 4 — 27B-first builds the infrastructure that
+    makes Gemma 4-31B a short follow-on lift.
 - W6.c: **Cutover trigger.** Move from Qwen3.5 to Qwen3.6 when
   (i) W1 + W2 + W4 have a baseline on Qwen3.5 and (ii) Qwen3.6
   weights + gguf conversion are available. Same for Gemma4.
