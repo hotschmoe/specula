@@ -723,3 +723,92 @@ Stage D (paging/prefill hardening)**, with the **hybrid-pipeline work
 (§7.3) front-loaded** because it gates the 27B target the whole project
 is aimed at — and because, once done, it makes 27B the *easiest* long-
 context case rather than the hardest.
+
+---
+
+## 8. Implementation log — Session 31 (2026-05-22): ctx 32k / 64k builds
+
+Building the first real long-context Qwen3-4B bundles (w4a16, ctx 32768
+and 65536). This section is the *correction* to §3-§4: §3.4 claimed
+"scaling ctx is a parameter change, not a code change" — that was
+**wrong in two concrete ways**, both found and fixed here.
+
+### 8.1 Correction 1 — `--ctx` beyond 512 never actually worked
+
+The `--ctx` flag (`pin_shapes_qwen3_4b.py`) only rewrites *symbolic*
+ONNX dims (`past_sequence_length`, `seq_k`, …). But transformers freezes
+a **`attention_mask` initializer** — `int64 [1, traced_ctx]`, all-ones,
+the no-padding mask — into the export. It is *not* a graph input. The
+pathb folded causal-mask subgraph sizes the `[1,1,1,ctx]` additive mask
+off `Shape(attention_mask)`, so the mask stayed `[1,1,1,512]` while the
+KV pinned to `[…,ctx]`. qairt-converter then dies at the first
+`self_attn/Add` (scores `[1,H,1,ctx]` + mask `[1,1,1,512]` won't
+broadcast). **The `cl{1024,2048,3072,4096}` ctx sweep (e2e task 11) had
+never been run — it would have hit this immediately.**
+
+Fix: `pin_shapes_qwen3_4b.py` now also rewrites the `attention_mask`
+initializer to `[1, ctx]` all-ones (asserts it was all-ones first).
+One initializer; that is the whole fix. `--ctx` is now genuinely
+parametric — verified at 65536.
+
+### 8.2 Correction 2 — calibration cannot run at long ctx
+
+`lib/aimet.py` materializes all 128 calibration samples into a Python
+list, and each sample carries the full KV cache (`72 × [1,8,ctx-1,128]`
+fp32): ~19 GB at ctx 512, **~1.2 TB at 32k, ~2.5 TB at 64k**. AIMET at
+long ctx is a non-starter.
+
+Fix: **decouple calibration ctx from compile ctx.** Calibrate once at
+ctx 512 (the proven ~18-min path); compile every ctx tier from that one
+encodings file. This is sound — the additive mask sends every
+out-of-window KV slot to softmax≈0, so the activation ranges are
+ctx-invariant — and it is exactly what Qualcomm does (one calibration →
+5 shipped tiers). Mechanics:
+
+- `quantize_to_npu.py --stop-after-stage 6` runs through AIMET only.
+- `compile_split_bundle.py --pathb-dir <wd>/04_pathb` re-pins the
+  *pre-AIMET* pathb graph to `--ctx` and splits **that**, paired with
+  the ctx-512 AIMET encodings. `split.py::split_aimet_output` takes a
+  separate `graph_onnx` vs `encodings_path`; `build_part_specs` already
+  declared part I/O shapes from `ctx`. AIMET PTQ leaves graph topology +
+  fp weights untouched (encodings are a side file), so the pre-AIMET
+  ctx-N graph + ctx-512 encodings is an exact pairing.
+- Stage dirs (`06b_split`/`07b_dlc`/`08b_bin`) carry `ctx` so tiers
+  coexist in one workdir; `06_aimet` stays ctx-free (shared).
+
+### 8.3 RoPE for 64k — NTK via genie `rope-theta`
+
+64k (65536) exceeds Qwen3-4B's 40960 trained window. RoPE is hoisted to
+graph inputs in pathb, and genie's runtime computes the cos/sin table
+from `genie_config.json`'s `rope-theta`, so position scaling is a
+**pure config knob** — no graph/compile change (as §2.3 predicted).
+`compile_split_bundle.py` computes the NTK-aware base
+`theta' = theta · s^(d/(d-2))`, s = ctx/40960, d = 128, and
+`assemble_genie_bundle` writes it into the genie config. For 64k:
+s = 1.6 → theta' ≈ 1.61e6. 32k is in-window → native theta. YaRN would
+need host-fed cos/sin or genie support; NTK is the deployable path.
+
+### 8.4 Compile cost at long ctx — measured
+
+The §6 "per-ctx compile cost" is real and large. qnn-context-binary-
+generator HTP graph-prep for a **0.6B** decoder part at ctx 64k:
+~40 min/part (Graph Sequencing for Target + VTCM Allocation dominate).
+The compiler's own DDR-traffic estimate for that part: spill 11.6 GB /
+fill 33.9 GB per execution — the §1.5 KV-streaming cost made concrete.
+4B parts are larger; expect multi-hour per-tier qnn compiles. This is
+the cost §6 named, and the structural argument for SWA (§5.2): a fixed
+`seq_k=W` binary compiles once instead of per tier.
+
+### 8.5 Results
+
+Pipeline changes (`pin_shapes_qwen3_4b.py`, `lib/split.py`,
+`compile_split_bundle.py`, `lib/bundle.py`, `quantize_to_npu.py`)
+smoke-tested on Qwen3-0.6B: pre-AIMET graph pinned to ctx 65536, split
+4-way, qairt-converter clean on all 4 parts, qnn compiling.
+
+4B w4a16 calibration (ctx 512, P0 recipe — `--no-use-ada-scale
+--no-vo-pin-w8`): probe cos **0.9758**, argmax match — consistent with
+`w4a16_ablation.md` A6.
+
+_(32k / 64k bundle sizes + structural diff vs Qualcomm — appended as the
+builds land.)_

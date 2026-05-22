@@ -210,6 +210,30 @@ pins `ctx=512`, `ar=1`. Two axes:
 - **Qwen3.6-27B — later.** Only after 4B is locked. Validates split
   part-count scaling, memory, and long ctx.
 
+### Precision direction — w8a16 vs w4a16 (open, 2026-05-22)
+
+w4a16 has been the scaffolding precision because Qualcomm ships a
+w4a16 Qwen3-4B reference — but it is **not settled that w4a16 is the
+production precision.** Current lean is that **w8a16 may be the right
+call for the models we actually care about** (Qwen3.5/3.6, Gemma4,
+especially 27B):
+
+- w4a16 probe cos floors at ~0.975 (intrinsic int4-weight error — the
+  `w4a16_ablation.md` campaign showed no recipe knob closes the gap);
+  w8a16 clears the 0.99 gate at ~0.996.
+- w8a16 avoids the precision-reduction levers (P1 / scoped-P1 / int8-KV)
+  that every regressed cos.
+- At long ctx the KV cache, not weights, dominates memory
+  (`long_context_scaling.md` §1), so w8a16's 2× weight footprint costs
+  *less, relatively,* the longer the context.
+
+**Required before committing a production precision: an on-device
+(X2 Elite) A/B of w4a16 vs w8a16 on the *same* model** — measuring both
+**accuracy** (first-decode logit cos / task eval) and **performance**
+(PP / TG t/s, resident memory). The probe cos is only a pre-compile
+proxy; on-device is the real arbiter. This A/B is now a gating
+deliverable, not an afterthought.
+
 ## Success criteria
 
 1. 4B w4a16 post-AIMET probe cos ≥ 0.99, argmax matches FP.

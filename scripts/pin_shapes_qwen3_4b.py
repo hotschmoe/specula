@@ -137,6 +137,37 @@ def main() -> int:
         print(f"FATAL: {len(unresolved)} unknown dim_params; refusing to write")
         return 2
 
+    # Rewrite the baked `attention_mask` initializer to the target ctx.
+    # transformers freezes a [1, traced_ctx] all-ones no-padding mask at
+    # export time; it is NOT a graph input. The folded causal-mask
+    # subgraph does Shape(attention_mask) to size the [1,1,1,ctx]
+    # additive mask, so a stale traced ctx (512) caps the whole graph at
+    # 512 — the attention `Add` then can't broadcast [.,.,.,512] against
+    # the ctx-pinned [.,.,.,ctx] scores. Resizing this one initializer
+    # is what makes --ctx actually parametric beyond the traced value.
+    import numpy as np
+    from onnx.external_data_helper import load_external_data_for_tensor
+    mask_fixed = 0
+    for init in m.graph.initializer:
+        if init.name != "attention_mask":
+            continue
+        if init.data_location == onnx.TensorProto.EXTERNAL:
+            load_external_data_for_tensor(init, str(args.src_dir))
+            init.data_location = onnx.TensorProto.DEFAULT
+            init.ClearField("external_data")
+        arr = onnx.numpy_helper.to_array(init)
+        if not (arr == 1).all():
+            print(f"FATAL: attention_mask initializer is not all-ones "
+                  f"(uniques={np.unique(arr)[:8].tolist()}); the ctx rewrite "
+                  f"assumes the transformers no-padding mask. Refusing to write.")
+            return 2
+        init.CopyFrom(onnx.numpy_helper.from_array(
+            np.ones((1, args.ctx), dtype=arr.dtype), name="attention_mask"))
+        mask_fixed += 1
+    print(f"  attention_mask initializer: {mask_fixed} rewritten to "
+          f"[1, {args.ctx}] all-ones"
+          + ("" if mask_fixed else " (none found — graph may differ)"))
+
     # Sanity: report pinned-input shapes
     print(f"  graph after pin:")
     print(f"    inputs={len(m.graph.input)} outputs={len(m.graph.output)}")

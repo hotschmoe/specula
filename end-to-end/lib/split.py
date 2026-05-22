@@ -393,25 +393,44 @@ def split_encodings(
 def split_aimet_output(
     *, aimet_dir: Path, export_prefix: str, model_info, ctx: int,
     out_root: Path, num_parts: int = 4,
+    graph_onnx: Optional[Path] = None,
+    encodings_path: Optional[Path] = None,
 ) -> dict:
-    """Drive the full split: load AIMET-emitted ONNX + encodings, write
+    """Drive the full split: load an ONNX graph + AIMET encodings, write
     `num_parts` sub-onnx + sub-encodings under out_root/part{N}/.
 
     AIMET's `sim.export(prefix=PREFIX)` writes
         {prefix}.onnx              — the pathb graph (QDQs stripped)
         {prefix}.encodings         — per-tensor scale/offset/bw
         {prefix}.data              — external weight data
-    We consume those and produce
+    By default we consume those from `aimet_dir`.
+
+    For ctx-decoupled builds (calibrate at a small ctx, compile at a
+    large one) pass `graph_onnx` explicitly: the part I/O shapes are
+    declared from the `ctx` arg (see `build_part_specs`), so the graph
+    can be the *pre-AIMET* pathb ONNX re-pinned to the target ctx while
+    `encodings_path` stays the small-ctx AIMET encodings. AIMET's PTQ
+    leaves graph topology and fp weights unchanged (it emits a separate
+    encodings file), and the encodings are ctx-invariant — the masked
+    KV slots softmax to ~0 — so the pairing is exact.
+
+    Produces
         out_root/part{1..num_parts}/{model.onnx, model.onnx_data, model.encodings}
     """
-    src_onnx = aimet_dir / f"{export_prefix}.onnx"
-    src_enc = aimet_dir / f"{export_prefix}.encodings"
+    src_onnx = Path(graph_onnx) if graph_onnx else aimet_dir / f"{export_prefix}.onnx"
+    src_enc = Path(encodings_path) if encodings_path else aimet_dir / f"{export_prefix}.encodings"
+    # External weight data is resolved relative to the graph ONNX's own
+    # directory (each producer — AIMET export or pin_shapes — writes its
+    # weights alongside its model.onnx).
+    src_dir = src_onnx.parent
     if not src_onnx.exists() or not src_enc.exists():
         raise FileNotFoundError(
-            f"missing AIMET output: {src_onnx} or {src_enc}"
+            f"missing split inputs: graph={src_onnx} encodings={src_enc}"
         )
 
-    print(f"[split] loading AIMET ONNX (graph only, external data deferred): {src_onnx}")
+    print(f"[split] graph ONNX     : {src_onnx}")
+    print(f"[split] encodings      : {src_enc}")
+    print(f"[split] loading ONNX (graph only, external data deferred) ...")
     t0 = time.perf_counter()
     m = onnx.load(str(src_onnx), load_external_data=False)
     print(f"  graph: {len(m.graph.node)} nodes, {len(m.graph.initializer)} inits "
@@ -438,7 +457,7 @@ def split_aimet_output(
     for spec in specs:
         dst_dir = out_root / spec.name
         print(f"\n--- extracting {spec.name} → {dst_dir} ---")
-        info = extract_part(m, spec, aimet_dir, dst_dir)
+        info = extract_part(m, spec, src_dir, dst_dir)
         parts_info.append(info)
         dst_dirs.append(dst_dir)
 

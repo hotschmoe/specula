@@ -108,6 +108,7 @@ def assemble_genie_bundle(
     ctx: int,
     dsp_arch: str = "v81",
     soc_model: int = 88,
+    rope_theta: float | None = None,
 ) -> dict:
     """Assemble a Qualcomm-genie-compatible multi-part bundle, mirroring
     the layout of `qwen3_4b-genie-w4a16-qualcomm_snapdragon_x2_elite/`.
@@ -175,6 +176,12 @@ def assemble_genie_bundle(
         elif isinstance(eos_v, int):
             eos_token = eos_v
 
+    # RoPE theta for genie's on-device rotary table. Defaults to the
+    # model's native theta; callers pass an NTK-scaled value when the
+    # compiled ctx exceeds the model's trained window (see
+    # compile_split_bundle.py / docs/long_context_scaling.md §2.3).
+    eff_rope_theta = rope_theta if rope_theta is not None else model_info.rope_theta
+
     genie_cfg = {
         "dialog": {
             "version": 1,
@@ -213,7 +220,7 @@ def assemble_genie_bundle(
                         "kv-dim": int(model_info.head_dim),
                         "pos-id-dim": int(model_info.head_dim) // 2,
                         "allow-async-init": False,
-                        "rope-theta": int(model_info.rope_theta),
+                        "rope-theta": int(round(eff_rope_theta)),
                     },
                     "extensions": "htp_backend_ext_config.json",
                 },
@@ -272,6 +279,8 @@ def assemble_genie_bundle(
         "dsp_arch": dsp_arch,
         "soc_model": soc_model,
         "ctx": ctx,
+        "rope_theta": int(round(eff_rope_theta)),
+        "rope_theta_native": int(model_info.rope_theta),
         "files": files,
         "total_bytes": sum(v["size"] for v in files.values()),
     }

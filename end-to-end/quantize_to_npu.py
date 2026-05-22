@@ -118,6 +118,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--force-stage", type=int, default=None,
                    help="Re-run from this stage onward (1-9). E.g. --force-stage 6 "
                         "re-runs aimet + qairt + qnn + bundle.")
+    p.add_argument("--stop-after-stage", type=int, default=None,
+                   help="Exit cleanly after this stage (1-9). E.g. --stop-after-stage 6 "
+                        "runs through AIMET only — use when the single-bin compile "
+                        "(stages 7-9) is handled separately by compile_split_bundle.py "
+                        "(required for 4B+, which exceeds the single-bin size ceiling).")
 
     p.add_argument("--bundle-name", type=str, default=None,
                    help="Override the bundle dir name. Default: <model-stem>-<prec>-pathb-ctx<ctx>-x2e.")
@@ -239,6 +244,19 @@ def main() -> int:
 
     aimet_onnx = s6_dir / f"{export_prefix}.onnx"
     aimet_enc = s6_dir / f"{export_prefix}.encodings"
+
+    if args.stop_after_stage is not None and args.stop_after_stage <= 6:
+        overall["wall_total_s"] = time.time() - t_overall
+        _save()
+        print(f"\n========== STOPPED after stage 6 ({time.time() - t_overall:.0f}s) ==========")
+        print(f"  AIMET output : {aimet_onnx}")
+        print(f"  encodings    : {aimet_enc}")
+        probe = overall["stages"]["6_aimet"].get("stages", {}).get("9_probe", {})
+        if "cos_fp_q" in probe:
+            print(f"  aimet probe  : cos(fp,q) = {probe['cos_fp_q']:.4f}, "
+                  f"argmax_match = {probe.get('argmax_match')}")
+        print(f"  manifest     : {overall_path}")
+        return 0
 
     # ---- 7. qairt-converter ----
     print(f"\n========== STAGE 7/9 — qairt-converter ==========")
