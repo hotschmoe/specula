@@ -60,12 +60,38 @@ uses its own ORT-QNN engine (`npu_engine/bench_pathb_ortqnn.py`), not
 Genie, and that engine already works with the folded mask;
 `attention_mask`-as-input is purely a Genie requirement.
 
-**Next.** Implement uint8 KV (pathb graph + `lib/aimet.py` KV-tensor
-encoding + `split.py` KV dtype — topology unchanged), rebuild Qwen3-4B
-at ctx 32768 and 65536 in **both w4a16 and w8a16**, split into ≤8 parts
-→ the first *loadable* long-ctx bundles, plus an on-device
-w4a16-vs-w8a16 long-context A/B (`e2e_optimizations.md` "Precision
-direction" leans w8a16; the A/B is the gating measurement).
+**uint8 KV implemented — and it cleared the allocation ceiling but
+exposed the *real* wall.** `lib/aimet.py::_apply_uint8_kv` (commit
+`36b7a3f`) quantizes the 72 KV-cache I/O tensors to 8-bit via qai-hub's
+`_set_tensors_to_output_8b_sym` + `_tie_quantizers_for_kv_cache`;
+`qairt.py` gained a `preserve_io` flag (`compile_split_bundle
+--quantize-io`) so the 8-bit encoding reaches the graph boundary.
+w4a16 ctx-512 uint8-KV calibration: probe cos **0.9703** (only −0.005
+vs 0.9758 — KV-only quant, no 16x8-matmul lever; argmax still ' Paris').
+
+**The decisive wall (commit `ea320bc`, `long_context_scaling.md`
+§8.8).** The w4a16 ctx-32768 uint8-KV build (6 parts, `--quantize-io`)
+cleared the 3.5 GiB allocation ceiling — then **failed HTP graph-prep**
+at `tcm_migration.cc`: a per-layer uint8 KV `InputSlice`
+(`[1,8,32768,128]` = 32 MiB) **cannot tile into on-chip VTCM (~8 MiB)**.
+This is a fundamental per-op HTP limit — not part count, not KV dtype
+(uint8 already applied) — and it caps dense global-attention ctx at
+**~4–8k**. It is *why Qualcomm's reference stops at cl4096*.
+
+**Conclusion: 32k/64k dense global attention is NOT HTP-compilable
+with the current pathb graph.** The genuine fix is **sliding-window
+attention** (`long_context_scaling.md` §5.2) — a fixed W-token window
+makes the KV slice always W-sized — now promoted from optimization to
+the load-bearing requirement. The flag-level fixes are conclusively
+exhausted (5-wall ceiling stack, §8.8).
+
+**Shippable now (not the 32k/64k goal, but real):** uint8-KV bundles
+at ctx ≤4096 — validates uint8 KV end-to-end + the ~4× KV-IO
+throughput win. **Next session direction (user checkpoint):** decide
+between shipping the uint8-KV ctx-4096 w4a16/w8a16 A/B, probing the
+exact dense ceiling (ctx 8192), or starting the SWA design — the real
+long-context project. The w8a16 ctx-512 uint8-KV calibration was left
+running to completion (reusable artifact for a future ctx-4096 build).
 
 ---
 
