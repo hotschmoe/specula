@@ -1,0 +1,11 @@
+island,config,op_shape,draft_max,model,backend,power,tok_per_s,accept_rate,accept_per_round,n_drafted,n_accepted,notes
+cpu,target-alone,TG,,qwen3-4b-q4_0,llama.cpp-cpu,AC,50.72,,,,,"llama-bench tg128 r5; stddev 0.67 t/s; speedup baseline"
+gpu,target-alone,TG,,qwen3-4b-q4_0,llama.cpp-opencl,AC,27.03,,,,,"llama-bench tg128 r5 -ngl 99; stddev 0.16 t/s; speedup baseline"
+cpu,draft-alone,TG,,qwen3-0.6b-q8_0,llama.cpp-cpu,AC,156.93,,,,,"llama-bench tg128 r5; 6.37 ms/token draft per-step cost"
+gpu,draft-alone,TG,,qwen3-0.6b-q8_0,llama.cpp-opencl,AC,111.77,,,,,"llama-bench tg128 r5 -ngl 99; 8.95 ms/token draft per-step cost"
+cpu,spec-decode,specdec,2,qwen3-4b-q4_0+qwen3-0.6b-q8_0,llama.cpp-cpu,AC,46.74,0.6518,1.30,112,73,"llama-speculative -t 16 --spec-draft-n-max 2; 130 tok / 2.781 s"
+cpu,spec-decode,specdec,4,qwen3-4b-q4_0+qwen3-0.6b-q8_0,llama.cpp-cpu,AC,54.59,0.5488,2.20,164,90,"llama-speculative -t 16 --spec-draft-n-max 4; 132 tok / 2.418 s; best CPU config"
+cpu,spec-decode,specdec,8,qwen3-4b-q4_0+qwen3-0.6b-q8_0,llama.cpp-cpu,AC,39.20,0.3357,2.69,280,94,"llama-speculative -t 16 --spec-draft-n-max 8; 130 tok / 3.316 s; over-drafting hurts"
+gpu,spec-decode,specdec,2,qwen3-4b-q4_0+qwen3-0.6b-q8_0,llama.cpp-opencl,AC,9.73,0.5403,1.08,124,67,"llama-speculative -ngl 99 -ngld 99 --spec-draft-n-max 2; 130 tok / 13.361 s"
+gpu,spec-decode,specdec,4,qwen3-4b-q4_0+qwen3-0.6b-q8_0,llama.cpp-opencl,AC,11.00,0.3950,1.58,200,79,"llama-speculative -ngl 99 -ngld 99 --spec-draft-n-max 4; 130 tok / 11.815 s; best GPU config"
+gpu,spec-decode,specdec,8,qwen3-4b-q4_0+qwen3-0.6b-q8_0,llama.cpp-opencl,AC,9.76,0.2181,1.64,376,82,"llama-speculative -ngl 99 -ngld 99 --spec-draft-n-max 8; 130 tok / 13.322 s"

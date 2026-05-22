@@ -1,0 +1,4 @@
+island,op_shape,k,model,backend,power,tok_per_s,ms_per_pass,notes
+gpu,PP,128,qwen3-4b-q4_0,llama.cpp-opencl,AC,460.83,277.80,Adreno X2-90; -b128 -ub128; one un-chunked 128-token pass; r=5; stddev 3.5ms
+gpu,PP,256,qwen3-4b-q4_0,llama.cpp-opencl,AC,571.63,447.85,Adreno X2-90; -b256 -ub256; one un-chunked 256-token pass; r=5; stddev 1.8ms
+gpu,PP,512,qwen3-4b-q4_0,llama.cpp-opencl,AC,576.63,887.92,Adreno X2-90; -b512 -ub512; one un-chunked 512-token pass; r=5; stddev 1.8ms

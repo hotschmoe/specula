@@ -227,3 +227,90 @@ Measure **C2 end-to-end** with a real small draft model, plus C0
 (today) and C1 as baselines. Confirm the GPU PP plateau extends
 predictably to pp256/pp512 (fixed-overhead model), and add the CPU
 verify-shape anchor for the full 3-island picture.
+
+---
+
+## Phase 1 results — anchors, native spec decode, C2 (2026-05-22)
+
+### 3-island verify-shape anchors
+
+With the CPU anchor added, per-pass cost of a k-token forward
+(Qwen3-4B): GPU PP is a flat ~167 ms plateau for k ≤ 16, then linear
+`≈ 82 + 1.55·k` for k ≥ 64 (knee ~k=32). CPU PP is near-linear and
+cheap at small k. NPU is flat ~52 ms (AR128; small-k padded).
+
+| k   | CPU ms | GPU ms | NPU ms |
+|-----|--------|--------|--------|
+| 4   | 23     | 167    | 52     |
+| 8   | 34     | 168    | 52     |
+| 32  | 71     | 175    | 52     |
+| 128 | 268    | 278    | 52     |
+
+**Crossover correction:** for useful k (3–8) the **CPU** is the
+cheapest verify island (23–34 ms); the NPU only overtakes it at
+k ≳ 24. Phase 0's "verify→NPU" was a GPU-vs-NPU-only artifact — the
+CPU was the missing third anchor.
+
+### Native llama.cpp spec decode (single-island, end-to-end)
+
+| config                              | tok/s | vs target-alone |
+|-------------------------------------|-------|-----------------|
+| CPU target-4B alone                 | 50.7  | —               |
+| CPU spec decode (best, draft_max=4) | 54.6  | 1.08×           |
+| GPU target-4B alone                 | 27.0  | —               |
+| GPU spec decode (C3, best)          | 11.0  | 0.41×           |
+
+CPU spec decode ≈ break-even (draft contends for the same 16
+threads). GPU-only spec decode (**C3**) is a decisive loss — the
+OpenCL PP path (~167 ms) wrecks verify. C3 refuted end-to-end.
+
+### C2 — draft GPU ∥ verify NPU (built + run)
+
+A new in-process driver (`gpu_npu_sidequest/scripts/run_c2.py`) —
+GPU draft server ∥ NPU sidecar verify, async-overlapped. Verify
+correctness was sanity-checked first (passes).
+
+| k | tok/s | accept rate |
+|---|-------|-------------|
+| 2 | 7.5   | 69%         |
+| 4 | 6.6   | 56%         |
+| 8 | 5.0   | 38%         |
+
+C2 loses decisively (best 7.5 vs CPU-spec 54.6). Root cause: the
+sidecar exposes only **AR1** stream primitives, so NPU verify ran as
+~2k+3 sequential AR1 steps (~34 ms each), not the flat 52 ms AR128
+batched pass. The async overlap itself works — GPU draft is fully
+hidden under NPU verify — but verify is the long pole. A batched
+`verify_batch` AR128 op in the sidecar would lift projected C2 to
+~40 t/s — a contest, but still likely short of CPU spec's 54.6.
+
+## Side quest verdict
+
+**On Qwen3-4B, no GPU/NPU heterogeneous placement beats the plain
+CPU baseline (50.7 t/s).** Why:
+
+- GPU verify (PP) is ~10× its bandwidth floor — a llama.cpp OpenCL
+  software ceiling. The GPU is out as a verify island until that
+  backend improves.
+- NPU verify is excellent (52 ms, batch-friendly, near hardware) but
+  shape-locked to AR1/AR128, and the sidecar API exposes only AR1 —
+  the side quest couldn't even drive the fast path end-to-end.
+- The CPU 4B baseline is simply strong (good bandwidth, 16 cores).
+  The bar any heterogeneous config must clear is high.
+
+The "wacky" configs (W1–W3) were not run: Phase 0/1 already showed
+the headline configs don't clear the CPU bar, so ping-pong /
+layer-split / dual-draft against a 4B target is premature.
+
+### Where the NPU actually wins — and the open risk
+
+The NPU spanks the GPU on 4B verify, yet every heterogeneous config
+still loses to the CPU, because the CPU is *also* fast on a 4B. The
+NPU's batch-friendly efficiency only converts into a **win where the
+CPU is slow** — larger models (8B/14B, where CPU decode falls to
+~18–30 t/s) and long context. Those are exactly the regimes the NPU
+is currently blocked from (8B-on-NPU = roadmap W1.b, open; long-ctx
+blocked on HTP TCM tiling → SWA). So the NPU's value is real but
+**unrealized, and contingent on the big-model / long-ctx unblock.**
+That makes W1.b and the long-ctx SWA work not optional polish but
+the *decisive* experiments for whether the NPU earns its place.

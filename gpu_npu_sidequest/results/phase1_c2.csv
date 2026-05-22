@@ -1,0 +1,14 @@
+config,k,n_predict,model_draft,model_target,backend_draft,backend_verify,power,decoded,rounds,decode_tps,accept_rate,accept_per_round,draft_wait_s,verify_wait_s,parallel_wall_s,wall_generate_s,notes
+c2,2,128,qwen3-0.6b-q8_0,qwen3-4b-w4a16,llama.cpp-opencl-gpu,ort-qnn-npu,AC,129,54,7.53,0.694,1.39,3.93,13.19,17.12,17.13,C2 end-to-end: draft GPU(Adreno X2-90) || verify NPU(Hexagon). Verify = persistent NPU stream; AR1-per-token speculation (NOT the AR128 52ms graph). parallel_wall == draft_wait+verify_wait => verify-bound; draft fully hidden under verify.
+c2,4,128,qwen3-0.6b-q8_0,qwen3-4b-w4a16,llama.cpp-opencl-gpu,ort-qnn-npu,AC,130,40,6.60,0.562,2.25,3.26,16.42,19.68,19.69,C2 end-to-end k=4. Verify-wait grows with k (more AR1 speculation steps); accept/round 2.25.
+c2,8,128,qwen3-0.6b-q8_0,qwen3-4b-w4a16,llama.cpp-opencl-gpu,ort-qnn-npu,AC,129,32,4.99,0.379,3.03,3.50,22.33,25.83,25.84,C2 end-to-end k=8. Worst tok/s: AR1 verify cost scales ~2k+3 steps/round; accept rate collapses to 37.9%.
+# --- baselines for comparison (from phase1_native_specdecode.md, same box, AC) ---
+# cpu-spec-decode best (draft_max=4): 54.59 tok/s  -- C2 loses (best C2 = 7.53)
+# cpu-target-4b-alone:                50.72 tok/s  -- C2 loses
+# gpu-only-spec-decode (C3) best:     11.00 tok/s  -- C2 loses
+# gpu-target-4b-alone:                27.03 tok/s
+# --- VERDICT: C2 ran end-to-end and is CORRECT (verify sanity-checked vs 4B greedy) but is 7x SLOWER than CPU-only spec decode.
+# --- ROOT CAUSE: the NPU sidecar stream API exposes only AR1 (single-token) decode. The verify mini-prefill of k draft tokens
+# --- runs as ~2k+3 sequential AR1 steps (~34ms each) per round, NOT the flat ~52ms AR128 batched verify Phase 0 measured.
+# --- Phase 0's "C2 wins, verify hides under draft" prediction assumed the AR128 graph; that path is not reachable through
+# --- the current stream primitives without a new batched-verify sidecar op. See findings/phase1_c2_run.md.

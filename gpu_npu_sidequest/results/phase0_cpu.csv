@@ -1,0 +1,10 @@
+island,op_shape,k,model,backend,power,tok_per_s,ms_per_pass,notes
+cpu,PP,1,qwen3-4b-q4_0,llama.cpp-cpu,AC,51.79,19.31,X2 Elite Extreme ARM64 -t16; -b1 -ub1; one 1-token forward; r=5
+cpu,PP,2,qwen3-4b-q4_0,llama.cpp-cpu,AC,78.37,25.53,X2 Elite Extreme ARM64 -t16; -b2 -ub2; one un-chunked 2-token pass; r=5
+cpu,PP,4,qwen3-4b-q4_0,llama.cpp-cpu,AC,173.91,23.00,X2 Elite Extreme ARM64 -t16; -b4 -ub4; one un-chunked 4-token pass; r=5
+cpu,PP,8,qwen3-4b-q4_0,llama.cpp-cpu,AC,238.06,33.82,X2 Elite Extreme ARM64 -t16; -b8 -ub8; one un-chunked 8-token pass; r=5
+cpu,PP,16,qwen3-4b-q4_0,llama.cpp-cpu,AC,417.69,38.32,X2 Elite Extreme ARM64 -t16; -b16 -ub16; one un-chunked 16-token pass; r=5
+cpu,PP,32,qwen3-4b-q4_0,llama.cpp-cpu,AC,451.21,70.93,X2 Elite Extreme ARM64 -t16; -b32 -ub32; one un-chunked 32-token pass; r=5
+cpu,PP,128,qwen3-4b-q4_0,llama.cpp-cpu,AC,477.94,267.85,X2 Elite Extreme ARM64 -t16; -b128 -ub128; one un-chunked 128-token pass; r=5
+cpu,PP,512,qwen3-4b-q4_0,llama.cpp-cpu,AC,351.57,1458.59,X2 Elite Extreme ARM64 -t16; -b512 -ub512; one un-chunked 512-token pass; r=5; stddev 65ms (thermal)
+cpu,TG,1,qwen3-4b-q4_0,llama.cpp-cpu,AC,50.39,19.85,X2 Elite Extreme ARM64 -t16; tg64 run; ms_per_pass = per-token wall (1000/50.39); r=5

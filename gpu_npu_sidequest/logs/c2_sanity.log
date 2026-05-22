@@ -1,0 +1,15 @@
+prompt: 33 tokens
+GPU draft server: healthy
+starting NPU sidecar (4B w4a16, ~15s load)...
+NPU sidecar ready (9.4s wall, startup_s=8.1841914000006)
+
+=== SANITY CHECK: NPU verify vs 4B greedy ===
+  4B greedy (8 tok): [1096, 5567, 18404, 264, 501, 47116, 1714, 429]
+  test1 correct-drafts: drafts=[1096, 5567, 18404, 264]
+    verify out = [1096, 5567, 18404, 264, 501]
+    expected   = [1096, 5567, 18404, 264, 501]   -> PASS
+  test2 wrong-draft@1 : drafts=[1096, 5568, 18404, 264]
+    verify out = [1096, 5567, 374, 264, 501]  lcp_j=1  -> PASS
+  SANITY: PASS
+
+--sanity only: stopping after sanity check.
