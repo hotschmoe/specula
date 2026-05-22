@@ -1,0 +1,10 @@
+island,op_shape,k,model,backend,power,tok_per_s,ms_per_pass,notes
+gpu,PP,1,qwen3-4b-q4_0,llama.cpp-opencl,AC,25.76,39.04,Adreno X2-90; -b1 -ub1; one 1-token forward; r=5
+gpu,PP,2,qwen3-4b-q4_0,llama.cpp-opencl,AC,12.25,163.37,Adreno X2-90; -b2 -ub2; one un-chunked 2-token pass; r=5
+gpu,PP,4,qwen3-4b-q4_0,llama.cpp-opencl,AC,23.98,166.85,Adreno X2-90; -b4 -ub4; one un-chunked 4-token pass; r=5
+gpu,PP,8,qwen3-4b-q4_0,llama.cpp-opencl,AC,47.68,167.86,Adreno X2-90; -b8 -ub8; one un-chunked 8-token pass; r=5
+gpu,PP,16,qwen3-4b-q4_0,llama.cpp-opencl,AC,95.13,168.27,Adreno X2-90; -b16 -ub16; one un-chunked 16-token pass; r=5
+gpu,PP,32,qwen3-4b-q4_0,llama.cpp-opencl,AC,183.35,174.60,Adreno X2-90; -b32 -ub32; one un-chunked 32-token pass; r=5
+gpu,PP,64,qwen3-4b-q4_0,llama.cpp-opencl,AC,318.24,201.12,Adreno X2-90; -b64 -ub64; one un-chunked 64-token pass; r=5
+gpu,TG,1,qwen3-4b-q4_0,llama.cpp-opencl,AC,24.96,40.06,Adreno X2-90; tg32 run; ms_per_pass = per-token wall (1000/24.96); r=5
+gpu,TG,1,qwen3-4b-q4_0,llama.cpp-opencl,AC,25.04,39.94,Adreno X2-90; tg64 run; ms_per_pass = per-token wall (1000/25.04); r=5

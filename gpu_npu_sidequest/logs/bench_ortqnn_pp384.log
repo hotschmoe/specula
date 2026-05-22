@@ -1,0 +1,61 @@
+=== Qwen3-4B ORT-QNN bench (AR128 prefill + AR1 decode, CL512, chained 4-part) ===
+tag            : sidequest_phase0_npu_pp384
+power state    : ac
+ctx tier       : 512  (cap 511 KV slots)
+pp tokens      : 384
+tg tokens      : 96
+log (trash)    : C:\Users\hotschmoe\Documents\GitHub\specula\marked_for_deletion\qwen3_4b_ortqnn_sidequest_phase0_npu_pp384\stdout.log
+prompt         : results\qwen3_4b_baseline\pp4k_prompt.txt
+prompt tokenized to 384 (target 384)
+route          : AR128 swap (prompt 384 >= threshold 128)
+
+--- phase A: load 4 AR128 sessions for prefill ---
+    AR128 part 1: 1.0 s  (742 MB → 750 MB/s effective)
+    AR128 part 2: 1.4 s  (638 MB → 454 MB/s effective)
+    AR128 part 3: 2.3 s  (638 MB → 276 MB/s effective)
+    AR128 part 4: 3.2 s  (1021 MB → 319 MB/s effective)
+  AR128 load total: 7.9 s
+  warmup (1 AR128 step, discarded)
+  prefill: 3 AR128 calls = 384 tokens
+    ar128 call 0 (positions 0..127)  52.7 ms  (2430 t/s in-call)
+    ar128 call 1 (positions 128..255)  50.5 ms  (2533 t/s in-call)
+    ar128 call 2 (positions 256..383)  61.8 ms  (2071 t/s in-call)
+
+--- phase A.5: tear down AR128 sessions ---
+  teardown: 1.5 s
+
+--- phase B: load 4 AR1 sessions for decode ---
+    AR1 part 1: 1.0 s  (742 MB → 757 MB/s effective)
+    AR1 part 2: 1.4 s  (638 MB → 455 MB/s effective)
+    AR1 part 3: 2.3 s  (638 MB → 273 MB/s effective)
+    AR1 part 4: 3.0 s  (1021 MB → 336 MB/s effective)
+  AR1 load total: 7.8 s
+  warmup (1 AR1 step, discarded)
+
+  PP total compute 0.17 s  -> 2310.86 t/s  (ar128 median 52.7 ms; ar1-tail median 0.0 ms)
+
+--- phase C: decode 96 AR1 steps (greedy) ---
+  tg step   0  42.1 ms  (median so far 42.1 ms)
+  tg step  16  33.2 ms  (median so far 34.3 ms)
+  tg step  32  27.2 ms  (median so far 33.9 ms)
+  tg step  48  37.9 ms  (median so far 33.9 ms)
+  tg step  64  26.1 ms  (median so far 34.1 ms)
+  tg step  80  34.2 ms  (median so far 33.9 ms)
+  tg step  95  37.7 ms  (median so far 34.2 ms)
+
+  TG total 3.16 s  -> 30.40 t/s  (median step 34.2 ms)
+
+  mean W              : None
+  mWh drop            : None
+  J/tok (compute-only): None
+  swap overhead       : 17.2 s  (AR128 load 7.9 + teardown 1.5 + AR1 load 7.8)
+  per-partition load profile (sec each):
+    AR128: [1.0, 1.4, 2.3, 3.2]
+    AR1  : [1.0, 1.4, 2.3, 3.0]
+
+=== Summary ===
+  PP     : 2310.86 t/s  (ar128; Genie AR128 baseline ~1598 t/s)
+  TG-AR1 : 30.40 t/s  (Genie AR1 baseline ~23.3 t/s on same binary)
+  J/tok  : None
+  total wall (incl swap): 20.5 s   compute-only: 3.3 s
+  csv    : C:\Users\hotschmoe\Documents\GitHub\specula\results\csv\qwen3_4b_ortqnn_sidequest_phase0_npu_pp384.csv

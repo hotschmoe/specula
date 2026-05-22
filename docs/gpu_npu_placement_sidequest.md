@@ -137,3 +137,93 @@ One CSV per config in `results/csv/`, and this doc updated with: the
 crossover-k, the filled GPU↔NPU cells of the W4.e matrix, and a
 recommended placement policy. Feeds roadmap W4.e and the
 `async_orchestration.md` deliverable.
+
+---
+
+## Phase 0 results — verify-shape microbench (2026-05-22)
+
+Measured with Qwen3-4B as the op-shape test model. GPU = llama.cpp
+OpenCL backend (Q4_0 GGUF) on the Adreno X2-90; NPU = Qualcomm w4a16
+Genie bundle via ORT-QNN. AC power. Raw data + findings in
+`gpu_npu_sidequest/`.
+
+Per-pass wall time of one k-token forward:
+
+| k   | GPU ms/pass  | NPU ms/pass |
+|-----|--------------|-------------|
+| 1   | 39 (TG path) | 34 (AR1)    |
+| 2   | 163          | 52 \*       |
+| 4   | 167          | 52 \*       |
+| 8   | 168          | 52 \*       |
+| 16  | 168          | 52 \*       |
+| 32  | 175          | 52 \*       |
+| 64  | 201          | 52 \*       |
+| 128 | —            | 52 (AR128)  |
+
+\* The NPU QNN context binary ships only two graphs — `ar1` ([1,1])
+and `ar128` ([1,128]); the batch dim is frozen at compile time. Any
+k ∈ [2,128] runs on the AR128 graph (k padded up), so they all cost
+the one flat ~52 ms. There is no AR2/4/8/16/32 graph.
+
+### Findings
+
+1. **No crossover — the NPU wins verify at every k.** The
+   hypothesised "verify flips to the NPU only at large k" is wrong:
+   the NPU is ~3× faster than the GPU at the verify (PP) shape
+   across the whole useful range (52 ms vs ~165 ms at k = 3–8), and
+   faster at k = 1 too. There is no k where the GPU verify wins.
+
+2. **The GPU PP path is software-bound, not silicon-bound.** GPU
+   per-pass cost is a flat ~165 ms plateau for k = 2–16. At the
+   Adreno's measured 159 GB/s (`memory_bandwidth_ceiling.md`) a
+   bandwidth-bound 4B forward should take ≈14 ms — the 165 ms is
+   ~10× the hardware floor. This is a llama.cpp **OpenCL-backend**
+   ceiling (its mat-mat / prompt path is far less mature than the
+   mat-vec / decode path), not an Adreno limit. GPU TG is healthier
+   (~40 ms/token) but still ~3× its bandwidth floor.
+
+3. **The NPU is strongly batch-friendly.** 128× the tokens for
+   +52% wall time; per-token cost falls ~84×. Qualcomm's bundle runs
+   close to the hardware. Batched forward is the NPU's strong suit —
+   exactly the verify workload.
+
+4. **NPU shape-lock is a real constraint.** Small-k verify (k = 4,
+   8) has no native graph and pads to AR128, paying the full 52 ms.
+   A bundle compiled with an AR8 graph would make small-k verify
+   cheaper still — a worthwhile follow-up if the NPU hosts verify.
+
+### This refutes C1 and points to C2
+
+"draft NPU / verify GPU" (C1) is refuted: verify on the GPU costs
+~165 ms vs ~52 ms on the NPU. **Verify belongs on the NPU.** The
+GPU's role in heterogeneous spec decode is therefore the *draft* —
+config **C2 ("PP on NPU, TG on GPU")** — not because the GPU drafts
+faster (it doesn't: 40 ms vs the NPU's 34 ms) but because running
+draft on the GPU is the only way to overlap it with an NPU verify.
+
+Round-time model for Phase 1 — a spec round of depth k is `k`
+sequential draft steps then one batched verify; async overlap
+(Lever A) makes round time ≈ max(draft_phase, verify_phase):
+
+- draft NPU ∥ verify NPU — can't overlap (one island) → serial
+  sum, slowest.
+- draft GPU ∥ verify NPU (**C2**) → verify (~52 ms) hides fully
+  under the draft phase; the long pole becomes the draft.
+- draft NPU ∥ verify GPU (**C1**) → verify (~165 ms) dominates.
+  Worst of the overlapped options.
+
+### Caveats
+
+GPU on Q4_0 vs NPU on w4a16 — different quant and byte footprint;
+the comparison is op-*shape*, not a like-for-like model. The GPU
+numbers reflect today's llama.cpp OpenCL backend — a better GPU
+inference path (the silicon has spare bandwidth) would move these
+and could revive a verify-GPU story; a genuine W4 follow-up. NPU
+small-k figures are AR128-padded.
+
+### Phase 1 direction (revised)
+
+Measure **C2 end-to-end** with a real small draft model, plus C0
+(today) and C1 as baselines. Confirm the GPU PP plateau extends
+predictably to pp256/pp512 (fixed-overhead model), and add the CPU
+verify-shape anchor for the full 3-island picture.

@@ -1,0 +1,4 @@
+island,op_shape,k,model,backend,power,tok_per_s,ms_per_pass,notes
+npu,TG,1,qwen3-4b-w4a16,ort-qnn,AC,29.2,34.2,"AR1 cl512 decode graph; median over 160 steps (run1 64 + run2 96); warmup discarded"
+npu,PP,128,qwen3-4b-w4a16,ort-qnn,AC,2459,52.0,"AR128 cl512 prefill graph; steady-state median over 4 calls (excl 1 cold call 72.5ms); samples 51.6/52.7/50.5/61.8 ms; in-call 2071-2533 t/s"
+npu,PP,1,qwen3-4b-w4a16,ort-qnn,AC,29.2,34.2,"AR1 graph used PP-style (k=1 batched forward == AR1 decode shape); same graph/cost as TG k=1 endpoint"
