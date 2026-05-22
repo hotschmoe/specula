@@ -1,5 +1,74 @@
 # specula -- current status
 
+Last updated: 2026-05-22 (session 31 — **long-context build campaign:
+ctx-parametric pipeline landed, but the many-parts approach is a dead
+end — uint8 KV is the required fix.** Goal was the first real
+long-context Qwen3-4B NPU bundles (ctx 32768 / 65536). Full design +
+implementation log: `docs/long_context_scaling.md` §8; on-device
+evidence: `docs/2026-05-21_specula_bundle_npu_testing.md`.
+
+**Pipeline fixes landed** (commit `66feb23`, "e2e: ctx-parametric
+pipeline + decoupled-calibration long-ctx builds"):
+
+1. **`--ctx` beyond 512 never actually worked — real bug fixed.**
+   `pin_shapes_qwen3_4b.py` only rewrote *symbolic* ONNX dims; the
+   frozen `attention_mask` initializer stayed at the traced ctx, so the
+   folded causal mask was capped at `[1,1,1,512]` and qairt-converter
+   died on the first broadcast. Fix: `pin_shapes` now also rewrites the
+   `attention_mask` initializer to `[1, ctx]`. `--ctx` is genuinely
+   parametric for the first time (verified at 65536). The
+   `cl{1024,2048,3072,4096}` ctx sweep (e2e task 11) had never been run
+   — it would have hit this immediately.
+2. **Decoupled calibration ctx from compile ctx.** AIMET at long ctx
+   is a non-starter (calibration samples carry the full fp32 KV —
+   ~1.2 TB at 32k). Fix: calibrate **once at ctx 512**, compile **any
+   ctx tier** from that one encodings file — sound because the additive
+   mask makes activation ranges ctx-invariant, and it is what Qualcomm
+   does (one calibration → 5 shipped tiers). `compile_split_bundle.py
+   --pathb-dir` re-pins the pre-AIMET graph and splits that, paired
+   with the ctx-512 encodings; ctx-aware stage dirs; `--jobs` for
+   parallel qnn.
+3. **NTK rope-theta** for ctx beyond the 40960 trained window
+   (`theta' = theta · s^(d/(d-2))`, a genie-config knob; 32k is
+   in-window, 64k → theta' ≈ 1.61e6).
+
+**The dead end (the important finding).** To dodge
+qnn-context-binary-generator's ~3.5 GiB per-part serializer ceiling at
+long ctx, the build had to split into **many parts — 19 for ctx 32768,
+37 for ctx 65536**. The on-device test proved this is **unloadable**:
+the HTP has a hard **~4-5 co-resident context-binary session ceiling**,
+and ORT-QNN fails to load the 19-part ctx32768 bundle at part 5 (QNN
+error 1002). The 37-part 64k build was abandoned. Splitting finer to
+clear the compile ceiling only trades it for the session ceiling —
+**there is no part count that satisfies both at 32k/64k with the
+current fp32-KV graph.**
+
+**Root cause + real fix.** The pathb graph passes the KV cache as
+**fp32** (`past_key_values.*` / `present.*`). That fp32 KV (a) blows
+the per-part compile estimate (~1.66 GB/layer at 64k) → forces the
+unworkable part count, (b) makes pathb decode ~4.5× slower than the
+Qualcomm reference (the on-device test measured ~150 MB in + ~150 MB
+out of KV IO per decode step). Qualcomm's reference bundle uses **uint8
+KV** (their `metadata.json`: `past_key/value` uint8, asymmetric,
+zero_point 128). **uint8 KV is the fix** — 4× smaller → 32k/64k fit in
+**≤8 loadable parts** AND ~4× faster KV IO. For ctx beyond ~8-12k it is
+mandatory, not an optimization.
+
+**Scope decision.** Re-exposing `attention_mask` as a graph input
+(which would make bundles Genie-loadable) was **dropped** — the project
+uses its own ORT-QNN engine (`npu_engine/bench_pathb_ortqnn.py`), not
+Genie, and that engine already works with the folded mask;
+`attention_mask`-as-input is purely a Genie requirement.
+
+**Next.** Implement uint8 KV (pathb graph + `lib/aimet.py` KV-tensor
+encoding + `split.py` KV dtype — topology unchanged), rebuild Qwen3-4B
+at ctx 32768 and 65536 in **both w4a16 and w8a16**, split into ≤8 parts
+→ the first *loadable* long-ctx bundles, plus an on-device
+w4a16-vs-w8a16 long-context A/B (`e2e_optimizations.md` "Precision
+direction" leans w8a16; the A/B is the gating measurement).
+
+---
+
 Last updated: 2026-05-21 (session 28 — **first on-device test of the
 three specula-built Qwen3-4B pathb NPU bundles** from the RunPod
 cloud-GPU pipeline. Full writeup: `docs/2026-05-21_specula_bundle_npu_testing.md`.

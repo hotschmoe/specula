@@ -368,6 +368,37 @@ every `past_key_values.{L}` / `present.{L}` shape. Scaling ctx is a
 ctx-parametric. (The one caveat for 27B: the split assumes every
 decoder block has the same KV layout; a hybrid block has none — see §7.)
 
+**Update (Session 31): this claim was too optimistic — see §8.** The
+split *layout* is ctx-parametric, but two graph-level fixes (§8.1-8.2)
+and a KV-precision change (§8.6) were all needed before a long-ctx
+bundle would build *and load*. The part *count* in particular is **not
+free at long ctx**: see §3.5.
+
+### 3.5 Part count is bounded on both sides — the long-ctx vise
+
+Two opposing hard limits constrain the number of split parts, and at
+long ctx with fp32/int16 KV they leave **no feasible part count**:
+
+- **Per-part compile ceiling.** `qnn-context-binary-generator`'s
+  serializer caps a single `.bin` at ~3.5 GiB. Long ctx inflates the
+  per-part HTP compile estimate (the fp32 KV tiling/spill footprint —
+  §8.4 measured 11.6 GB spill / 33.9 GB fill for a *0.6B* part at 64k),
+  which forces the part count **up**: the Session-31 fp32-KV builds
+  needed 19 parts at ctx 32k, 37 at 64k.
+- **HTP session ceiling.** The HTP holds only **~4-5 co-resident
+  context-binary sessions** (the documented ~7-session limit, lower
+  for long-ctx parts that carry heavier per-graph metadata). This caps
+  the part count **down** — a bundle with more parts than this is
+  unloadable, failing at the (ceiling+1)-th part with QNN error 1002.
+
+The on-device test (`docs/2026-05-21_specula_bundle_npu_testing.md`)
+confirmed both ends: the 19-part ctx32768 bundle compiled but failed to
+load at part 5. With fp32/int16 KV at ctx 32k/64k the "up" pressure
+exceeds the "down" limit — the bundle either won't compile or won't
+load. **uint8 KV (§5.1, §8.6) is what relieves the vise:** 4× smaller
+KV shrinks the per-part compile estimate ~4×, bringing 32k/64k inside
+the ≤8-part window that the HTP can actually load.
+
 ---
 
 ## 4. Genie / HTP runtime — KV management at long ctx
@@ -448,6 +479,16 @@ Ordered by structural impact.
   new lever; it is the *recipe we are already adopting for quality
   parity*. It halves the §1.2 numbers for free. **This is the baseline
   for any long-ctx build** — int16 KV at long ctx is simply wasteful.
+  **Update (Session 31): for ctx beyond ~8-12k this is mandatory, not
+  an optimization.** The Session-31 build (§8.5) proved fp32 KV makes
+  the per-part compile estimate so large that the bundle must split
+  into 19+ parts to clear the qnn-context-binary-generator serializer
+  ceiling — and 19+ parts exceed the HTP's ~4-5 co-resident
+  context-binary session ceiling, so the bundle is **unloadable**.
+  There is no part count that satisfies both ceilings at 32k/64k with
+  fp32 (or int16) KV. uint8 KV is the prerequisite that makes a
+  loadable long-ctx bundle *exist* — not a throughput tweak applied
+  after the fact. See §8.5-8.6.
 - **int4 KV.** Halves again (4.5 GiB at 128k for 4B). Structurally it
   needs: a 4-bit encoding on the `past_key/value` graph
   inputs/outputs in `lib/aimet.py`, and HTP support for int4 KV
@@ -733,6 +774,16 @@ and 65536). This section is the *correction* to §3-§4: §3.4 claimed
 "scaling ctx is a parameter change, not a code change" — that was
 **wrong in two concrete ways**, both found and fixed here.
 
+**Headline (read §8.5 first): the many-parts approach is a dead end.**
+The 32k bundle *compiled* (19 parts) but is **unloadable on-device** —
+the on-device test (`docs/2026-05-21_specula_bundle_npu_testing.md`)
+proved the HTP has a ~4-5 co-resident context-binary session ceiling,
+and 19 parts blows past it. The 64k build (37 parts) was abandoned for
+the same reason. Splitting finer to dodge the per-part compile ceiling
+just trades it for the session ceiling — there is **no part count**
+that satisfies both at 32k/64k with the current fp32-KV graph. The real
+fix is **uint8 KV** (§8.6); that is now the active task.
+
 ### 8.1 Correction 1 — `--ctx` beyond 512 never actually worked
 
 The `--ctx` flag (`pin_shapes_qwen3_4b.py`) only rewrites *symbolic*
@@ -799,7 +850,7 @@ fill 33.9 GB per execution — the §1.5 KV-streaming cost made concrete.
 the cost §6 named, and the structural argument for SWA (§5.2): a fixed
 `seq_k=W` binary compiles once instead of per tier.
 
-### 8.5 Results
+### 8.5 Results — the many-parts dead end
 
 Pipeline changes (`pin_shapes_qwen3_4b.py`, `lib/split.py`,
 `compile_split_bundle.py`, `lib/bundle.py`, `quantize_to_npu.py`)
@@ -810,5 +861,93 @@ smoke-tested on Qwen3-0.6B: pre-AIMET graph pinned to ctx 65536, split
 --no-vo-pin-w8`): probe cos **0.9758**, argmax match — consistent with
 `w4a16_ablation.md` A6.
 
-_(32k / 64k bundle sizes + structural diff vs Qualcomm — appended as the
-builds land.)_
+**The 32k bundle compiled but does not load.** To stay under
+qnn-context-binary-generator's per-part serializer ceiling (~3.5 GiB
+per `.bin`) at long ctx — the fp32 KV inflates each part's compile
+estimate to ~1.66 GB/layer at 64k (§8.4 measured the spill/fill
+traffic; §8.6 explains the cause) — the build had to split into **many
+small parts**: **19 parts for ctx 32768**, **37 parts for ctx 65536**.
+
+The on-device test (`docs/2026-05-21_specula_bundle_npu_testing.md` §4.3)
+took the 19-part ctx32768 w4a16 bundle to the X2 Elite and it **fails
+to load**: ORT-QNN loads parts 1-4, then **part 5 fails** with
+`LoadCachedQnnContextFromBuffer ... Error code: 1002` (HTP context /
+memory exhausted). The HTP has a hard ceiling of **~4-5 co-resident
+context-binary sessions** (the documented ~7-session limit, lower here
+because long-ctx parts carry heavier per-graph metadata). 19 contexts
+cannot co-exist; 37 is strictly worse. The **64k (37-part) build was
+abandoned** before on-device test for this reason.
+
+**This is a structural dead end, not a tuning problem.** The two
+ceilings pull in opposite directions:
+
+- the **per-part compile ceiling** (~3.5 GiB serialized) pushes the
+  part count *up* — at long ctx with fp32 KV you need *more* parts;
+- the **HTP session ceiling** (~4-5 co-resident contexts) pushes the
+  part count *down*.
+
+With the current fp32-KV pathb graph there is **no part count that
+satisfies both at ctx 32k or 64k**. Splitting finer to clear the
+compiler only guarantees the bundle is unloadable. The earlier framing
+in `docs/2026-05-21_..._npu_testing.md` §6/§7 ("re-split into ≤8 parts")
+is correct *as a target* but is **not achievable for 32k/64k while KV
+is fp32** — the parts would each exceed the serializer ceiling. The
+part count is downstream of the KV dtype.
+
+§3.4's claim that long-ctx scaling is "a parameter change, not a code
+change" is therefore wrong a **third** way: beyond the two graph fixes
+of §8.1-8.2, a *loadable* long-ctx bundle additionally requires the
+KV-cache precision change of §8.6.
+
+### 8.6 Root cause and the real fix — uint8 KV cache
+
+The pathb graph passes the KV cache as **fp32** `past_key_values.*` /
+`present.*` tensors. That single fact is behind all three long-ctx
+failures:
+
+1. **It blows the per-part compile estimate.** fp32 KV is 4× the bytes
+   the HTP must tile, spill and fill; at ctx 64k the per-part compile
+   estimate reaches ~1.66 GB/layer, forcing the 19/37-part splits that
+   §8.5 showed are unloadable.
+2. **It is ~4.5× slower than the Qualcomm reference.** The on-device
+   test measured pathb decode at ~5 t/s vs the Qualcomm bundle's
+   ~23 t/s; the dominant term is fp32 KV IO — ~150 MB fed in + ~150 MB
+   out *per decode step* (36 layers × 2 × `[1,8,~ctx,128]` fp32), plus
+   the on-device DMA of 4× the KV bytes
+   (`docs/2026-05-21_..._npu_testing.md` §5.1).
+3. **It forces the unworkable part count** (point 1).
+
+Qualcomm's reference bundle does **not** do this: its `metadata.json`
+declares `past_key` / `past_value` as **uint8, asymmetric, zero_point
+128**. uint8 KV is exactly the §5.1 lever, and it is **not optional for
+long ctx** — it is the prerequisite that makes a loadable 32k/64k
+bundle exist at all:
+
+- 4× smaller KV → per-part compile estimate drops ~4× → ctx 32k/64k
+  fit in **≤8 parts**, under the HTP session ceiling.
+- ~4× smaller KV IO per decode step → roughly 4× faster KV plumbing,
+  closing most of the §8.6.2 throughput gap.
+
+**This is the active task.** Plan: implement uint8 KV in the pathb
+graph + AIMET KV-tensor encoding (`lib/aimet.py` KV bitwidth + the
+`split.py` KV tensor dtype — the graph topology is unchanged, KV dtype
+is an encoding), then rebuild Qwen3-4B at **ctx 32768 and 65536** in
+**both w4a16 and w8a16**, split into **≤8 parts**, yielding the first
+*loadable* long-ctx bundles — and run an on-device w4a16-vs-w8a16
+long-context A/B (`docs/e2e_optimizations.md` "Precision direction"
+leans w8a16; the A/B is the gating measurement). uint8 vs uint16 KV
+encoding precision is a sub-decision inside that work; Qualcomm ships
+uint8, so uint8 is the baseline.
+
+### 8.7 Scope decision — `attention_mask`-as-input dropped
+
+Re-exposing `attention_mask` as a graph input — which would make the
+bundles Genie-loadable (`docs/2026-05-21_..._npu_testing.md` §4.1) —
+was considered and **dropped**. The project runs pathb bundles through
+its **own ORT-QNN engine** (`npu_engine/bench_pathb_ortqnn.py`), not
+Genie, and that engine already works with the folded causal mask.
+`attention_mask`-as-input is purely a *Genie* requirement; it buys
+nothing for the ORT-QNN path and is out of scope for the long-ctx work.
+
+_(32k / 64k bundle sizes + structural diff vs Qualcomm — appended once
+the uint8-KV builds land.)_
