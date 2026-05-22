@@ -951,3 +951,77 @@ nothing for the ORT-QNN path and is out of scope for the long-ctx work.
 
 _(32k / 64k bundle sizes + structural diff vs Qualcomm — appended once
 the uint8-KV builds land.)_
+
+### 8.8 The decisive wall — HTP TCM tiling caps dense ctx at ~4k
+
+uint8 KV (8.6) cleared the per-graph 3.5 GiB *allocation* ceiling — but
+the w4a16 ctx-32768 uint8-KV build (6 parts, `--quantize-io`) then hit
+a **different, harder** HTP graph-prep wall. qnn-context-binary-generator
+fails in `Graph Optimizations` / `tcm_migration.cc`:
+
+```
+ERROR: tcm_migration.cc:2221: Operator named q::*InputSlice
+       not sufficiently tiled to fit in TCM. Requires 33554432 bytes
+RouterX86 graph prepare failed 17 ... Failed to finalize graph err 1002
+```
+
+`33554432 = 8 · 32768 · 128` bytes — a **uint8 KV-shaped tensor**
+`[1, 8, 32768, 128]` = 32 MiB. Every decoder layer has such an
+`InputSlice` on the KV; the HTP's TCM-migration pass cannot tile a
+32 MiB slice into on-chip VTCM (~8 MiB), so graph-prep aborts.
+
+This is **not** a part-count or KV-dtype problem — uint8 KV is already
+applied, and the slice is per-layer so every decoder part fails it
+identically regardless of split. It is a **fundamental per-op HTP
+limit**: the KV tensor a layer slices must fit TCM tiling. At uint8 that
+caps the KV tensor near VTCM size → **ctx ≈ 4–8k for dense global
+attention**. ctx 4096 uint8 KV is `8·4096·128` = 4 MiB and tiles fine —
+which is exactly why **Qualcomm caps its reference bundle at cl4096**.
+§6's "compile/validation scoping" reason for the 4096 cap was
+incomplete; this TCM tiling limit is a hard floor under it.
+
+**The ceiling stack, complete (session 31):**
+
+| wall | symptom | cleared by |
+|---|---|---|
+| frozen `attention_mask` initializer | `--ctx` capped at traced 512 | pin_shapes rewrite (§8.1) |
+| calibration KV in RAM | 1.2 TB cal samples at 32k | decoupled cal-ctx (§8.2) |
+| 3.5 GiB per-graph alloc estimate | qnn "memory usage too large" | uint8 KV (§8.6) |
+| ~4–7 co-resident context binaries | ORT-QNN 1002 on load | ≤8 parts |
+| **HTP TCM tiling of the KV InputSlice** | **qnn `not sufficiently tiled`** | **— nothing flag-level —** |
+
+**Conclusion: 32k/64k dense global attention is not HTP-compilable with
+the current pathb graph.** The genuine fixes are architectural, not
+build flags:
+
+1. **Sliding-window attention (§5.2)** — a fixed `W`-token window makes
+   the KV tensor (and its InputSlice) always `W`-sized regardless of
+   nominal ctx. With `W ≈ 4096` the slice is 4 MiB and tiles. This is
+   *the* unlock and is now promoted from "optimization" to the
+   load-bearing requirement for any ctx > ~8k.
+2. **KV graph restructure** — if the per-layer full-KV `InputSlice`
+   can be eliminated (e.g. present-as-1-token-slice like Qualcomm, KV
+   roll kept host-side) the tiling op may disappear. Needs a pathb-graph
+   rewrite; scope unknown.
+
+**What IS now shippable:** uint8-KV bundles at HTP-feasible ctx
+(≤ ~4096). That is not the 32k/64k goal, but it is a real result — it
+validates uint8 KV end-to-end and should land the ~4x KV-IO throughput
+win the on-device test (`docs/2026-05-21_...`) identified. Recommended
+immediate deliverable: rebuild Qwen3-4B w4a16+w8a16 at **ctx 4096**
+with uint8 KV + `--quantize-io`, hand off for the on-device
+w4a16-vs-w8a16 A/B; treat **SWA as the real long-context project**.
+
+### 8.9 Follow-up — weight-shared multi-graph contexts
+
+Separate from the TCM wall: our pipeline emits one HTP context binary
+per part (N parts → N co-resident contexts → the ~4–7 session ceiling).
+Qualcomm instead packs **multiple graphs into one weight-shared context
+binary** (their 4 `.bin`s carry ~10 graphs each — the 5 ctx tiers × 2
+ar modes — sharing one weight allocation). QNN context-binary "link"
+jobs do this. We do not need it for a single-tier ar1 4B bundle, but it
+is **mandatory for Qwen3.6-27B** (≈14 GB w4 weights must weight-share
+across parts or each context blows its budget) and useful for shipping
+a ctx-tier ladder. Scope as its own pass: emit multiple graphs per
+context / link parts into a shared-weight context. Tracked here as a
+TODO; revisit when the 27B pipeline or a ctx-tier ladder is built.
