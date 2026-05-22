@@ -388,6 +388,21 @@ cut over, not *if*.
   weights are public, read the arch diff vs 3.5. Flag any ops
   that aren't on our NPU/GPU kernel coverage yet. Update
   `docs/reference-projects.md` "kernel coverage" section.
+  **Done in part (session 32):** `qwen35` arch audited from the GGUF —
+  65-block SSM+attention hybrid, `full_attention_interval=4`,
+  ~16 attention layers, native 256k ctx. See
+  `docs/2026-05-13_qwen3_6_27b_mtp.md` and
+  `docs/qwen3_6_27b_npu_kickoff.md`.
+- W6.a′: **Qwen3.6-27B NPU bundle — front-loaded (session 32).** The
+  session-31 dense long-context wall (`long_context_scaling.md` §8.8)
+  forced this ahead of the W6.c cutover trigger: dense Qwen3-4B cannot
+  exceed ~4k ctx on the HTP, so the long-context deliverable *is* the
+  Qwen3.6-27B hybrid pipeline. Kickoff brief
+  (`docs/qwen3_6_27b_npu_kickoff.md`) charters the hybrid-awareness
+  pipeline work; first milestone is a loadable on-device 27B bundle at
+  ctx 32768. This is not a cutover — Qwen3-4B NPU still closes out via
+  the uint8-KV ctx-4096 bundle — it is the long-context workstream
+  relocating to the model that can actually carry it.
 - W6.b: **Gemma4 architecture audit.** Same for Gemma4 — expected
   different RoPE variant, different norm, possibly different
   attention (sliding-window). Per-family pathb rewrite might

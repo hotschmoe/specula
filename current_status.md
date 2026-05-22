@@ -1,5 +1,44 @@
 # specula -- current status
 
+Last updated: 2026-05-22 (session 32 — **decision: pivot the NPU
+long-context target off dense Qwen3-4B onto the Qwen3.6-27B hybrid.**
+
+Session 31 closed on a user checkpoint with three options (ship the
+uint8-KV ctx-4096 A/B, probe the dense ceiling, or start SWA design).
+Resolution: **none of the three as scoped.** The session-31 TCM-tiling
+wall (`long_context_scaling.md` §8.8) makes dense 32k/64k
+*structurally* impossible, and a 4k dense ceiling is not a useful
+long-context deliverable. SWA *is* still the fix — but building it on
+Qwen3-4B is wasted work: Qwen3-4B was not SWA-trained (quality-lossy),
+and the GGUF geometry shows the per-attention-layer KV slice is
+identical on the real target anyway.
+
+**The call: take the RunPod conversion pipeline straight to
+Qwen3.6-27B**, then 35B-A3B. Verified from the GGUF (`gguf_dump.py` on
+`models/Qwen3.6-27B-MTP-Q4_0.gguf`): arch `qwen35`, 65 blocks,
+`full_attention_interval=4` → only ~16 global-attention layers carry an
+O(ctx) KV cache; the other ~48 are SSM/Mamba2 with O(1) state and scale
+to the native 256k context for free. SWA is still needed on the 16
+attention layers (same 32 MiB KV slice → same TCM wall) but is now
+"with the grain" of the hybrid, not a quality hack — the SSM layers
+already carry the long-range path.
+
+**Kickoff brief committed** (`docs/qwen3_6_27b_npu_kickoff.md`, commit
+`b962a77`) for the RunPod team: lists the hybrid-awareness snags
+(`lib/model_config.py` per-block type map, `rewrite_qwen3_pathb.py` SSM
+skip, `lib/split.py` KV-on-attention-layers-only, SWA on the 16 layers,
+genie/ORT-QNN KV manager) and the first milestone — a loadable,
+on-device-correct 27B bundle at ctx 32768.
+
+**Next.** RunPod team works the kickoff brief: hybrid-aware
+`model_config`/rewrite/split first (verify at ctx-512), then SWA, then
+the ctx-32768 build and the ctx sweep to 256k. The uint8-KV ctx-4096
+Qwen3-4B A/B is the honest close-out of Qwen3 NPU (matches Qualcomm's
+cl4096 limit) and can be shipped opportunistically — it is no longer
+the long-context goal.
+
+---
+
 Last updated: 2026-05-22 (session 31 — **long-context build campaign:
 ctx-parametric pipeline landed, but the many-parts approach is a dead
 end — uint8 KV is the required fix.** Goal was the first real
