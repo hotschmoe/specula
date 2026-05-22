@@ -147,7 +147,7 @@ def main() -> int:
         device=hub.Device(args.device),
         name=name,
         input_specs=specs,
-        options="--target_runtime qnn_context_binary",
+        options="--target_runtime qnn_context_binary --truncate_64bit_io",
     )
     print(f"\n[ok] compile job submitted: {job.job_id}")
     print(f"     {job.url}")
