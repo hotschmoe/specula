@@ -79,19 +79,48 @@ Dug into whether Qualcomm AI Hub shortcuts any of this. Result:
 
 ## Route 1 progress (session 33 — in flight)
 
-Started the w8a16-via-AI-Hub route. Done so far:
+w8a16-via-AI-Hub route. Environment + model are done; now iterating
+AI Hub compile of the fp16 decoder to find every blocker.
 
-- `qai-hub` installed; token configured + verified (`list-devices` OK).
-- **`Snapdragon X2 Elite CRD` confirmed as an AI Hub device** — AI Hub
-  can compile + validate directly for our v75 target.
-- optimum-cli cannot export Gemma 4 (no `gemma4` exporter; transformers
-  4.57.6 lacks the arch). **Switched stage 1** to consume the ungated
-  pre-export `onnx-community/gemma-4-E2B-it-ONNX` instead.
-- Downloading the fp16 `decoder_model_merged` (4.76 GB) →
-  `models/gemma-4-E2B-it-ONNX/`.
+Done:
+- `qai-hub` installed; token configured + verified.
+- **`Snapdragon X2 Elite CRD` confirmed as an AI Hub device** — compile
+  + validate directly for our v75 target, no device mismatch.
+- optimum-cli cannot export Gemma 4 → switched stage 1 to the ungated
+  pre-export `onnx-community/gemma-4-E2B-it-ONNX` (fp16 decoder 4.76 GB,
+  downloaded).
+- Decoder inspected; architecture predictions confirmed (30 KV inputs
+  = 15 KV-owning layers, per-layer head_dim 256/512, PLE as an input).
 
-Next: inspect the decoder ONNX (IO, dynamic dims), pin shapes, attempt
-`submit_compile_job` for X2 Elite, then `submit_quantize_job` (w8a16).
+### AI Hub compile-blocker ledger (ctx=512, AR=1, fp16 decoder)
+
+| # | job | blocker | fix | status |
+|--|--|--|--|--|
+| 1 | jgkr100n5 | external weights not uploaded | repack to qai-hub model dir (one .onnx + one .data) | **cleared** |
+| 2 | jgoex7kdp | `SimplifiedLayerNormalization` op unknown | decompose to primitives (`rewrite_gemma4_htp.py`) | **cleared** |
+| 3 | jgkr1wkn5 | int64 inputs | compile flag `--truncate_64bit_io` | **cleared** |
+| 4 | jpe4q0qv5 | `RotaryEmbedding` (com.microsoft) unsupported | decompose to standard rotary | **TODO** |
+| 5 | (expected) | `GroupQueryAttention` (com.microsoft) unsupported | decompose to MatMul SDPA + KV concat | **TODO** |
+
+Blockers 1–3 were quick iterative fixes. Blockers 4–5 are the real
+graph surgery — effectively the `rewrite_gemma4_pathb.py` work
+ARCHITECTURE_NOTES.md flagged as hardest:
+
+- **RotaryEmbedding** ×50 — non-interleaved; `cos_cache_local` /
+  `cos_cache_global` ([131072, N]); some nodes are **partial rotary**
+  (global layers, partial_rotary_factor 0.25). Decompose to
+  reshape→gather cos/sin→rotate-half→concat. ~tractable.
+- **GroupQueryAttention** ×12 — `num_heads=8, kv_num_heads=1,
+  local_window_size=512, softcap=0`. The additive mask is already
+  supplied as input[10] (`gqa_attention_bias`), so decomposition is
+  KV-cache concat + GQA head-expand + scaled MatMul-softmax-MatMul.
+  The `local_window_size` sliding band is a **no-op at ctx ≤ 512**
+  (whole context fits the window) — only needs an explicit band mask
+  at ctx > 512.
+
+Verification: both decompositions must be checked numerically
+(`onnxruntime` runs the original — it *has* the com.microsoft ops — vs
+the rewritten graph; compare logits) before trusting an AI Hub compile.
 
 ## Recommended path to a bundle
 
