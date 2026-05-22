@@ -89,8 +89,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--onnx", type=Path, required=True,
-                    help="decoder_model_merged_fp16.onnx (external data "
-                         "files must sit alongside it).")
+                    help="The .onnx file, OR a qai-hub model directory "
+                         "(one .onnx + one .data — see repack_onnx.py). "
+                         "A directory is required for the >2 GB decoder so "
+                         "qai-hub uploads the external weights.")
     ap.add_argument("--ctx", type=int, default=512,
                     help="Context length to pin. Start at 512; goal 32768.")
     ap.add_argument("--ar", type=int, default=1,
@@ -105,7 +107,22 @@ def main() -> int:
         print(f"FATAL: not found: {args.onnx}", file=sys.stderr)
         return 2
 
-    specs = build_input_specs(args.onnx, args.ctx, args.ar)
+    # Accept either a .onnx file or a qai-hub model directory. The graph
+    # (for input_specs) is read from the .onnx; the upload target is the
+    # directory when given one, so external weights ride along.
+    if args.onnx.is_dir():
+        onnx_files = sorted(args.onnx.glob("*.onnx"))
+        if len(onnx_files) != 1:
+            print(f"FATAL: model dir must hold exactly one .onnx, found "
+                  f"{len(onnx_files)}", file=sys.stderr)
+            return 2
+        graph_path = onnx_files[0]
+        upload_target = args.onnx
+    else:
+        graph_path = args.onnx
+        upload_target = args.onnx
+
+    specs = build_input_specs(graph_path, args.ctx, args.ar)
     print(f"[input_specs]  ctx={args.ctx}  ar={args.ar}  "
           f"({len(specs)} inputs)")
     for name, (shape, dtype) in specs.items():
@@ -121,12 +138,12 @@ def main() -> int:
         return 0
 
     name = args.name or f"gemma4-e2b-decoder-fp16-ctx{args.ctx}-ar{args.ar}"
-    print(f"\n[submit] uploading {args.onnx.name} + external data ...")
+    print(f"\n[submit] uploading {upload_target} ...")
     print(f"         device={args.device!r}  job={name!r}")
 
     import qai_hub as hub
     job = hub.submit_compile_job(
-        model=str(args.onnx),
+        model=str(upload_target),
         device=hub.Device(args.device),
         name=name,
         input_specs=specs,
