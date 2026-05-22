@@ -1,5 +1,24 @@
 # specula -- current status
 
+Last updated: 2026-05-22 (session 33 — **side quest: Gemma 4 → Hexagon
+NPU.** Scaffolded a new `gemma-pipeline/` subdirectory (sibling of
+`end-to-end/`) for a non-RunPod attempt at converting **Gemma 4 E2B**
+to a w4a16 NPU bundle for the npu_engine on the Hexagon laptop. Gemma 4
+released 2026-04-02; E2B is the smallest (35-layer text decoder, 128k
+native ctx). Built + tested `lib/model_config.py` (Gemma-4-aware
+ModelInfo — dual RoPE, Per-Layer Embeddings, KV sharing, sliding
+window); wrote `ARCHITECTURE_NOTES.md` (Qwen3-vs-Gemma4 difference
+matrix), an honest orchestrator, an AI Hub launcher, and the spec for
+4 Gemma-specific rewrite scripts. Key upside: Gemma 4's native
+sliding-window attention removes the 32k VTCM wall that killed the
+dense Qwen3-4B long-context effort (sessions 31–32). Blockers on the
+x86 dev box: AIMET needs CUDA (Intel B50 is not), the NPU is the other
+machine, no AI Hub token found yet. Next: dig into Qualcomm AI Hub —
+whether it has a Gemma 4 recipe, else do the graph surgery ourselves
+and submit jobs. See `gemma-pipeline/STATUS.md`.
+
+---
+
 Last updated: 2026-05-22 (session 32 — **decision: pivot the NPU
 long-context target off dense Qwen3-4B onto the Qwen3.6-27B hybrid.**
 
