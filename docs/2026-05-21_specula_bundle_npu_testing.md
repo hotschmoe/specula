@@ -9,8 +9,10 @@ quality against the Qualcomm AI Hub Qwen3-4B reference bundle.
 **Bottom line:** the two ctx512 bundles run correctly and decode
 coherent text through our ORT-QNN runtime; the ctx32768 bundle and the
 entire Genie path are blocked. Throughput is far below the Qualcomm
-reference — most of the gap is structural (the pathb bundle design),
-some is fixable harness overhead. Details below.
+reference, and per-part profiling shows the gap is **entirely
+structural** — the pathb bundle design (FP32 KV, FP32 IO, no AR128
+graph), not harness overhead. Adding static IOBinding to the harness
+changed throughput by nothing (§5). Details below.
 
 ---
 
@@ -58,7 +60,7 @@ with exactly that.
 |---|---|--:|--:|--:|---|
 | Qualcomm w4a16 (control) | ORT-QNN | **1604** | **23.4** | 41 (decode) | OK |
 | Qualcomm w4a16 (control) | Genie   | — | — | — | **DSP transport broken** (§4) |
-| specula w4a16 ctx512 | ORT-QNN | 5.26 | 5.21 | 183 / 188 | OK |
+| specula w4a16 ctx512 | ORT-QNN | 5.86 | 5.46 | 170 / 177 | OK |
 | specula w8a16 ctx512 | ORT-QNN | 4.48 | 4.40 | 220 / 224 | OK |
 | specula w4a16 ctx32768 | ORT-QNN | — | — | — | **19 parts > HTP ceiling** (§4) |
 | all 3 specula bundles | Genie | — | — | — | **no attention_mask** (§4) |
@@ -69,7 +71,12 @@ truncated to 256 tokens). Control PP uses AR128 batched prefill; pathb
 PP is AR1 (token-by-token) because the pathb bundles ship no AR128
 prefill graph. One warmup step discarded. AC power.
 
-CSV: `results/csv/pathb_ortqnn_w4a16_ctx512.csv`,
+The w4a16 ctx512 row is the static-IOBinding harness run
+(`pathb_ortqnn_w4a16_ctx512_iobind.csv`); the w8a16 row predates the
+IOBinding change and its number stands (§5 shows IOBinding is
+throughput-neutral on this workload).
+
+CSV: `results/csv/pathb_ortqnn_w4a16_ctx512{,_iobind}.csv`,
 `results/csv/pathb_ortqnn_w8a16_ctx512.csv`,
 `results/csv/qwen3_4b_ortqnn_2026-05-21_ctrl.csv`.
 
@@ -179,38 +186,52 @@ host-side. Breakdown of *why* — see §5.
 
 ---
 
-## 5. Why pathb TG is slow — analysis
+## 5. Why pathb TG is slow — analysis (measured)
 
-Per-step cost for the pathb 4-part chain (measured ~183–224 ms;
-control ~41 ms):
+`bench_pathb_ortqnn.py` was upgraded to **fully-static IOBinding** (all
+inputs and outputs bound once, by pointer, to persistent buffers — no
+per-step allocation or marshalling) and instrumented to time each part.
+Re-run, w4a16 ctx512, decode steps:
 
-1. **FP32 KV IO — the big one.** The pathb graph passes the KV cache as
-   **FP32** `[1,8,511,128]` in / `[1,8,512,128]` out. 36 layers × 2 (k,v)
-   = 72 tensors ≈ **150 MB fed in + 150 MB out per step**. Qualcomm's
-   bundle quantizes KV to **uint8** — 4× fewer bytes — specifically so
-   this plumbing is cheap. The NPU must also DMA 4× the KV bytes
-   on-device. This is a *bundle design* cost, not a harness bug.
+| component | median ms |
+|---|--:|
+| part1 (embed) | 1.6 |
+| part2 (12 layers) | 52.0 |
+| part3 (12 layers) | 51.7 |
+| part4 (12 layers + lm_head) | 60.1 |
+| **sum of part `run_with_iobinding`** | **165.4** |
+| KV roll (host, `past[:] = present[…,1:,:]`) | 9.7 |
+| total step | ~175 |
 
-2. **AR1 prefill.** The pathb bundles ship one graph per `.bin`, AR1
-   only — no AR128 batched-prefill graph. So prefill is token-by-token
-   (PP ≈ TG ≈ 5 t/s) versus the control's 128-wide AR128 prefill
-   (PP 1604). This is the single largest PP gap and is structural.
+**The slowness is on-device, not host-side.** ~165 of the ~175 ms is
+inside `run_with_iobinding` — the QNN graph executing on the HTP. Only
+~10 ms is host-side (KV roll). **IOBinding changed TG by nothing**
+(5.2 → 5.5 t/s, within run-to-run noise) — host dispatch was never the
+bottleneck, so there is nothing left to recover in the harness.
 
-3. **Plain `sess.run()` dispatch (harness).** `bench_pathb_ortqnn.py`
-   uses plain `sess.run()`, which allocates the ~150 MB of output
-   tensors fresh every step. The control harness uses `IOBinding` with
-   pre-bound output buffers. This is the one *fixable-in-the-harness*
-   slice — estimated worth ~30–50 % of decode step time, i.e. pathb TG
-   could plausibly reach ~10–12 t/s with IOBinding. It would still sit
-   below the control because of (1) and (2).
+For scale: the Qualcomm control runs all 36 layers in ~41 ms/step
+(~14 ms per 12-layer part). The pathb bundle takes ~52–60 ms per
+12-layer part — **~3.7× slower per part, on the same HTP, same w4a16.**
 
-4. **Per-step Python overhead.** 4 sequential `session.run` calls and
-   72-entry feed dicts built in Python each step. Minor next to (1).
+Causes, all on-device and all upstream (pipeline) issues:
 
-**Conclusion:** roughly half the gap (no AR128 prefill, FP32 KV) is the
-pathb bundle/pipeline design and can only be fixed upstream on RunPod;
-the other slice (IOBinding, dispatch) is fixable in our runtime. Even
-fully optimized, FP32 KV caps pathb well below the Qualcomm reference.
+1. **FP32 KV IO.** The pathb graph reads/writes the KV cache as
+   **FP32** `[1,8,511,128]` in / `[1,8,512,128]` out — ~100 MB of FP32
+   KV moved per 12-layer part. Qualcomm's bundle uses **uint8** KV
+   (4× fewer bytes the HTP must DMA). This is the prime suspect for the
+   per-part slowdown.
+2. **FP32 IO boundaries.** Every cross-part tensor (hidden, KV, mask,
+   logits) is FP32; the HTP runs fp16 internally, so each part pays
+   FP32↔fp16 conversion at its IO boundary. Qualcomm's bundle uses
+   uint16/uint8 IO the HTP consumes natively.
+3. **AR1-only prefill.** One AR1 graph per `.bin`, no AR128
+   batched-prefill graph, so PP ≈ TG ≈ 5 t/s versus the control's
+   128-wide AR128 prefill (PP 1604). Largest PP gap; structural.
+
+**Conclusion (corrected):** the gap is essentially **100 % pathb
+bundle / pipeline design** — FP32 KV + FP32 IO + no AR128 graph. It is
+*not* harness overhead: static IOBinding is in place and recovered
+nothing. The fix is entirely upstream on RunPod (see §6).
 
 ---
 
@@ -231,8 +252,10 @@ Upstream pipeline (RunPod), in priority order:
 
 Local (this repo):
 
-5. Add `IOBinding` to `bench_pathb_ortqnn.py` to recover the dispatch
-   overhead and report a fair "best-case our-runtime" number.
+5. ~~Add IOBinding to the harness.~~ **Done** — static IOBinding is in
+   `bench_pathb_ortqnn.py` and per-part profiling (§5) confirms it
+   recovers nothing: ~165 of ~175 ms/step is on-device. No further
+   local perf work is worthwhile until the bundle is rebuilt.
 6. Capture on-device first-decode logits for the Qualcomm control and
    compute quant-vs-reference cosine for each pathb bundle (true
    accuracy comparison; §3.2 only has bundle-vs-bundle).
@@ -274,7 +297,7 @@ reasonable part count, which is not the case here.
 - Harness (new, keeper): `npu_engine/bench_pathb_ortqnn.py` — generic
   ORT-QNN driver for pathb bundles (reads the IO contract from
   `bin_info/part_*.json`, threads the folded mask across parts, uses
-  the QAIRT 2.45 DLL).
+  the QAIRT 2.45 DLL, fully-static IOBinding, per-part profiling).
 - Load probe: `npu_engine/_probe_pathb_load.py`.
 - CSVs: `results/csv/pathb_ortqnn_*.csv`,
   `results/csv/qwen3_4b_ortqnn_2026-05-21_ctrl.csv`.

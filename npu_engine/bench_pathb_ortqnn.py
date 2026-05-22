@@ -25,6 +25,21 @@ Differences from the Qualcomm bundle harness (`qualcomm_qwen3_4b_oracle`):
 The IO contract is read from each part's `bin_info/part_*.json`, so the
 same harness drives the 4-part ctx512 bundles without per-bundle edits.
 
+**Execution uses fully-static IOBinding.** Every part's outputs and
+inputs are bound once, by pointer, to persistent numpy buffers:
+  * Output buffers (hidden / present-KV / mask / logits) are bound with
+    `bind_output(buffer_ptr=...)` — no per-step ~150 MB allocation.
+  * The seam (hidden) and folded mask flow part→part by binding the
+    producer's output buffer pointer straight into the consumer's
+    input — zero copy.
+  * The KV `past` buffers are bound by pointer and updated in place
+    each step (`past[:] = present[..., 1:, :]`).
+  * `input_ids` / `position_ids_cos` / `position_ids_sin` are tiny
+    persistent buffers written in place each step.
+A decode step is then just: write the 3 small input buffers, run each
+session's `run_with_iobinding`, roll the KV. No per-step binding, no
+per-step allocation.
+
 Usage:
     PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe \\
         npu_engine/bench_pathb_ortqnn.py \\
@@ -67,7 +82,6 @@ EVAL_DIR = REPO / "results" / "pathb_eval"
 _QNN_DTYPE = {"QNN_DATATYPE_INT_64": "int64", "QNN_DATATYPE_FLOAT_32": "float32"}
 _NP = {"int64": np.int64, "float32": np.float32}
 _PROTO = {"int64": TensorProto.INT64, "float32": TensorProto.FLOAT}
-MASK_TENSOR = "_model_ScatterND_output_0"
 
 
 def build_rope_cache(theta: float, head_dim: int, max_pos: int):
@@ -89,7 +103,9 @@ def _kv_layer(name: str) -> tuple[int, str]:
 
 
 class Part:
-    """One bundle part: its EPContext-wrapped QNN session + IO classification."""
+    """One bundle part: its EPContext-wrapped QNN session, IO
+    classification, persistent output buffers, and a pre-wired
+    IOBinding."""
 
     def __init__(self, idx: int, bin_info: dict, bin_name: str, bundle: Path):
         g = bin_info["graphs"][0]
@@ -137,6 +153,8 @@ class Part:
             else:
                 self.out_seam = n
         self.session: ort.InferenceSession | None = None
+        self.io: ort.IOBinding | None = None
+        self.out_buf: dict[str, np.ndarray] = {}
 
     def wrapper_path(self) -> Path:
         return self.bundle / f"_ortqnn_part{self.idx}.wrapper.onnx"
@@ -178,6 +196,134 @@ class Part:
                 f"part{self.idx} fell back to {self.session.get_providers()[0]}")
         return time.perf_counter() - t0
 
+    def alloc_outputs(self) -> None:
+        """Pre-allocate one persistent numpy buffer per graph output."""
+        for n, dt, sh in self.outputs:
+            self.out_buf[n] = np.zeros(tuple(sh), dtype=_NP[dt])
+
+    def bind(self, *, seam_src: np.ndarray | None, mask_src: np.ndarray | None,
+             token_buf: np.ndarray | None, cos_buf: np.ndarray,
+             sin_buf: np.ndarray, kv) -> None:
+        """Wire the IOBinding once. All inputs/outputs are bound by
+        pointer to persistent buffers, so no per-step (re)binding is
+        needed.
+
+        seam_src  — the previous part's hidden output buffer (None for
+                    part 1, which is fed `input_ids` instead).
+        mask_src  — part 2's folded-mask output buffer (None if this
+                    part neither consumes nor is part 2).
+        token_buf — persistent [1,1] int64 buffer (part 1 only).
+        """
+        self.io = self.session.io_binding()
+        # --- outputs ---
+        for n, dt, sh in self.outputs:
+            arr = self.out_buf[n]
+            self.io.bind_output(
+                name=n, device_type="cpu", device_id=0,
+                element_type=_NP[dt], shape=tuple(sh),
+                buffer_ptr=arr.ctypes.data)
+        # --- inputs ---
+        def bind_in(name: str, arr: np.ndarray) -> None:
+            self.io.bind_input(
+                name=name, device_type="cpu", device_id=0,
+                element_type=arr.dtype.type, shape=tuple(arr.shape),
+                buffer_ptr=arr.ctypes.data)
+
+        if self.in_token is not None:
+            bind_in(self.in_token, token_buf)
+        if self.in_seam is not None:
+            bind_in(self.in_seam, seam_src)
+        if self.in_cos is not None:
+            bind_in(self.in_cos, cos_buf)
+        if self.in_sin is not None:
+            bind_in(self.in_sin, sin_buf)
+        if self.in_mask is not None:
+            bind_in(self.in_mask, mask_src)
+        for kv_name in self.in_kv:
+            layer, kind = _kv_layer(kv_name)
+            bind_in(kv_name, kv.past(layer, kind))
+
+
+class KV:
+    """Per-layer rolling FP32 KV cache. `past` buffers ([1,8,past,128])
+    are bound once into the graph inputs by pointer; after each step the
+    graph writes `present` ([1,8,ctx,128]) into a Part output buffer and
+    `roll()` updates past in place: past[:] = present[..., 1:, :]."""
+
+    def __init__(self, n_layers: int, n_kv_heads: int, head_dim: int, ctx: int):
+        self.n_layers = n_layers
+        shp = (1, n_kv_heads, ctx - 1, head_dim)
+        self._key = [np.zeros(shp, dtype=np.float32) for _ in range(n_layers)]
+        self._value = [np.zeros(shp, dtype=np.float32) for _ in range(n_layers)]
+
+    def past(self, layer: int, kind: str) -> np.ndarray:
+        return (self._key if kind == "key" else self._value)[layer]
+
+    def roll(self, layer: int, kind: str, present: np.ndarray) -> None:
+        buf = (self._key if kind == "key" else self._value)[layer]
+        buf[:] = present[:, :, 1:, :]
+
+    def reset(self) -> None:
+        for a in self._key:
+            a[:] = 0.0
+        for a in self._value:
+            a[:] = 0.0
+
+
+def wire(parts: list[Part], kv: KV, token_buf: np.ndarray,
+         cos_buf: np.ndarray, sin_buf: np.ndarray) -> None:
+    """Allocate output buffers and pre-wire every part's IOBinding."""
+    for part in parts:
+        part.alloc_outputs()
+    mask_src = None
+    for part in parts:
+        if part.out_mask is not None:
+            mask_src = part.out_buf[part.out_mask]
+    for i, part in enumerate(parts):
+        seam_src = None
+        if part.in_seam is not None:
+            # seam input == the preceding part's hidden/seam output.
+            prev = parts[i - 1]
+            seam_src = prev.out_buf[prev.out_seam]
+        part.bind(seam_src=seam_src,
+                  mask_src=mask_src if part.in_mask is not None else None,
+                  token_buf=token_buf, cos_buf=cos_buf, sin_buf=sin_buf, kv=kv)
+
+
+def step(parts: list[Part], kv: KV, token_buf: np.ndarray, cos_buf: np.ndarray,
+         sin_buf: np.ndarray, token_id: int, pos: int,
+         cos: np.ndarray, sin: np.ndarray,
+         prof: dict | None = None) -> tuple[np.ndarray, float]:
+    """One AR1 step. Inputs are already bound by pointer; this just
+    refreshes the 3 small position-dependent buffers, runs each
+    session, and rolls the KV. Returns (logits[vocab], wall_ms).
+
+    If `prof` is given it must hold `part` (list of N lists) and `roll`
+    (list); per-partition `run_with_iobinding` times and the host-side
+    KV-roll time are appended — this separates on-device cost from host
+    overhead."""
+    token_buf[0, 0] = token_id
+    cos_buf[0, 0, :] = cos[pos]
+    sin_buf[0, 0, :] = sin[pos]
+    t0 = time.perf_counter()
+    logits = None
+    for i, part in enumerate(parts):
+        tp = time.perf_counter()
+        part.session.run_with_iobinding(part.io)
+        if prof is not None:
+            prof["part"][i].append((time.perf_counter() - tp) * 1000)
+        if part.out_logits is not None:
+            logits = part.out_buf[part.out_logits]
+    t_roll = time.perf_counter()
+    for part in parts:
+        for kv_name in part.out_kv:
+            layer, kind = _kv_layer(kv_name)
+            kv.roll(layer, kind, part.out_buf[kv_name])
+    if prof is not None:
+        prof["roll"].append((time.perf_counter() - t_roll) * 1000)
+    wall_ms = (time.perf_counter() - t0) * 1000
+    return logits.reshape(-1).copy(), wall_ms
+
 
 def load_parts(bundle: Path) -> list[Part]:
     """Read every bin_info/part_*.json + the genie_config ctx-bins list."""
@@ -193,61 +339,6 @@ def load_parts(bundle: Path) -> list[Part]:
     for i, (info_f, bin_name) in enumerate(zip(info_files, bins), start=1):
         parts.append(Part(i, json.loads(info_f.read_text()), bin_name, bundle))
     return parts
-
-
-class KV:
-    """Per-layer rolling FP32 KV cache. `past` feeds the graph
-    ([1,8,past,128]); after a step the graph returns `present`
-    ([1,8,ctx,128]) and the next step's past is present[..., 1:, :]."""
-
-    def __init__(self, n_layers: int, n_kv_heads: int, head_dim: int, ctx: int):
-        self.past = ctx - 1
-        shp = (1, n_kv_heads, self.past, head_dim)
-        self.key = [np.zeros(shp, dtype=np.float32) for _ in range(n_layers)]
-        self.value = [np.zeros(shp, dtype=np.float32) for _ in range(n_layers)]
-
-    def get(self, layer: int, kind: str) -> np.ndarray:
-        return (self.key if kind == "key" else self.value)[layer]
-
-    def roll(self, layer: int, kind: str, present: np.ndarray) -> None:
-        buf = (self.key if kind == "key" else self.value)
-        buf[layer] = np.ascontiguousarray(present[:, :, 1:, :])
-
-
-def forward(parts: list[Part], kv: KV, token_id: int, pos: int,
-            cos: np.ndarray, sin: np.ndarray) -> tuple[np.ndarray, float]:
-    """One AR1 step through all parts. Returns (logits[vocab], wall_ms)."""
-    cos_q = cos[pos:pos + 1][None, ...]   # [1,1,head_dim]
-    sin_q = sin[pos:pos + 1][None, ...]
-    t0 = time.perf_counter()
-
-    # part 1: embed
-    p1 = parts[0]
-    hidden = p1.session.run(
-        None, {p1.in_token: np.array([[token_id]], dtype=np.int64)})[0]
-
-    mask = None
-    logits = None
-    for part in parts[1:]:
-        feed = {part.in_seam: hidden, part.in_cos: cos_q, part.in_sin: sin_q}
-        for kv_name in part.in_kv:
-            layer, kind = _kv_layer(kv_name)
-            feed[kv_name] = kv.get(layer, kind)
-        if part.in_mask is not None:
-            feed[part.in_mask] = mask
-        out_names = [o[0] for o in part.outputs]
-        results = dict(zip(out_names, part.session.run(out_names, feed)))
-        if part.out_mask is not None:
-            mask = results[part.out_mask]
-        if part.out_seam is not None:
-            hidden = results[part.out_seam]
-        if part.out_logits is not None:
-            logits = results[part.out_logits]
-        for kv_name in part.out_kv:
-            layer, kind = _kv_layer(kv_name)
-            kv.roll(layer, kind, results[kv_name])
-    wall_ms = (time.perf_counter() - t0) * 1000
-    return logits.reshape(-1), wall_ms
 
 
 def main() -> int:
@@ -273,7 +364,7 @@ def main() -> int:
     head_dim = int(cfg["head_dim"])
     theta = float(cfg["rope_theta"])
 
-    print(f"=== pathb ORT-QNN bench: {bundle.name} ===")
+    print(f"=== pathb ORT-QNN bench (IOBinding): {bundle.name} ===")
     print(f"  precision={meta['precision']}  ctx={ctx}  parts={meta['num_parts']}"
           f"  layers={n_layers}")
 
@@ -294,11 +385,18 @@ def main() -> int:
     load_s = time.perf_counter() - t_load
     print(f"  total load: {load_s:.1f} s")
 
+    # Persistent position-dependent input buffers + KV, then wire all
+    # IOBindings once (static, by pointer).
+    token_buf = np.zeros((1, 1), dtype=np.int64)
+    cos_buf = np.zeros((1, 1, head_dim), dtype=np.float32)
+    sin_buf = np.zeros((1, 1, head_dim), dtype=np.float32)
     kv = KV(n_layers, n_kv, head_dim, ctx)
+    wire(parts, kv, token_buf, cos_buf, sin_buf)
 
     # warmup (1 step, discarded) — first HTP call pays HMX init.
     print("\n--- warmup (1 step, discarded) ---")
-    forward(parts, KV(n_layers, n_kv, head_dim, ctx), prompt_ids[0], 0, cos, sin)
+    step(parts, kv, token_buf, cos_buf, sin_buf, prompt_ids[0], 0, cos, sin)
+    kv.reset()
 
     # ---- prefill (AR1) ----
     print(f"\n--- prefill: {len(prompt_ids)} AR1 steps ---")
@@ -306,7 +404,8 @@ def main() -> int:
     last_logits = None
     t_pp = time.perf_counter()
     for pos, tid in enumerate(prompt_ids):
-        last_logits, ms = forward(parts, kv, tid, pos, cos, sin)
+        last_logits, ms = step(parts, kv, token_buf, cos_buf, sin_buf,
+                                tid, pos, cos, sin)
         pp_lat.append(ms)
         if pos % 32 == 0 or pos == len(prompt_ids) - 1:
             print(f"  prefill step {pos:3d}  {ms:.1f} ms")
@@ -318,11 +417,13 @@ def main() -> int:
     print(f"\n--- decode: {args.tg_tokens} AR1 greedy steps ---")
     tg_lat = []
     gen_ids = []
+    prof = {"part": [[] for _ in parts], "roll": []}
     next_tok = int(np.argmax(last_logits))
     t_tg = time.perf_counter()
     for i in range(args.tg_tokens):
         pos = len(prompt_ids) + i
-        logits, ms = forward(parts, kv, next_tok, pos, cos, sin)
+        logits, ms = step(parts, kv, token_buf, cos_buf, sin_buf,
+                          next_tok, pos, cos, sin, prof=prof)
         tg_lat.append(ms)
         gen_ids.append(next_tok)
         next_tok = int(np.argmax(logits))
@@ -339,6 +440,11 @@ def main() -> int:
           f"median {np.median(pp_lat):.1f} ms/step)")
     print(f"  TG : {tg_tps:7.2f} t/s  ({args.tg_tokens} tok, "
           f"median {np.median(tg_lat):.1f} ms/step)")
+    part_med = [float(np.median(p)) for p in prof["part"]]
+    roll_med = float(np.median(prof["roll"]))
+    print(f"  per-step breakdown (median ms): "
+          f"parts={[round(x, 1) for x in part_med]}  "
+          f"sum_parts={sum(part_med):.1f}  kv_roll={roll_med:.1f}")
     print(f"  first-decode top-5: "
           f"{[(int(t), repr(tok.id_to_token(int(t)))) for t in top5]}")
     print(f"  generated continuation:\n    {gen_text!r}")
@@ -360,8 +466,10 @@ def main() -> int:
         load_s=round(load_s, 1),
         per_part_load_s=";".join(f"{x:.1f}" for x in per_part),
         first_decode_argmax=int(top5[0]),
+        part_run_median_ms=";".join(f"{x:.1f}" for x in part_med),
+        kv_roll_median_ms=round(roll_med, 2),
         gen_text=gen_text.replace("\n", "\\n"),
-        runtime="ort-qnn-1.24.4 + QAIRT-2.45 DLL")
+        runtime="ort-qnn-1.24.4 + QAIRT-2.45 DLL + static IOBinding")
     csv_path = CSV_DIR / f"pathb_ortqnn_{args.tag}.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(row.keys()))

@@ -26,15 +26,19 @@ same argmax.
    not achievable under any runtime; fix is re-splitting into ≤8 parts,
    not a swap engine (Genie has no swap mode anyway).
 
-**Why pathb TG is ~4.5× slower than control:** FP32 KV IO (Qualcomm
-uses uint8 — 4× fewer bytes), AR1-only prefill (no AR128 graph), and
-plain `sess.run()` dispatch (no IOBinding). Roughly half the gap is
-pipeline design (fix upstream on RunPod), half is harness overhead.
+**Why pathb TG is ~4.5× slower than control — measured:** added
+fully-static IOBinding to the harness + per-part profiling. IOBinding
+changed TG by **nothing** (5.2→5.5 t/s, noise). Per decode step: parts
+run on-device 1.6/52/52/60 ms, host KV-roll only ~10 ms — i.e. ~165 of
+~175 ms is the QNN graph on the HTP. The gap is **100 % bundle design**
+(FP32 KV IO, FP32 cross-part IO, AR1-only prefill), not harness
+overhead. Each 12-layer pathb part is ~3.7× slower on-device than the
+control's. Fix is entirely upstream on RunPod.
 
 New tooling: `npu_engine/bench_pathb_ortqnn.py` (generic pathb ORT-QNN
-driver). Next: quantize KV to uint8 + emit AR128 graph + re-expose mask
-in the pipeline; add IOBinding to the harness; root-cause Genie's DSP
-transport break.
+driver, static IOBinding, per-part profiling). Next: quantize KV to
+uint8 + use quantized cross-part IO + emit AR128 graph + re-expose mask
+in the pipeline; root-cause Genie's DSP transport break.
 
 ---
 
