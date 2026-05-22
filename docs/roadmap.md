@@ -240,6 +240,14 @@ shared link. Phase 5.5 Lever A proved async draft∥verify pays +37%
 (the 2-island case); the full pattern is 3-way with layer-wise
 streaming.
 
+**Bandwidth ceiling motivation.** See `docs/memory_bandwidth_ceiling.md`.
+Measured CPU-only STREAM saturates at ~117 GB/s (~156 GB/s real DRAM
+traffic) — only ~68% of the 228 GB/s SoC peak, because that headline
+figure is the *whole-SoC* fabric budget, not a single island's. Token
+decode is bandwidth-bound, so MAX POTENTIAL throughput is unreachable
+on any one island and *requires* concurrent CPU+GPU+NPU execution to
+spend the remaining ~72 GB/s. That is the quantitative case for W4.
+
 **Reframe.** Three *phases* of inference — (1) prefill, (2) draft
 speculation, (3) target verify/generation — each with its own
 hardware-mapping preferences. Three *islands* available. The
