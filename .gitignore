@@ -71,3 +71,6 @@ last_side_quest/sq4_cloud_adventure/runs/*/qsim_model.data
 # the cloud pod). Never commit — points outside the repo and the target
 # disappears with the VM.
 last_side_quest/sq4_cloud_adventure/_intermediates
+
+# Claude Code local state (agent worktrees, session files)
+.claude/
