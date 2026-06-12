@@ -47,13 +47,16 @@ is still load-bearing.
 |---|---:|---:|---|
 | CPU `-t 16` | 292 | 58.7 | coherent gen confirmed (4B Q4_0) |
 | OpenCL/Adreno `-ngl 99` | 42.5 | 27.4 | Adreno device init + offload OK |
-| Vulkan `-ngl 99` | **145.2** | 36.8 | device OK (fp16:1, KHR_coopmat); **prefill no longer broken** |
+| Vulkan `-ngl 99` | 145.2 | 36.8 | device OK (fp16:1, KHR_coopmat); see correction below |
 
-The Vulkan prefill number is the headline candidate: historically the
-Adreno Vulkan PP path was broken (~6-7 t/s "broken-F16", disable-flags
-then crashed, sessions 25-26). On a clean default Vulkan build it now
-does 145 t/s p8 → **the month of Vulkan shader work appears to have
-fixed the broken-F16 prefill path.** Warrants a proper AC sweep.
+**CORRECTION (AC perf run, same session): the Vulkan p8 smoke number
+was misleading — Vulkan prefill is STILL BROKEN.** At a realistic
+pp512 the Vulkan figure collapses to **6.36 t/s** (the same ~6-7 t/s
+"broken-F16" signature from sessions 25-26). The p8 smoke (145 t/s)
+hid it because the broken path's per-token overhead doesn't dominate
+at 8 tokens. Lesson: never conclude "prefill fixed" from a tiny-p
+smoke — measure pp512. Vulkan TG is fine (~38 t/s). Vulkan remains a
+research curiosity, not a usable prefill backend.
 
 Note: `llama-completion` now also drops into conversation mode at EOF
 (hangs like `llama-cli` — see [[feedback_llama_cli_hang]]); used
@@ -67,14 +70,44 @@ driver update is available via WU** — newer NPU/GPU drivers must come
 from the OEM (MyASUS / Qualcomm), a manual elevation+reboot install the
 agent can't push. Worth a manual check given the Genie break.
 
-**Next (AC perf sweeps, queued):** (1) Vulkan 4B Q4_0 full sweep —
-is prefill genuinely recovered, and is TG competitive vs OpenCL ngl0
-record 50.80? (2) Qwen3.6-35B-A3B MXFP4 OpenCL `-ngl 99` — did the new
-Adreno MoE kernels fix the offload failure / TG collapse? (3) Qwen3.6
-MTP on mainline build-opencl vs session-27 records (retire
-build-opencl-mtp). (4) 4B Q4_0 CPU/kleidiai vs records. Write CSVs to
-`results/csv/`. NPU/ORT-QNN stack left untouched (version-pinned to
-QAIRT per [[reference_ort_qnn_qairt_match]]).
+**AC PERF RESULTS — the update is a MIXED BAG on this hardware.**
+Full data: `results/csv/backend_refresh_2026-06-12.md`. AC, Balanced
+plan (only scheme available).
+
+GAINS:
+- **4B Q4_0 TG new high: 55.65 t/s** (OpenCL `-ngl0 -t16`), beats the
+  prior all-time 50.80 (+9.5%). TG up across all backends.
+- **Qwen3.6-35B-A3B now GPU-offloads on OpenCL `-ngl99`** (pp512 191.7
+  / tg128 22.8) — session 27 had this FAILING with `clCreateImage -40`
+  on SSM tensors. The new Adreno MoE kernels (#23303/#23449) +
+  `OP_GATED_DELTA_NET` (#23312) fixed it.
+- **MTP runs on mainline** (Qwen3.6-27B-MTP Q4_0): +60% TG at n4
+  (7.75→12.40). → **build-opencl-mtp retired.** Caveat: mainline MTP
+  accept is far lower than the PR build (37% vs 95.8% at n8), so the
+  sweet spot shifted n8→n4 and absolute MTP numbers need a multi-sample
+  re-run (these are r=1). Likely a mainline MTP-path rework
+  (#23287/#24025) and/or PR-era GGUF MTP-head mismatch.
+
+LOSS (A/B-CONFIRMED REGRESSION):
+- **Dense prefill ~halved.** Built the OLD `856c3adac` into
+  `build-opencl-old` and A/B'd it against the new build, same
+  session/power/model: 4B Q4_0 pp512 ngl0 **369→195 (−47%)**,
+  ngl99 -ub512 **544→232 (−57%)**. OLD reproduces the session-26
+  records today → genuine regression in the 489-commit window, NOT
+  power/thermal/ubatch (all ruled out). Both ngl0 (CPU matmul) and
+  ngl99 (OpenCL matmul) regress ~equally → shared upstream cause
+  (batching / graph-build / common op). 35B ngl0 PP shows it too
+  (190→151). **Kept `build-opencl-old` as the known-good prefill build.**
+- Vulkan prefill **still broken** (pp512 6.36; the p8 smoke 145 was
+  misleading — never trust tiny-p for prefill).
+
+**Next:** bisect the prefill regression across [856c3adac..e37abd6b5]
+(suspect a batching/graph or common-op change; both matmul backends
+hit equally) and report upstream; multi-sample re-run of mainline MTP
+accept; decide adopt-new (decode + 35B offload) vs stay-old (prefill).
+For now: **new build for decode-heavy / 35B GPU offload; old build for
+prefill-heavy / long-context.** NPU/ORT-QNN stack left untouched
+(version-pinned to QAIRT per [[reference_ort_qnn_qairt_match]]).
 
 ---
 
