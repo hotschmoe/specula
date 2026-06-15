@@ -3138,9 +3138,24 @@ GPU-offload). **Cleanest upstream bug:** Adreno OpenCL FA prefill ~2.2×
 slower with zero decode benefit. Includes a workload×backend `-fa`
 recommendation matrix.
 
+### Parked TODO — file the FA-prefill upstream issue
+
+**TODO (not yet filed):** open a llama.cpp GitHub issue for the
+Adreno-OpenCL flash-attention prefill slowdown. Everything needed is
+ready in `docs/2026-06-15_flash_attn_prefill_slowdown.md` (generalization
+table + recommendation matrix) and `results/csv/fa_sweep*_2026-06-15.md`
+(raw). Headline: *Adreno OpenCL FA prefill up to ~3.2× slower than
+non-FA with no decode benefit (Snapdragon X2E, Adreno X2-90)*, reproduced
+across 5 models / 2 families / 2 quants. Minimal repro:
+`llama-bench -m Qwen3-0.6B-Q8_0.gguf -p 512 -n 128 -ngl 99 -ub 512 -t 16 -fa 0,1`
+→ pp512 2767 (fa0) vs 859 (fa1). Post under the user's GH identity when
+ready; reproduction caveat already satisfied. First concrete OSS
+contribution for the project.
+
 ### Next session
 
-1. Reproduce the FA-prefill slowdown on 1–2 more dense models, then file
-   the Adreno-OpenCL-FA upstream report (first concrete OSS contribution).
-2. A2/A3 — Vulkan prefill repro (6.36 t/s) + `-ngl 0` coprocessor trace.
+1. **A2/A3** — Vulkan prefill (was 6.36 t/s; re-checking it is not
+   another `-fa` artifact before calling it broken) + `-ngl 0`
+   coprocessor profiler trace.
+2. File the parked FA upstream issue (above).
 3. E1/E3 characterization matrix + energy/thermal (background).
