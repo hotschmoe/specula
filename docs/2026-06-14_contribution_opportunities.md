@@ -46,15 +46,20 @@ Reference latest numbers (build `e37abd6b5`, 2026-06-12,
 
 Concrete, reproducible bugs the broader Adreno/WoA community shares.
 
-- **A1 — Bisect the dense-prefill regression.** A/B-confirmed −47%
-  (`-ngl 0`) / −57% (`-ngl 99`) across the 489-commit window
-  `856c3adac..e37abd6b5`. Both CPU-matmul and OpenCL-matmul paths
-  regress ~equally → shared upstream cause (batching / graph-build /
-  a common op), not a single kernel. This is a clean, high-value first
-  PR and recovers ~2.3× on PP. **Highest-leverage concrete next step.**
-  Harness: `git bisect` across the window, one canonical
-  `llama-bench -m Qwen3-4B-Q4_0.gguf -p 512 -n 128 -r 5 -ngl 0 -t 16`.
-  See `results/csv/backend_refresh_2026-06-12.md` §A/B.
+- **A1 — Bisect the dense-prefill regression. ✅ RESOLVED 2026-06-15
+  (session 36): there is no regression.** `git bisect` (harness
+  `scripts/bisect_prefill.ps1`) converged on **aa46bda89 "Support
+  `-fa auto` in llama-bench (#23714)"**, which flips llama-bench's
+  default flash-attn from OFF to AUTO. Each build ships its own
+  llama-bench, so the OLD/NEW A/B compared `-fa off` vs `-fa auto`, not
+  two model builds. Control on the SAME new build with `-fa 0` recovers
+  370 (CPU) / 569 (OpenCL) — i.e. meets/beats the old records on both
+  backends. Reframed deliverables: (a) a methodology note — pin `-fa 0`
+  for prefill, retire `build-opencl-old`; (b) the *real* finding to
+  upstream/characterize: flash attention is ~2× slower for dense prefill
+  on X2E (CPU + Adreno) — folds into A2/E4. See
+  `results/csv/backend_refresh_2026-06-12.md` §UPDATE 2026-06-15 and
+  `results/csv/bisect_prefill_log.csv`.
 - **A2 — Broken Vulkan F16 path on the Adreno ICD.** Vulkan prefill is
   6.36 t/s (unusable) while Vulkan TG (38.4) and concurrency already
   win. File with a minimal repro; likely a driver or llama.cpp
@@ -131,11 +136,13 @@ We are sitting on data nobody else has.
 
 ## Suggested starting order
 
-1. **A1** (bisect the prefill regression) — recoverable 2.3× on PP,
-   already A/B-isolated, clean first upstream PR, establishes
-   credibility for the bigger B1 NPU-backend work.
-2. **C1** (Q4_0 perplexity) — cheap, unblocks the production-quant
-   decision for Qwen3.6.
+1. ~~**A1** (bisect the prefill regression)~~ — **DONE 2026-06-15.** No
+   regression; it was the llama-bench `-fa` default flip (aa46bda89).
+   Spun off two real items: a "pin `-fa 0` for prefill" methodology note
+   and an FA-prefill-is-2×-slower characterization (→ A2/E4).
+2. **C1** (Q4_0 perplexity) — **now the top item.** Cheap, unblocks the
+   production-quant decision for Qwen3.6. Assets staged
+   (`data/wikitext-2-raw/`, `models/Qwen3-4B-Q4_{0,K_M}.gguf`).
 3. **A2 / A3** (Vulkan PP + ngl0 profiler trace) — parallelizable
    investigation sessions.
 4. **E1/E3** characterization — runs in the background of everything.

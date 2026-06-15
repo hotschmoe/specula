@@ -77,3 +77,39 @@ Recommendation: keep build-opencl-old (856c3adac) as the known-good
 prefill build for prefill-heavy/long-context work until the regression
 is bisected and (ideally) fixed upstream. New build wins for decode-
 heavy and for 35B GPU offload.
+
+---
+
+## UPDATE 2026-06-15 (session 36) — RESOLVED: NOT a regression
+
+`git bisect` over [856c3adac..e37abd6b5] (harness:
+`scripts/bisect_prefill.ps1`, threshold pp512=257, the midpoint of the
+calibrated CPU-preset endpoints 331.9/181.7) converged on:
+
+  **aa46bda89 — "Support `-fa auto` in llama-bench (#23714)"**
+
+This commit only edits `tools/llama-bench/llama-bench.cpp`. It flips the
+llama-bench default flash-attn from `{ false }` (OFF) to
+`{ LLAMA_FLASH_ATTN_TYPE_AUTO }`. Each build ships its own llama-bench,
+so the OLD-vs-NEW A/B above was unknowingly comparing **-fa off (old
+default) vs -fa auto (new default)** — a benchmark-flag change, not a
+model-compute change.
+
+Decisive control, SAME new build `e37abd6b5`, -fa pinned (r=5, -n 0):
+
+| pp512 | -fa 0 | -fa 1 | -fa auto |
+|---|---:|---:|---:|
+| CPU ngl0 -t16           | **370.8** | 193.3 | 190.3 |
+| OpenCL ngl99 -ub512 -t16 | **568.9** | — | 258.0 |
+
+`-fa 0` reproduces/exceeds the session-26 records (369 / 544–586) on
+both backends → **the dense-prefill "regression" does not exist.** It
+also resolves the old puzzle (both backends regress equally): the shared
+cause was the llama-bench default, which hits every backend identically.
+
+**Corrected recommendation:** `e37abd6b5` is a clean upgrade. Retire
+`build-opencl-old`. Pin **`-fa 0`** for prefill-heavy work. The real,
+reportable finding is that flash attention is ~2× slower for dense
+prefill on X2E (CPU + Adreno) — a characterization datapoint / candidate
+upstream FA-kernel perf report, NOT a revert. The 35B-A3B "PP 190→151"
+note above is the same -fa artifact.

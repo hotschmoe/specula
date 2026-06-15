@@ -64,6 +64,22 @@ param(
     # different location.
     [string]$OpenClHeadersDir = (Join-Path $PSScriptRoot '..\..\OpenCL-Headers\install\include'),
     [string]$OpenClLibrary    = (Join-Path $PSScriptRoot '..\..\OpenCL-ICD-Loader\install\lib\OpenCL.lib'),
+    # Skip all git operations (fetch/checkout/pull) and build whatever is
+    # currently checked out. Required when an external driver controls the
+    # working tree — e.g. `git bisect run` (see scripts\bisect_prefill.ps1).
+    [switch]$NoGit,
+    # Which cmake targets to build. Defaults to the full specula toolset;
+    # narrow it (e.g. -Targets llama-bench) to cut build time during a sweep.
+    [string[]]$Targets = @(
+        'llama-cli',
+        'llama-completion',
+        'llama-perplexity',
+        'llama-bench',
+        'llama-batched-bench',
+        'llama-speculative',
+        'llama-speculative-simple',
+        'llama-server'
+    ),
     [switch]$DryRun
 )
 
@@ -154,13 +170,16 @@ if (-not (Test-Path $RepoDir)) {
 
 Push-Location $RepoDir
 try {
-    if ($Commit) {
+    if ($NoGit) {
+        Write-Host "NoGit: building the currently checked-out HEAD (no fetch/checkout/pull)" -ForegroundColor Yellow
+    } elseif ($Commit) {
         git fetch origin
         git checkout $Commit
+        if ($LASTEXITCODE -ne 0) { throw "git update failed" }
     } else {
         git pull --ff-only
+        if ($LASTEXITCODE -ne 0) { throw "git update failed" }
     }
-    if ($LASTEXITCODE -ne 0) { throw "git update failed" }
     $currentCommit = (git rev-parse HEAD).Trim()
     Write-Host "llama.cpp @ $currentCommit" -ForegroundColor Green
 
@@ -296,16 +315,7 @@ try {
     # ignores -no-cnv; llama-completion + llama-perplexity are needed
     # for scripted correctness / perplexity assays (see
     # docs/adreno_debugging.md §Tooling caveat).
-    $targets = @(
-        'llama-cli',
-        'llama-completion',
-        'llama-perplexity',
-        'llama-bench',
-        'llama-batched-bench',
-        'llama-speculative',
-        'llama-speculative-simple',
-        'llama-server'
-    )
+    $targets = $Targets
     Write-Host "Building $($targets -join ', ')..." -ForegroundColor Cyan
     & cmake --build $buildDir --config Release -j $Jobs --target @targets
     if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
