@@ -53,10 +53,24 @@ so a first bundle needs no GPU/cloud.)
   (export ✅ / compile ✅ / numerics ✅) — the single biggest unknown of the
   27B NPU port is answered YES.
 
-**Next:** recurrence-structure work for real seq lengths (chunked/Scan/
-windowed — the seq=8 unroll is the last gap to a production prefill graph);
-repeat the 3-stage proof on the real `qwen3_5` arch when transformers ships
-it; **Qwen3-14B w8a16** all-local scaling run (download in progress).
+- **Qwen3-14B w8a16 stepping stone — downloaded + routing decided.** Got
+  the 8-shard HF model (`models/Qwen3-14B`, standard dense Qwen3, 40 layers).
+  Finding: the e2e `quantize_to_npu.py` is **RunPod/CUDA-designed** — stage 6
+  (`aimet_onnx`, no ARM wheel) + `DEFAULT_VENV=/workspace/...cu121` +
+  seq-mse/ada-scale defaults make **w8a16 *fully* local impossible via that
+  script**. Local-first route instead: optimum export + pathb rewrites
+  on-device (stages 1-5, CPU), then **AI Hub `submit_quantize_job` (w8a16,
+  free, no GPU) + `submit_compile_job`** — matches the on-device-first /
+  AI-Hub strategy (AI Hub already proven end-to-end on the SSM probe).
+  Open risks: 14B optimum export on 48 GB ARM is memory-tight (hits the
+  2 GiB protobuf cap → needs the `optimum_export_4b.py` patched wrapper);
+  AI Hub w8a16 needs 500-1000 cal samples + multi-part split.
+
+**Next:** kick off the on-device 14B export (scaling test: does 14B export
+fit in 48 GB?) → AI Hub w8a16 quantize+compile; recurrence-structure work
+for the SSM at real seq (chunked/Scan/windowed — the seq=8 unroll is the
+last gap to a production prefill graph); repeat the 3-stage SSM proof on the
+real `qwen3_5` arch when transformers ships it.
 Workstream map in README "Active workstream"; charter in
 `docs/qwen3_6_27b_npu_kickoff.md`.
 
