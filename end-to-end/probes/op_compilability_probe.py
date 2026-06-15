@@ -128,6 +128,9 @@ def main() -> int:
     ap.add_argument("--seq", type=int, default=8)
     ap.add_argument("--no-patch", action="store_true",
                     help="skip the Option-A SSM export patches")
+    ap.add_argument("--dump-ref", action="store_true",
+                    help="dump eager input_ids + logits to out/ for the HTP "
+                         "numerics check, then exit (no ONNX export)")
     args = ap.parse_args()
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -164,6 +167,14 @@ def main() -> int:
         print("[eager]   FAIL (model can't even run in PyTorch on CPU)")
         traceback.print_exc()
         return 3
+
+    # --- dump eager reference for the HTP numerics check (Stage 3) ---
+    if args.dump_ref:
+        import numpy as np
+        np.save(args.out.parent / "ref_input_ids.npy", input_ids.numpy().astype(np.int64))
+        np.save(args.out.parent / "ref_logits.npy", out.logits.float().numpy())
+        print(f"[dump]    ref input_ids + logits -> {args.out.parent}")
+        return 0
 
     # --- ONNX export: try dynamo (torch.export), then legacy (TorchScript) ---
     exported_by = None

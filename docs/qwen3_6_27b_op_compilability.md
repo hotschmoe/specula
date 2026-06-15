@@ -159,14 +159,41 @@ weights"; fixed by inlining weights into one self-contained `.onnx`
   windowed recurrence. Op-support is settled; the recurrence *structure* is
   the remaining engineering.
 
+## Stage 3 result 2026-06-15 — HTP NUMERICS MATCH ✅✅✅
+
+Ran the compiled X2 Elite binary (compile job `j5qw8d6m5`) on the dumped
+eager reference via AI Hub `submit_inference_job` (job `jp38krql5`, real
+silicon), compared returned logits to eager torch. Probe:
+`end-to-end/probes/aihub_inference_probe.py` (+ `--dump-ref` mode on the
+export probe for the torch/qai_hub two-venv handoff).
+
+```
+cosine sim          : 0.99999
+max abs diff        : 0.0045
+last-token argmax   : MATCH
+last-token top5 ovl : 5/5
+```
+
+**The gated-delta-net computes the correct answer on the Hexagon HTP.**
+All three stages are now green:
+
+| stage | question | result |
+|---|---|---|
+| 1 | does the SSM op export to ONNX? | ✅ standard ops, no custom domains (Option A) |
+| 2 | does it compile to the HTP? | ✅ X2 Elite QNN compile SUCCESS |
+| 3 | does it compute correctly on silicon? | ✅ **cos 0.99999 vs eager** |
+
+The single biggest unknown of the whole 27B NPU port — "can the SSM op run
+on Hexagon at all?" — is fully answered **YES**.
+
 ## Next
 
-1. **Numerics:** `submit_inference_job` on the compiled binary (real X2E
-   silicon) → compare logits vs the eager torch reference (cos-sim).
-2. **Recurrence structure** for real seq lengths (chunked export / HTP
-   `Scan` / windowed) — now worth investing, since op-support is proven.
-3. **Faithfulness:** once transformers ships `qwen3_5` (or via
-   trust_remote_code), repeat Option A + compile on the *real* arch
-   (gated-attention + mRoPE full-attention layers).
-4. In parallel, the dense **Qwen3-14B w8a16** all-local run (no SSM) as the
-   scaling stepping stone.
+1. **Recurrence structure** for real seq lengths (chunked export / HTP
+   `Scan` / windowed) — now clearly worth investing, since the op is proven
+   correct on silicon. The seq=8 unroll is the only thing between this proof
+   and a production prefill graph.
+2. **Faithfulness:** once transformers ships `qwen3_5` (or via
+   trust_remote_code), repeat the 3-stage proof on the *real* arch
+   (gated-attention + mRoPE full-attention layers) at w8a16.
+3. In parallel, the dense **Qwen3-14B w8a16** all-local run (no SSM) as the
+   scaling stepping stone (download in progress).

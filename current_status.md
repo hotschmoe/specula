@@ -44,10 +44,19 @@ so a first bundle needs no GPU/cloud.)
   Caveats: proxy (qwen3_next) not real qwen3_5; op-support not numerics/perf;
   seq=8 unroll (production needs chunked/Scan/windowed recurrence).
 
-**Next:** `submit_inference_job` numerics check (logit cos vs eager) on the
-compiled binary; recurrence-structure work for real seq; repeat on the real
-`qwen3_5` arch when transformers ships it; dense **Qwen3-14B w8a16**
-all-local run as the scaling stepping stone.
+- **Stage 3 — HTP NUMERICS MATCH ✅✅✅** (the capstone). Ran the compiled
+  binary on real X2 Elite silicon (AI Hub `submit_inference_job`, job
+  `jp38krql5`) and compared logits to eager torch: **cos 0.99999**, max abs
+  diff 0.0045, last-token argmax MATCH, top5 5/5. The gated-delta-net
+  **computes correctly on Hexagon.** Probe:
+  `end-to-end/probes/aihub_inference_probe.py`. All three stages green
+  (export ✅ / compile ✅ / numerics ✅) — the single biggest unknown of the
+  27B NPU port is answered YES.
+
+**Next:** recurrence-structure work for real seq lengths (chunked/Scan/
+windowed — the seq=8 unroll is the last gap to a production prefill graph);
+repeat the 3-stage proof on the real `qwen3_5` arch when transformers ships
+it; **Qwen3-14B w8a16** all-local scaling run (download in progress).
 Workstream map in README "Active workstream"; charter in
 `docs/qwen3_6_27b_npu_kickoff.md`.
 
