@@ -3138,28 +3138,33 @@ GPU-offload). **Cleanest upstream bug:** Adreno OpenCL FA prefill ~2.2×
 slower with zero decode benefit. Includes a workload×backend `-fa`
 recommendation matrix.
 
-### Parked TODO — file the FA-prefill upstream issue
+### Parked TODOs — two upstream issues drafted, not yet filed
 
-**TODO (not yet filed):** open a llama.cpp GitHub issue for the
-Adreno-OpenCL flash-attention prefill slowdown. Everything needed is
-ready in `docs/2026-06-15_flash_attn_prefill_slowdown.md` (generalization
-table + recommendation matrix) and `results/csv/fa_sweep*_2026-06-15.md`
-(raw). Headline: *Adreno OpenCL FA prefill up to ~3.2× slower than
-non-FA with no decode benefit (Snapdragon X2E, Adreno X2-90)*, reproduced
-across 5 models / 2 families / 2 quants. Minimal repro:
-`llama-bench -m Qwen3-0.6B-Q8_0.gguf -p 512 -n 128 -ngl 99 -ub 512 -t 16 -fa 0,1`
-→ pp512 2767 (fa0) vs 859 (fa1). Post under the user's GH identity when
-ready; reproduction caveat already satisfied. First concrete OSS
-contribution for the project.
+Both are ready to post under the user's GH identity; reproduction caveats
+satisfied. These are the project's first concrete OSS contributions.
+
+1. **FA-prefill slowdown (Adreno OpenCL).** Doc:
+   `docs/2026-06-15_flash_attn_prefill_slowdown.md` + raw
+   `results/csv/fa_sweep*_2026-06-15.md`. Headline: *Adreno OpenCL FA
+   prefill up to ~3.2× slower than non-FA with no decode benefit*,
+   across 5 models / 2 families / 2 quants. Repro:
+   `llama-bench -m Qwen3-0.6B-Q8_0.gguf -p 512 -n 128 -ngl 99 -ub 512 -t 16 -fa 0,1`
+   → pp512 2767 (fa0) vs 859 (fa1).
+2. **Vulkan prefill collapse (Adreno X2-90).** Ready-to-post draft:
+   `docs/upstream_drafts/vulkan_adreno_prefill_collapse.md`; analysis
+   `docs/2026-06-15_vulkan_prefill_broken.md` + raw
+   `results/csv/vulkan_prefill_repro_2026-06-15.md`. Headline: *dense
+   prefill collapses ~18× with prompt length (pp8 118 → pp512 6.4 t/s),
+   decode fine; 59–92× slower than CPU/OpenCL*. Not `-fa`, not ubatch,
+   not model-specific, **coopmat ruled out** → general large-M mul_mat
+   path. Repro:
+   `llama-bench -m Qwen3-4B-Q4_0.gguf -p 8,32,64,128,256,512 -n 0 -ngl 99 -t 16 -fa 0`.
 
 ### Next session
 
-1. **A2/A3** — Vulkan prefill: **CONFIRMED genuinely broken, not an
-   `-fa` artifact** (re-bench `-fa 0` -ngl99 still pp512=6.36 t/s, while
-   tg128=36.55 is fine; ruling out the FA-default confound that explained
-   the OpenCL "regression"). So A2 is a real bug: file a minimal Vulkan
-   F16-prefill repro upstream. Then A3 `-ngl 0` coprocessor profiler
-   trace. (Paused mid-session 2026-06-15 for travel/battery; resume on
-   AC.)
+1. **A2** — characterized + draft ready (above). Optional pre-file
+   control: `GGML_VK_DISABLE_F16=1` to confirm the F16 path, then file.
+2. **A3** — `-ngl 0` coprocessor profiler trace.
+3. E1/E3 characterization matrix + energy/thermal (background).
 2. File the parked FA upstream issue (above).
 3. E1/E3 characterization matrix + energy/thermal (background).
