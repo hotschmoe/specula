@@ -125,14 +125,48 @@ seq 128/4096. Production needs the chunked rule made export-friendly, an
 HTP-supported `Scan`, or windowed/fixed-length processing — an engineering
 problem, not an op-support wall.
 
+## Stage 2 result 2026-06-15 — HTP COMPILE PASSES ✅✅
+
+Submitted the self-contained Option-A ONNX to Qualcomm AI Hub
+`submit_compile_job` targeting **`Snapdragon X2 Elite CRD`** (sc8480xp),
+`--target_runtime qnn_context_binary --truncate_64bit_io`. Probe:
+`end-to-end/probes/aihub_compile_probe.py`.
+
+- Job `j5qw8d6m5`: `CREATED -> OPTIMIZING_MODEL -> **SUCCESS**`.
+- The **X2 Elite QNN compiler accepts the gated-delta-net op set** and
+  emits a QNN context binary for the real HTP — including the ops flagged
+  as questionable (`Where`, `ScatterElements`, `IsNaN`, `Softplus`, `Conv`).
+
+**Both make-or-break unknowns answered YES:** the gated-delta-net (SSM)
+op **exports to standard ONNX** (Option A) *and* **compiles to the Hexagon
+HTP** (this stage). It is **not** a fundamental wall for the 27B NPU port.
+
+(First packaging attempt — job `jgzweykzg` — failed with "missing external
+weights"; fixed by inlining weights into one self-contained `.onnx`
+[`save_as_external_data=False`], now done automatically by the export probe.)
+
+### Honest caveats (what this does NOT yet prove)
+
+- **Proxy, not target.** This is tiny random-weight `qwen3_next` (the SSM
+  proxy), not `qwen3_5` Qwen3.6-27B. Same gated-delta-net family + partial
+  rotary, but the real target adds gated-attention output + mRoPE in the
+  full-attention layers, which we have *not* separately validated.
+- **Op-support, not numerics or perf.** SUCCESS means the compiler accepts
+  the ops; it does not prove the output is numerically correct (needs
+  `submit_inference_job`) or fast.
+- **seq=8 unroll.** The recurrent rule unrolled (O(seq) `ScatterElements`/
+  `Gather`); production prefill at seq 128/4096 still needs a chunked/`Scan`/
+  windowed recurrence. Op-support is settled; the recurrence *structure* is
+  the remaining engineering.
+
 ## Next
 
-1. **Stage 2 — does the HTP accept it?** Feed `out/qwen3_next_tiny.onnx` to
-   (a) `qairt-converter` + `qnn-context-binary-generator` locally (`.venv-qairt`,
-   Prism) and (b) AI Hub `submit_compile_job` on `Snapdragon X2 Elite CRD`.
-   First real HTP op-validation signal — especially for `Where` /
-   `ScatterElements` / `IsNaN` / `Softplus`.
-2. Solve the recurrence-structure problem for real seq lengths (chunked rule
-   export, `Scan`, or windowed) — only if stage 2 op-validation passes.
-3. In parallel, the dense **Qwen3-14B w8a16** all-local run (no SSM) as the
+1. **Numerics:** `submit_inference_job` on the compiled binary (real X2E
+   silicon) → compare logits vs the eager torch reference (cos-sim).
+2. **Recurrence structure** for real seq lengths (chunked export / HTP
+   `Scan` / windowed) — now worth investing, since op-support is proven.
+3. **Faithfulness:** once transformers ships `qwen3_5` (or via
+   trust_remote_code), repeat Option A + compile on the *real* arch
+   (gated-attention + mRoPE full-attention layers).
+4. In parallel, the dense **Qwen3-14B w8a16** all-local run (no SSM) as the
    scaling stepping stone.

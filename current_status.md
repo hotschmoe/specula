@@ -33,10 +33,21 @@ so a first bundle needs no GPU/cloud.)
 - Added `onnxscript 0.7.0` to `.venv-arm-export` (dynamo exporter dep).
   Left `.venv-qairt`/`.venv-ort21` frozen (QNN version lock).
 
-**Next:** Stage 2 — feed `out/qwen3_next_tiny.onnx` to qairt-converter
-(local Prism) + AI Hub `submit_compile_job` on `Snapdragon X2 Elite CRD`
-for the first real HTP op-validation; dense **Qwen3-14B w8a16** all-local
-run as the scaling stepping stone.
+- **Stage 2 — HTP COMPILE PASSES ✅✅** (the headline). Submitted the
+  self-contained Option-A ONNX to AI Hub `submit_compile_job` on
+  `Snapdragon X2 Elite CRD` (`qnn_context_binary`). Job `j5qw8d6m5`:
+  `CREATED -> OPTIMIZING_MODEL -> SUCCESS`. **The X2 Elite QNN compiler
+  accepts the gated-delta-net op set** (incl. Where/ScatterElements/IsNaN/
+  Softplus/Conv) and emits an HTP context binary. So the SSM op both
+  **exports to standard ONNX** AND **compiles to the Hexagon HTP** — it is
+  NOT a fundamental wall. Probe: `end-to-end/probes/aihub_compile_probe.py`.
+  Caveats: proxy (qwen3_next) not real qwen3_5; op-support not numerics/perf;
+  seq=8 unroll (production needs chunked/Scan/windowed recurrence).
+
+**Next:** `submit_inference_job` numerics check (logit cos vs eager) on the
+compiled binary; recurrence-structure work for real seq; repeat on the real
+`qwen3_5` arch when transformers ships it; dense **Qwen3-14B w8a16**
+all-local run as the scaling stepping stone.
 Workstream map in README "Active workstream"; charter in
 `docs/qwen3_6_27b_npu_kickoff.md`.
 

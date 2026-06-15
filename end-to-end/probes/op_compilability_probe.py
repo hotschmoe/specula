@@ -179,6 +179,13 @@ def main() -> int:
                 )
             exported_by = mode
             print(f"[export]  OK via {mode} -> {args.out}")
+            # Inline external weights into one self-contained file — AI Hub
+            # compile + many tools reject a bare .onnx whose weights live in a
+            # sibling .data file.
+            import onnx as _onnx
+            _onnx.save_model(_onnx.load(str(args.out)), str(args.out),
+                             save_as_external_data=False)
+            print(f"[export]  inlined weights -> self-contained {args.out.name}")
             break
         except Exception as e:
             first = (str(e).strip().splitlines() or [""])[0]
