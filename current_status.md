@@ -3097,3 +3097,50 @@ bundles (w8a16 + w4a16) built and transferred to the X2EE laptop.
   per-part input named `attention_mask` rather than threading the
   pathb-folded one. Decided to thread (preserves pathb's
   self-contained-mask design); revisit if hardware says otherwise.
+
+---
+
+## Session 36 (2026-06-15) — A1 + C1 closed; FA-prefill characterized
+
+Worked the top of `docs/2026-06-14_contribution_opportunities.md`.
+Three milestone commits: `fd23540` (A1), `d44925f` (C1), `c6e0e33` (FA).
+
+### A1 — the "dense-prefill regression" is not real (RESOLVED)
+
+`git bisect` over the 489-commit window `856c3adac..e37abd6b5` (new
+harness: `scripts/bisect_prefill.ps1` + `build_llama_cpp.ps1`
+`-NoGit`/`-Targets`; threshold 257 = midpoint of calibrated CPU
+endpoints 331.9/181.7) landed on **`aa46bda89` "Support `-fa auto` in
+llama-bench (#23714)"**. It only flips llama-bench's default flash-attn
+OFF→AUTO. Each build ships its own llama-bench, so session 35's A/B
+compared `-fa off` vs `-fa auto`, not two model builds. Control on the
+SAME new build with `-fa 0`: pp512 = 370 (CPU) / 569 (OpenCL) — meets/
+beats every old record. **No compute regression. Retire
+`build-opencl-old`; `e37abd6b5` is a clean upgrade.** Memory
+`reference_llamacpp_prefill_regression_e37abd6b5` corrected (was wrong).
+
+### C1 — Q4_0 vs Q4_K_M perplexity (RESOLVED)
+
+wikitext-2-raw, 584 chunks @ n_ctx=512, both unsloth GGUFs, `-fa 0`:
+Q4_0 **14.6395 ± 0.134** vs Q4_K_M 14.7910 ± 0.138 — a tie within error,
+Q4_0 nominally lower AND smaller. Q4_0's speed win carries **no quality
+penalty** → validated production default for Qwen3-4B. Data:
+`results/csv/qwen3_4b_perplexity_q4_0_vs_q4km.csv`. Next: repeat for
+Qwen3.6 sizes before the production cutover.
+
+### FA-prefill characterization (A1 spin-off → A2/E4)
+
+Full `-fa 0`/`-fa 1` sweep (`docs/2026-06-15_flash_attn_prefill_slowdown.md`,
+raw `results/csv/fa_sweep_2026-06-15.md`): FA always loses on prefill
+(up to 2.18× on dense-4B OpenCL; 1.15–1.39× on the 35B MoE), while
+decode is small+mixed (FA on helps CPU +11% / 35B ngl0 +9%, nothing on
+GPU-offload). **Cleanest upstream bug:** Adreno OpenCL FA prefill ~2.2×
+slower with zero decode benefit. Includes a workload×backend `-fa`
+recommendation matrix.
+
+### Next session
+
+1. Reproduce the FA-prefill slowdown on 1–2 more dense models, then file
+   the Adreno-OpenCL-FA upstream report (first concrete OSS contribution).
+2. A2/A3 — Vulkan prefill repro (6.36 t/s) + `-ngl 0` coprocessor trace.
+3. E1/E3 characterization matrix + energy/thermal (background).
