@@ -1,5 +1,37 @@
 # specula -- current status
 
+Last updated: 2026-06-15 (session 36 — **kicked off the Qwen3.6-27B NPU
+port.** New direction: push a 27B (then 35B-A3B) onto the Hexagon NPU —
+uncharted, a deliberate community/clout play. On-device-first; AI Hub
+for the physically-impossible pieces (free, key on box); **w8a16 first**
+so a first bundle needs no GPU/cloud.)
+
+**Landed this session:**
+- **Snag 1 done** — `end-to-end/lib/model_config.py` is hybrid-aware
+  (`qwen3_6` family + `block_types`/`attention_layer_indices`/SSM dims),
+  pinned against the **real** `Qwen/Qwen3.6-27B` config.json. It's a VLM
+  (`qwen3_5` arch, LLM dims under `text_config`), 16 full_attention @
+  [3,7,..,63] + 48 linear_attention, partial rotary 0.25, mRoPE
+  [11,11,10]. Verified + dense-4B regression clean. Commits `9899603`,
+  real-config pin, doc updates.
+- **Op-compilability probe** (`end-to-end/probes/op_compilability_probe.py`,
+  qwen3_next proxy, 0.79M params, no download/GPU): the gated-delta-net
+  SSM op **does not export to ONNX** with stock exporters — dynamo hits a
+  data-dependent `.item()` in `_update_linear_attn_mask`; legacy hits the
+  vmap chunked-delta custom autograd. Full writeup +
+  path-forward (patch+recurrent / scan / roll-our-own-HTP-op):
+  `docs/qwen3_6_27b_op_compilability.md`. **This is the live blocker.**
+- Added `onnxscript 0.7.0` to `.venv-arm-export` (dynamo exporter dep).
+  Left `.venv-qairt`/`.venv-ort21` frozen (QNN version lock).
+
+**Next:** option-A probe (patch `.item()` + force recurrent gated-delta-net,
+retry export); dense **Qwen3-14B w8a16** all-local run as the scaling
+stepping stone; then qairt/AI-Hub compile of whatever ONNX exports.
+Workstream map in README "Active workstream"; charter in
+`docs/qwen3_6_27b_npu_kickoff.md`.
+
+---
+
 Last updated: 2026-06-12 (session 35 — **scheduled backend refresh:
 llama.cpp +489 commits (one month) → rebuilt all 4 ARM backends at
 `e37abd6b5`; smoke-passed on battery; real perf sweeps deferred to AC

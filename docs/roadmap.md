@@ -14,6 +14,14 @@ The other two active investigations (`w4a16_investigation.md`,
 here preempts them. When they close (positive or negative), the
 first workstream below picks up.
 
+**Active as of 2026-06-15:** the **Qwen3.6-27B NPU port** — pushing a
+27B (then 35B-A3B) onto the Hexagon NPU, uncharted territory and a
+deliberate community/clout play. Charter: `qwen3_6_27b_npu_kickoff.md`;
+live blocker: `qwen3_6_27b_op_compilability.md` (the gated-delta-net SSM
+op doesn't export to ONNX with stock exporters). On-device-first, w8a16
+first, AI Hub for the physically-impossible pieces. See README
+"Active workstream" for the directory map.
+
 ## Guiding principles
 
 1. **Production targets are Qwen3.6 → Gemma4.** Qwen3 is scaffold;

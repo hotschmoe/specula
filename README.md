@@ -14,6 +14,24 @@ Exactly what a draft model is.
   Follow these rules when adding files or closing a phase so the repo
   stays navigable.
 
+### Active workstream — Qwen3.6-27B on the Hexagon NPU (uncharted)
+
+Pushing a 27B (and later 35B-A3B) onto the X2E NPU at w8a16/w4a16 — no
+one has run a model this large on Hexagon. **Strategy: do as much as
+possible on-device (X2E/Prism); punt only the physically-impossible
+pieces to Qualcomm AI Hub (free, API key on box). w8a16 first** so a
+first bundle needs no GPU/cloud. Where things live:
+
+- **`docs/qwen3_6_27b_npu_kickoff.md`** — charter + the 6 pipeline snags.
+- **`docs/qwen3_6_27b_op_compilability.md`** — the live blocker: the SSM
+  (gated-delta-net) op doesn't export to ONNX with stock exporters yet.
+- **`end-to-end/lib/`** (`model_config.py` is hybrid-aware), **`scripts/`**
+  (`rewrite_qwen3_pathb.py`), **`end-to-end/probes/`** (op probes),
+  **`npu_engine/`** (ORT-QNN runtime), **`models/Qwen3.6-27B/config.json`**
+  (real arch reference — it's a `qwen3_5` VLM, LLM dims under `text_config`).
+- Export/probe venv: **`.venv-arm-export`**. Do **not** bump the pinned
+  **`.venv-qairt` / `.venv-ort21`** (ORT-QNN ↔ QAIRT version lock).
+
 ## Goal
 
 Characterize and push the ceiling of speculative decoding on Windows-on-ARM,
