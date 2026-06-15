@@ -141,3 +141,48 @@ Commit at each landed snag; append findings to `long_context_scaling.md`
 - `current_status.md` — session 31 checkpoint
 - `end-to-end/lib/{model_config,split,stages,aimet,qairt}.py`,
   `scripts/rewrite_qwen3_pathb.py` — the files that change
+
+## Update 2026-06-15 — snag 1 landed + real config.json findings
+
+**Snag 1 done** (`lib/model_config.py`, commits `9899603` + real-config
+pin). `qwen3_6` FamilyConfig + `ModelInfo` now emit the per-block map
+(`block_types` / `attention_layer_indices` / `num_attention_layers`),
+MTP count, partial-rotary, mrope params, and linear-attention dims.
+Dense 4B path provably unchanged. Verified against the on-disk
+`Qwen/Qwen3.6-27B` config.json.
+
+Pulled the **real HF config.json** (was GGUF-only before). It corrects
+several assumptions the original charter (GGUF-derived) couldn't see:
+
+1. **It is a vision-language model** — `architectures:
+   [Qwen3_5ForConditionalGeneration]`, `model_type: qwen3_5`, with a
+   `vision_config` and the LLM dims nested under `text_config`. For the
+   NPU bundle we **target `text_config` and drop the vision tower**
+   (`language_model_only`-style export). `model_config` reads
+   `text_config` when present.
+2. **`layer_types` is enumerated in-config** — 16 `full_attention` at
+   blocks [3,7,…,63], 48 `linear_attention` (gated-delta-net). We read
+   the list rather than deriving from `full_attention_interval`.
+3. **Snag 2 is bigger than "skip SSM blocks".** The attention layers
+   use **partial rotary** (`partial_rotary_factor: 0.25` → only 64 of
+   256 head dims get RoPE), **mRoPE** (`mrope_interleaved: true`,
+   `mrope_section: [11,11,10]`), and a **gated attention output**
+   (`attn_output_gate: true`, `output_gate_type: swish`). The dense
+   pathb hoist assumes full rotary on a 128-dim head, identity
+   attention-scaling, and no mrope/gate. The rotary hoist must be
+   re-derived for partial+mrope, or this layer family punted to AI Hub.
+4. **Gated-delta-net dims** (real keys): `linear_conv_kernel_dim=4`,
+   `linear_{key,value}_head_dim=128`, `linear_num_key_heads=16`,
+   `linear_num_value_heads=48` (inner=6144). These drive snag 3's SSM
+   recurrent-state I/O.
+5. New tokenizer: `vocab_size=248320`, bos/eos=248044 (matches the
+   [[reference_qwen_tokenizer_generations]] incompatibility note).
+
+**Strategy (per user):** do as much as possible on the X2E (export /
+rewrite / split / qairt-convert+quantize all run on-device via Prism
+x86), and punt the physically-impossible-on-device pieces (the AIMET
+GPU calibration, and likely the partial+mrope+gated attention export)
+to **Qualcomm AI Hub** (free, API key on device). The non-standard
+attention (snag 2) and the gated-delta-net ops are the prime AI Hub
+candidates — verify what AI Hub's compile/quantize jobs accept for the
+`qwen3_5` arch before hand-rolling the ONNX surgery.
