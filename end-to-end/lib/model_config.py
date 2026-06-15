@@ -43,11 +43,14 @@ class FamilyConfig:
     # fallbacks when a downstream config.json lacks the keys.
     is_hybrid: bool = False
     full_attention_interval: int = 0   # 1-in-N attention blocks; 0 = dense
-    ssm_conv_kernel: int = 0
-    ssm_state_size: int = 0
-    ssm_group_count: int = 0
-    ssm_time_step_rank: int = 0
-    ssm_inner_size: int = 0
+    # "linear_attention" (gated-delta-net / Mamba2) dims — real HF qwen3_5
+    # config keys (under text_config). 0 for dense families. Fallbacks only;
+    # load_model_info reads the live config.json values when present.
+    linear_conv_kernel_dim: int = 0
+    linear_key_head_dim: int = 0
+    linear_value_head_dim: int = 0
+    linear_num_key_heads: int = 0
+    linear_num_value_heads: int = 0
 
 
 FAMILY_CONFIGS: dict[str, FamilyConfig] = {
@@ -79,30 +82,31 @@ FAMILY_CONFIGS: dict[str, FamilyConfig] = {
         rope_scaling_supported=True,  # Llama3+ have rope_scaling
         hf_config_arch_class="LlamaForCausalLM",
     ),
+    # Qwen3.6-27B branding ships the `qwen3_5` arch (a vision-language
+    # model: arch class Qwen3_5ForConditionalGeneration, LLM dims nested
+    # under config.json["text_config"]). Values below verified against the
+    # real HF config.json (Qwen/Qwen3.6-27B, transformers 4.57.1).
     "qwen3_6": FamilyConfig(
         name="qwen3_6",
-        # No native `qwen35`/hybrid adapter in aimet_onnx 2.26; "qwen3" is
-        # the closest dense-attention match. AdaScale block detection will
-        # only resolve the ~16 attention blocks — verify with the
-        # find_blocks debug script before spending GPU time (snag 2).
+        # No native qwen3_5 adapter in aimet_onnx 2.26; "qwen3" is the
+        # closest dense-attention match. AdaScale block detection will only
+        # resolve the 16 full_attention blocks — verify with find_blocks
+        # before spending GPU time (and note the gated-delta-net "linear"
+        # layers are invisible to it). Likely an AI Hub Workbench candidate.
         aimet_adascale_model_type="qwen3",
         pathb_supported=True,          # hybrid pathb IS the work; flag on so the pipeline runs
-        rope_scaling_supported=False,  # natively trained to 256k (GGUF context_length=262144), no rope_scaling
-        # TODO[snag1]: confirm against the real HF config.json — the qwen35
-        # hybrid arch class name is unverified (GGUF arch id is "qwen35").
-        # Until then, resolve this family via --model-family qwen3_6.
-        hf_config_arch_class="Qwen35ForCausalLM",
+        rope_scaling_supported=False,  # natively trained to 256k; uses mrope, not rope_scaling
+        hf_config_arch_class="Qwen3_5ForConditionalGeneration",
         is_hybrid=True,
-        full_attention_interval=4,     # GGUF: full_attention_interval=4 → attn blocks 3,7,…,63
-        ssm_conv_kernel=4,             # GGUF ssm.conv_kernel
-        ssm_state_size=128,            # GGUF ssm.state_size
-        ssm_group_count=16,            # GGUF ssm.group_count
-        ssm_time_step_rank=48,         # GGUF ssm.time_step_rank
-        ssm_inner_size=6144,           # GGUF ssm.inner_size
+        full_attention_interval=4,     # config: 1-in-4 → full_attention at blocks 3,7,…,63
+        linear_conv_kernel_dim=4,      # config text_config.linear_conv_kernel_dim
+        linear_key_head_dim=128,       # config text_config.linear_key_head_dim
+        linear_value_head_dim=128,     # config text_config.linear_value_head_dim
+        linear_num_key_heads=16,       # config text_config.linear_num_key_heads
+        linear_num_value_heads=48,     # config text_config.linear_num_value_heads
     ),
-    # TODO: qwen3_5 once we test rope_scaling pathb support. The pathb
-    # rotary hoist asserts Constant_7/8 == 1.0 (identity attention_scaling);
-    # Qwen3.5 may have non-identity scaling to fold into the cos/sin cache.
+    # TODO: qwen3_5 (text-only sibling) if/when we target it; same hybrid
+    # shape, no vision_config.
 }
 
 
@@ -130,15 +134,19 @@ class ModelInfo:
     # Derived from precision arg (set externally).
     precision: str = ""             # "w8a16" | "w4a16"
 
-    # Hybrid (SSM + attention) — resolved from config.json, else the
-    # family's GGUF-confirmed defaults. All 0 for dense models.
+    # Hybrid (SSM + attention) — resolved from config.json text_config,
+    # else the family fallbacks. All 0 / empty for dense models.
     full_attention_interval: int = 0    # 1-in-N attention blocks; 0 = dense
-    nextn_predict_layers: int = 0       # MTP head count (block 64); 0 = none
-    ssm_conv_kernel: int = 0
-    ssm_state_size: int = 0
-    ssm_group_count: int = 0
-    ssm_time_step_rank: int = 0
-    ssm_inner_size: int = 0
+    layer_types: list[str] = field(default_factory=list)  # authoritative per-block list, if present
+    nextn_predict_layers: int = 0       # MTP head count (mtp_num_hidden_layers); 0 = none
+    partial_rotary_factor: float = 1.0  # fraction of head_dim that gets RoPE (qwen3_5: 0.25)
+    rope_parameters: Optional[dict] = None  # mrope_interleaved / mrope_section / rope_type
+    # "linear_attention" (gated-delta-net) dims — real qwen3_5 keys.
+    linear_conv_kernel_dim: int = 0
+    linear_key_head_dim: int = 0
+    linear_value_head_dim: int = 0
+    linear_num_key_heads: int = 0
+    linear_num_value_heads: int = 0
 
     @property
     def head_count_ratio(self) -> int:
@@ -154,18 +162,31 @@ class ModelInfo:
     def block_types(self) -> list[str]:
         """Per-decoder-block mixer type, length == num_hidden_layers.
 
-        Dense models → every block "attention". Hybrid (qwen3_6) →
-        1-in-N "attention" per full_attention_interval, the rest "ssm".
-        Derived from the GGUF rule: block i is full attention iff
-        (i % N) == N - 1, giving blocks 3, 7, … for N=4. The MTP head
-        (nextn_predict_layers) is NOT included here — it's a separate
-        block type handled downstream (snag 6).
+        Prefer the authoritative `layer_types` list from config.json
+        (qwen3_5 enumerates every block as "full_attention" /
+        "linear_attention"). Fall back to the 1-in-N interval rule, then
+        all-"attention" for dense. The MTP head is NOT included here.
         """
+        if self.layer_types:
+            return ["attention" if t == "full_attention" else "ssm"
+                    for t in self.layer_types]
         if not self.is_hybrid:
             return ["attention"] * self.num_hidden_layers
         n = self.full_attention_interval
         return ["attention" if i % n == n - 1 else "ssm"
                 for i in range(self.num_hidden_layers)]
+
+    @property
+    def ssm_inner_size(self) -> int:
+        """gated-delta-net inner width = num_value_heads x value_head_dim
+        (6144 for Qwen3.6-27B). 0 for dense."""
+        return self.linear_num_value_heads * self.linear_value_head_dim
+
+    @property
+    def rotary_ndims(self) -> int:
+        """head_dim slots that actually get RoPE (partial rotary).
+        Qwen3.6-27B: 0.25 x 256 = 64. Drives the snag-2 cos/sin hoist."""
+        return int(round(self.head_dim * self.partial_rotary_factor))
 
     @property
     def attention_layer_indices(self) -> list[int]:
@@ -238,13 +259,19 @@ def load_model_info(model_id: str, model_path: Path,
     family = resolve_family(model_id, model_path, family_override)
 
     architecture = (cfg.get("architectures") or [""])[0]
-    hidden_size = int(cfg["hidden_size"])
-    num_hidden_layers = int(cfg["num_hidden_layers"])
-    num_attention_heads = int(cfg["num_attention_heads"])
-    num_key_value_heads = int(cfg.get("num_key_value_heads", num_attention_heads))
-    head_dim = int(cfg.get("head_dim", hidden_size // num_attention_heads))
-    rope_theta = float(cfg.get("rope_theta", 10000.0))
-    rope_scaling = cfg.get("rope_scaling") or None
+    # qwen3_5 VLMs nest the language-model dims under "text_config";
+    # dense text models keep them top-level. Use text_config when present.
+    tcfg = cfg.get("text_config", cfg)
+    hidden_size = int(tcfg["hidden_size"])
+    num_hidden_layers = int(tcfg["num_hidden_layers"])
+    num_attention_heads = int(tcfg["num_attention_heads"])
+    num_key_value_heads = int(tcfg.get("num_key_value_heads", num_attention_heads))
+    head_dim = int(tcfg.get("head_dim", hidden_size // num_attention_heads))
+    rope_parameters = tcfg.get("rope_parameters") or None
+    rope_theta = float((rope_parameters or {}).get(
+        "rope_theta", tcfg.get("rope_theta", 10000.0)))
+    rope_scaling = tcfg.get("rope_scaling") or None
+    partial_rotary_factor = float(tcfg.get("partial_rotary_factor", 1.0))
 
     if rope_scaling is not None and not family.rope_scaling_supported:
         raise NotImplementedError(
@@ -256,21 +283,21 @@ def load_model_info(model_id: str, model_path: Path,
             "family.rope_scaling_supported=True after that work lands."
         )
 
-    # Hybrid (SSM/Mamba2) dims — config.json wins; else fall back to the
-    # family's GGUF-confirmed architectural constants (0 for dense families).
-    # TODO[snag1]: the HF config.json key spellings for the qwen35 arch are
-    # unconfirmed (these mirror Qwen3-Next's linear_* keys); re-pin them once
-    # the real config.json is local — the export stage needs that download
-    # anyway. The family-default fallback keeps Qwen3.6-27B correct meanwhile.
+    # Hybrid ("linear_attention" / gated-delta-net) dims — read from
+    # text_config; family fallbacks for any missing key. layer_types is the
+    # authoritative per-block map when present. Verified against the real
+    # Qwen/Qwen3.6-27B config.json (transformers 4.57.1).
+    layer_types = list(tcfg.get("layer_types") or [])
     full_attention_interval = int(
-        cfg.get("full_attention_interval", family.full_attention_interval))
+        tcfg.get("full_attention_interval", family.full_attention_interval))
     nextn_predict_layers = int(
-        cfg.get("num_nextn_predict_layers", cfg.get("nextn_predict_layers", 0)))
-    ssm_conv_kernel = int(cfg.get("linear_conv_kernel_dim", family.ssm_conv_kernel))
-    ssm_state_size = int(cfg.get("linear_key_head_dim", family.ssm_state_size))
-    ssm_group_count = int(cfg.get("linear_num_key_heads", family.ssm_group_count))
-    ssm_time_step_rank = int(cfg.get("time_step_rank", family.ssm_time_step_rank))
-    ssm_inner_size = int(cfg.get("linear_value_head_dim", family.ssm_inner_size))
+        tcfg.get("mtp_num_hidden_layers",
+                 tcfg.get("num_nextn_predict_layers", 0)))
+    linear_conv_kernel_dim = int(tcfg.get("linear_conv_kernel_dim", family.linear_conv_kernel_dim))
+    linear_key_head_dim = int(tcfg.get("linear_key_head_dim", family.linear_key_head_dim))
+    linear_value_head_dim = int(tcfg.get("linear_value_head_dim", family.linear_value_head_dim))
+    linear_num_key_heads = int(tcfg.get("linear_num_key_heads", family.linear_num_key_heads))
+    linear_num_value_heads = int(tcfg.get("linear_num_value_heads", family.linear_num_value_heads))
 
     info = ModelInfo(
         model_id=model_id,
@@ -284,17 +311,20 @@ def load_model_info(model_id: str, model_path: Path,
         head_dim=head_dim,
         rope_theta=rope_theta,
         rope_scaling=rope_scaling,
-        vocab_size=int(cfg.get("vocab_size", 0)),
-        max_position_embeddings=int(cfg.get("max_position_embeddings", 0)),
-        torch_dtype=str(cfg.get("torch_dtype", "bfloat16")),
+        vocab_size=int(tcfg.get("vocab_size", 0)),
+        max_position_embeddings=int(tcfg.get("max_position_embeddings", 0)),
+        torch_dtype=str(tcfg.get("torch_dtype", tcfg.get("dtype", "bfloat16"))),
         precision=precision,
         full_attention_interval=full_attention_interval,
+        layer_types=layer_types,
         nextn_predict_layers=nextn_predict_layers,
-        ssm_conv_kernel=ssm_conv_kernel,
-        ssm_state_size=ssm_state_size,
-        ssm_group_count=ssm_group_count,
-        ssm_time_step_rank=ssm_time_step_rank,
-        ssm_inner_size=ssm_inner_size,
+        partial_rotary_factor=partial_rotary_factor,
+        rope_parameters=rope_parameters,
+        linear_conv_kernel_dim=linear_conv_kernel_dim,
+        linear_key_head_dim=linear_key_head_dim,
+        linear_value_head_dim=linear_value_head_dim,
+        linear_num_key_heads=linear_num_key_heads,
+        linear_num_value_heads=linear_num_value_heads,
     )
     return info
 
@@ -321,13 +351,18 @@ def summary_str(info: ModelInfo) -> str:
     ]
     if info.is_hybrid:
         ssm_count = info.num_hidden_layers - info.num_attention_layers
+        mrope = (info.rope_parameters or {}).get("mrope_section")
         lines += [
-            f"  hybrid            : yes (SSM+attention, qwen35-style)",
+            f"  hybrid            : yes (linear_attention + full_attention, qwen3_5)",
             f"  full_attn_interval: {info.full_attention_interval} (1-in-N attention)",
             f"  attn layers       : {info.num_attention_layers} (KV-carrying) {info.attention_layer_indices[:4]}...",
-            f"  ssm layers        : {ssm_count} (O(1) state, no KV)",
+            f"  ssm layers        : {ssm_count} (gated-delta-net, O(1) state, no KV)",
             f"  mtp head layers   : {info.nextn_predict_layers}",
-            f"  ssm dims          : conv{info.ssm_conv_kernel} state{info.ssm_state_size} "
-            f"grp{info.ssm_group_count} dt{info.ssm_time_step_rank} inner{info.ssm_inner_size}",
+            f"  partial_rotary    : {info.partial_rotary_factor} -> rotary_ndims={info.rotary_ndims} of {info.head_dim}",
+            f"  mrope_section     : {mrope}",
+            f"  linear dims       : conv{info.linear_conv_kernel_dim} "
+            f"kheads{info.linear_num_key_heads}x{info.linear_key_head_dim} "
+            f"vheads{info.linear_num_value_heads}x{info.linear_value_head_dim} "
+            f"inner{info.ssm_inner_size}",
         ]
     return "\n".join(lines)
