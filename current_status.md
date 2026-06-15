@@ -3154,8 +3154,12 @@ contribution for the project.
 
 ### Next session
 
-1. **A2/A3** — Vulkan prefill (was 6.36 t/s; re-checking it is not
-   another `-fa` artifact before calling it broken) + `-ngl 0`
-   coprocessor profiler trace.
+1. **A2/A3** — Vulkan prefill: **CONFIRMED genuinely broken, not an
+   `-fa` artifact** (re-bench `-fa 0` -ngl99 still pp512=6.36 t/s, while
+   tg128=36.55 is fine; ruling out the FA-default confound that explained
+   the OpenCL "regression"). So A2 is a real bug: file a minimal Vulkan
+   F16-prefill repro upstream. Then A3 `-ngl 0` coprocessor profiler
+   trace. (Paused mid-session 2026-06-15 for travel/battery; resume on
+   AC.)
 2. File the parked FA upstream issue (above).
 3. E1/E3 characterization matrix + energy/thermal (background).
