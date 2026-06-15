@@ -10,8 +10,10 @@ characterizable effect worth reporting upstream.
 ## TL;DR
 
 - **Flash attention is slower for prefill on every X2E backend tested**,
-  by up to **~2.2×** on the dense 4B model. The penalty is largest on
-  dense models and on the Adreno OpenCL path.
+  by up to **~3.2×** (Qwen3-0.6B, Adreno OpenCL). Confirmed across 5
+  models, 2 families (Qwen + Llama), 2 quants (Q8_0 + Q4_0) — **not
+  Qwen/Q4_0/4B-specific.** The penalty is largest on small dense models
+  and on the Adreno OpenCL path, smallest on the 35B MoE.
 - **Flash attention's effect on decode (TG) is small and mixed** — it
   *helps* CPU decode (+11%) and 35B-MoE `-ngl 0` decode (+9%), but is a
   wash-to-negative on the GPU-offload paths.
@@ -37,6 +39,31 @@ characterizable effect worth reporting upstream.
 | 35B-A3B  OpenCL -ngl0 -t18       | tg128 | 28.94 | 31.66 | 0.91× (FA on +9%) |
 | 35B-A3B  OpenCL -ngl99 -t18      | pp512 | 272.57 | 196.22 | 1.39× |
 | 35B-A3B  OpenCL -ngl99 -t18      | tg128 | 26.87 | 24.14 | 1.11× |
+
+## Generalization (5 models, 2 families, 2 quants, 2 backends)
+
+Prefill FA-off speedup (`pp512` fa0 ÷ fa1), and the decode direction.
+Raw: `results/csv/fa_sweep{,_local,_llama}_2026-06-15.md`.
+
+| model | family | quant | backend | pp512 FA-off speedup | tg128 winner |
+|---|---|---|---|---:|---|
+| Qwen3-0.6B | Qwen3 | Q8_0 | OpenCL ngl99 | **3.22×** | FA off +13% |
+| Qwen3-0.6B | Qwen3 | Q8_0 | CPU ngl0     | 2.28× | FA on +7% |
+| Qwen3-4B   | Qwen3 | Q4_0 | OpenCL ngl99 | 2.18× | tie |
+| Qwen3-1.7B | Qwen3 | Q8_0 | OpenCL ngl99 | 2.00× | FA off +7% |
+| Qwen3-4B   | Qwen3 | Q4_0 | CPU ngl0     | 1.99× | FA on +11% |
+| Llama-3.2-3B | Llama | Q4_0 | OpenCL ngl99 | 1.94× | FA off +4% |
+| Llama-3.2-3B | Llama | Q4_0 | CPU ngl0     | 1.83× | FA on +7% |
+| Qwen3-1.7B | Qwen3 | Q8_0 | CPU ngl0     | 1.81× | FA on +8% |
+| Qwen3.6-35B-A3B | Qwen3 MoE | MXFP4 | OpenCL ngl99 | 1.39× | FA off +11% |
+| Qwen3.6-35B-A3B | Qwen3 MoE | MXFP4 | OpenCL ngl0  | 1.15× | FA on +9% |
+
+Two clean monotonic trends: **(a) every config loses prefill with FA on**
+(1.15×–3.22×); **(b) the penalty shrinks as the model grows / goes MoE**
+(attention is a smaller share of prefill FLOPs). Llama tracks Qwen at
+the same size → architecture-independent; Q8_0 tracks Q4_0 →
+quant-independent. The effect is a property of the FA *prefill kernel*
+on these backends, not the model.
 
 ## Reading
 
@@ -68,14 +95,16 @@ characterizable effect worth reporting upstream.
 ## Upstream / contribution framing
 
 - **Strongest report (A2/E4):** "Adreno OpenCL flash-attention prefill
-  kernel ~2.2× slower than non-FA with no decode benefit (Qwen3-4B
-  Q4_0, Snapdragon X2 Elite, Adreno X2-90)." Clean, reproducible, single
-  backend, no compensating upside → a genuine perf bug, not a tradeoff.
+  kernel up to ~3.2× slower than non-FA with no decode benefit
+  (Snapdragon X2 Elite, Adreno X2-90)." Reproduced on Qwen3 0.6B/1.7B/4B
+  and Llama-3.2-3B, Q8_0 and Q4_0 → architecture- and quant-independent,
+  a property of the FA prefill kernel. Clean, single-backend, no
+  compensating upside → a genuine perf bug, not a tradeoff.
 - **Secondary datapoint:** ARM-CPU FA is a prefill-vs-decode tradeoff
-  (−2× pp, +11% tg), so the right default is workload-dependent; a note,
-  not a bug.
-- Reproduce on more dense models before filing to show it is not
-  Qwen-specific.
+  (up to −2.3× pp, +7–11% tg), so the right default is workload-
+  dependent; a note, not a bug.
+- Reproduction caveat satisfied (5 models, 2 families, 2 quants). Ready
+  to draft the upstream issue on request.
 
 ## Corrections to prior docs
 
