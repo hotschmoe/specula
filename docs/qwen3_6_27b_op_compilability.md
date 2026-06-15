@@ -91,11 +91,48 @@ w4a16 SEQ_MSE/AdaScale *quality*, later.
   [[reference_ort_qnn_qairt_match]]); bumping them breaks HTP load.
   `.venv-arm-export` and `.venv` are safe to keep current.
 
+## Update 2026-06-15 (Option A) — the SSM wall is cleared ✅
+
+Two small, **math-equivalent** patches make the gated-delta-net export to
+ONNX (probe `--no-patch` off, commit pending):
+
+1. `_update_linear_attn_mask` -> static `None` (drops the data-dependent
+   `.item()`; correct for no-pad prefill).
+2. `chunk_gated_delta_rule` -> `torch_recurrent_gated_delta_rule` (per-step
+   recurrence instead of the `chunk_size=64` in-place machinery).
+
+Plus a **faithfulness fix**: the real Qwen3.6-27B is **dense-FFN, not MoE**,
+so the proxy is configured `mlp_only_layers=[0..3]` to drop qwen3_next's
+sparse-MoE block (its `nonzero()`-based expert dispatch is data-dependent
+*and absent from the target*).
+
+**Result — dynamo export SUCCEEDS:**
+
+- **918 nodes, custom domains: NONE.** The gated-delta-net decomposes
+  entirely into standard ONNX ops.
+- **No `Scan` / `Loop` / `If` / `NonZero`.** The recurrence unrolled to
+  static tensor ops.
+- Op set: `Mul Unsqueeze Gather Add Reshape ReduceSum Transpose MatMul Exp
+  Sub ScatterElements Sqrt Reciprocal Pow ReduceMean Sigmoid Slice Split
+  Expand Concat Where(4) Conv(3) Softplus(3) Greater Neg Softmax IsNaN(1)`.
+
+**Verdict flip:** the SSM op is *not* a fundamental wall — it maps to
+standard ONNX. The remaining work is (a) HTP op-validation of a few ops to
+check (`Where`, `ScatterElements`, `IsNaN`, `Softplus`), and (b) the
+**recurrence structure**: the per-step unroll is O(seq) (24 ScatterElements
++ 121 Gather at seq=8), fine for op-validation but it explodes at prefill
+seq 128/4096. Production needs the chunked rule made export-friendly, an
+HTP-supported `Scan`, or windowed/fixed-length processing — an engineering
+problem, not an op-support wall.
+
 ## Next
 
-1. Option A probe: patch `.item()` + force recurrent gated-delta-net, retry
-   dynamo export; tally ONNX ops (flag `Scan`/`Loop`/`If`).
-2. If A exports → qairt-converter + AI Hub `submit_compile_job` (X2 Elite
-   CRD) on the single-layer ONNX → first real HTP op-validation signal.
+1. **Stage 2 — does the HTP accept it?** Feed `out/qwen3_next_tiny.onnx` to
+   (a) `qairt-converter` + `qnn-context-binary-generator` locally (`.venv-qairt`,
+   Prism) and (b) AI Hub `submit_compile_job` on `Snapdragon X2 Elite CRD`.
+   First real HTP op-validation signal — especially for `Where` /
+   `ScatterElements` / `IsNaN` / `Softplus`.
+2. Solve the recurrence-structure problem for real seq lengths (chunked rule
+   export, `Scan`, or windowed) — only if stage 2 op-validation passes.
 3. In parallel, the dense **Qwen3-14B w8a16** all-local run (no SSM) as the
    scaling stepping stone.

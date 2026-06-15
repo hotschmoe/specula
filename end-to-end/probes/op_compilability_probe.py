@@ -63,9 +63,13 @@ def build_tiny_qwen3_next():
         linear_value_head_dim=16,
         linear_num_key_heads=4,
         linear_num_value_heads=8,
-        # MoE — make it trivial (we care about the SSM op, not the MoE)
-        decoder_sparse_step=1,
-        num_experts=4,
+        # Force DENSE FFN on every layer (mlp_only_layers) — the real
+        # Qwen3.6-27B is dense-FFN, NOT MoE. qwen3_next defaults to a sparse
+        # MoE block whose nonzero()-based expert dispatch is data-dependent
+        # (export-hostile) and absent from the target, so we opt out of it to
+        # keep the proxy's op-set faithful (SSM + attn + dense FFN).
+        mlp_only_layers=[0, 1, 2, 3],
+        num_experts=4,                  # required >0, but unused given mlp_only_layers
         num_experts_per_tok=2,
         moe_intermediate_size=64,
         shared_expert_intermediate_size=64,
@@ -78,6 +82,33 @@ def build_tiny_qwen3_next():
     )
     model = Qwen3NextForCausalLM(cfg).eval()
     return model, cfg
+
+
+def apply_ssm_export_patches(model) -> list[str]:
+    """Option A — make qwen3_next's gated-delta-net export-friendly.
+
+    (1) `_update_linear_attn_mask` -> static None: drops the data-dependent
+        `.item()` guard (`cache_position[0] > 0 or torch.all(mask == 1)`) that
+        blocks torch.export. None == attend-all, correct for a no-pad prefill.
+    (2) force every gated-delta-net to the per-step *recurrent* rule instead
+        of the `chunk_size=64` chunked rule (in-place indexed writes + cumsum
+        + triu). The two are math-equivalent.
+    Returns applied-patch descriptions for the log.
+    """
+    import transformers.models.qwen3_next.modeling_qwen3_next as M
+
+    def _static_linear_attn_mask(self, attention_mask, cache_position):
+        return None
+
+    M.Qwen3NextModel._update_linear_attn_mask = _static_linear_attn_mask
+    applied = ["_update_linear_attn_mask -> static None (drop .item())"]
+    n = 0
+    for mod in model.modules():
+        if isinstance(mod, M.Qwen3NextGatedDeltaNet):
+            mod.chunk_gated_delta_rule = M.torch_recurrent_gated_delta_rule
+            n += 1
+    applied.append(f"chunk->recurrent gated-delta-net on {n} layer(s)")
+    return applied
 
 
 def tally_onnx(path: Path) -> Counter:
@@ -95,6 +126,8 @@ def main() -> int:
     ap.add_argument("--out", type=Path,
                     default=Path(__file__).resolve().parent / "out" / "qwen3_next_tiny.onnx")
     ap.add_argument("--seq", type=int, default=8)
+    ap.add_argument("--no-patch", action="store_true",
+                    help="skip the Option-A SSM export patches")
     args = ap.parse_args()
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -113,6 +146,13 @@ def main() -> int:
         print("[build]   FAIL")
         traceback.print_exc()
         return 2
+
+    # --- Option A: patch the SSM to be export-friendly ---
+    if not args.no_patch:
+        for a in apply_ssm_export_patches(model):
+            print(f"[patch]   {a}")
+    else:
+        print("[patch]   skipped (--no-patch)")
 
     # --- eager forward sanity ---
     input_ids = torch.randint(0, cfg.vocab_size, (1, args.seq))

@@ -19,14 +19,24 @@ so a first bundle needs no GPU/cloud.)
   SSM op **does not export to ONNX** with stock exporters — dynamo hits a
   data-dependent `.item()` in `_update_linear_attn_mask`; legacy hits the
   vmap chunked-delta custom autograd. Full writeup +
-  path-forward (patch+recurrent / scan / roll-our-own-HTP-op):
-  `docs/qwen3_6_27b_op_compilability.md`. **This is the live blocker.**
+  path-forward: `docs/qwen3_6_27b_op_compilability.md`.
+- **Option A — SSM WALL CLEARED ✅** (the win of the session). Two
+  math-equivalent patches (static linear-attn mask dropping the `.item()`;
+  `chunk`->`recurrent` gated-delta-net) + dense-FFN config (real target is
+  NOT MoE) → **dynamo export SUCCEEDS: 918 nodes, custom domains NONE, no
+  Scan/Loop/NonZero/If.** The gated-delta-net decomposes to standard ONNX.
+  Verdict flipped from "doesn't export" to "exports to standard ops." Only
+  a few ops to HTP-validate (`Where`×4, `ScatterElements`, `IsNaN`,
+  `Softplus`); the per-step unroll is O(seq) so production prefill still
+  needs a chunked/Scan/windowed recurrence — an engineering problem, not an
+  op-support wall.
 - Added `onnxscript 0.7.0` to `.venv-arm-export` (dynamo exporter dep).
   Left `.venv-qairt`/`.venv-ort21` frozen (QNN version lock).
 
-**Next:** option-A probe (patch `.item()` + force recurrent gated-delta-net,
-retry export); dense **Qwen3-14B w8a16** all-local run as the scaling
-stepping stone; then qairt/AI-Hub compile of whatever ONNX exports.
+**Next:** Stage 2 — feed `out/qwen3_next_tiny.onnx` to qairt-converter
+(local Prism) + AI Hub `submit_compile_job` on `Snapdragon X2 Elite CRD`
+for the first real HTP op-validation; dense **Qwen3-14B w8a16** all-local
+run as the scaling stepping stone.
 Workstream map in README "Active workstream"; charter in
 `docs/qwen3_6_27b_npu_kickoff.md`.
 
