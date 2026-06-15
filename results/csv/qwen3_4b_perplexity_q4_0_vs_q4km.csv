@@ -1,0 +1,8 @@
+# Qwen3-4B perplexity: Q4_0 vs Q4_K_M (C1 validation, session 36, 2026-06-15)
+# corpus: wikitext-2-raw/wiki.test.raw, 584 chunks, n_ctx=512
+# build: build-cpu (e37abd6b5), -ngl 0 -t 16 -fa 0; both GGUFs from unsloth/Qwen3-4B-GGUF
+# conclusion: PPL difference (-0.15, ~1%) is within overlapping error bars -> a tie;
+#             Q4_0 is smaller AND faster on every backend, so it is the production default.
+format,size_gib,ppl,ppl_stderr,chunks,n_ctx
+Q4_0,2.21,14.6395,0.13417,584,512
+Q4_K_M,2.33,14.7910,0.13768,584,512

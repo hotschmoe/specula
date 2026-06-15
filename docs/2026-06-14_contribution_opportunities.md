@@ -86,11 +86,15 @@ Concrete, reproducible bugs the broader Adreno/WoA community shares.
 
 ## C. Quantization-on-HTP research
 
-- **C1 — Q4_0 vs Q4_K_M perplexity validation.** We have the speed win
-  across every model size but **not** the quality confirmation — still
-  an open TODO (`reference_qwen3_4b_q4_0_beats_q4km`). Run
-  `llama-perplexity` on wikitext before declaring Q4_0 the production
-  default.
+- **C1 — Q4_0 vs Q4_K_M perplexity validation. ✅ DONE 2026-06-15
+  (session 36).** wikitext-2-raw, 584 chunks @ n_ctx=512, both unsloth
+  GGUFs, `-fa 0`: Q4_0 **14.6395 ± 0.134** vs Q4_K_M 14.7910 ± 0.138.
+  Q4_0 is nominally lower PPL and smaller — within the error bars, i.e.
+  a tie. **No quality penalty → Q4_0 is the validated production
+  default for Qwen3-4B; the speed win is free.** See
+  `results/csv/qwen3_4b_perplexity_q4_0_vs_q4km.csv` and
+  `reference_qwen3_4b_q4_0_beats_q4km`. Next: repeat for Qwen3.6 sizes
+  (27B-MTP, 35B-A3B) before the production cutover.
 - **C2 — Format A/B on the actual silicon** (roadmap W9): w4a16 /
   w8a16 / w8a8 / MX formats, per-row vs per-group vs per-tensor,
   mixed-precision (V/O at w8). Rank by throughput × cos × size.
