@@ -17,6 +17,18 @@ ORT-QNN; built `engine_14b_swap.py` (2-group streaming) but the X2E DSP
 transport crashes under context churn / >~8 GB execution, and **no ORT-QNN
 runtime knob (shared-mem allocator / spill-fill) moves the wall** (tested).
 
+**🏆🏆🏆 END GOAL HIT — Qwen3.6-27B (and 35B-MoE) RUN ON THE HEXAGON NPU.**
+`qwen35`/`qwen35moe` are already implemented in llama.cpp master. Measured on
+4 HTP sessions + hybrid `-ngl`:
+- **Qwen3.6-27B Q4_0** (14.7 GiB, 26.9B dense): pp64 **24.7** / tg16 **2.8** t/s.
+- **Qwen3.6-35B-A3B MXFP4-MoE** (20.2 GiB, 34.66B): pp64 **50.4** / tg16 **5.6**.
+The 27B GGUF needed its MTP head stripped (`scripts/strip_mtp_head.py`:
+drop `blk.64.*`, `block_count`→64) — the shipped MTP variant fails to load.
+TG is low (SSM/overflow layers on CPU); perf = w4a16 integer-HMX + -ngl/NHVX
+tuning. Full chain: 4B→14B→27B→35B all run on the NPU; ORT-QNN couldn't pass
+the 14B. See [[reference_llamacpp_hexagon_npu_works]],
+`docs/llama_hexagon_qwen35_w4a16_plan.md`.
+
 **🏆 BREAKTHROUGH — llama.cpp Hexagon NPU backend WORKING + 14B VERIFIED.**
 `Qwen3-4B-Q4_0` on HTP0: pp128 **101.8**, tg32 **18.0** t/s. **`Qwen3-14B-Q4_0`
 (7.92 GiB) RUNS** via 4 HTP sessions + hybrid `-ngl 34`: pp64 **40.9**, tg16
