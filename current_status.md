@@ -72,20 +72,27 @@ so a first bundle needs no GPU/cloud.)
   reproduction already runs it on Prism) — AI Hub only for the final compile
   if needed. Even *more* on-device than planned.
 
-  **14B chain is DISK-BLOCKED (finding).** Two compounding issues: (1)
-  optimum `text-generation-with-past` **duplicated weights 2×** → 118 GB
-  fp32 (a 14.8B fp32 should be ~59 GB); (2) `rewrite_qwen3_htp.py::save_model`
-  copies all external data per stage (`save_as_external_data`,
-  `all_tensors_to_one_file`). At 118 GB/stage and only **202 GB free**, the
-  chain writes 02_staged (→84 GB free) then stage 3 (fold-pathbmask) needs
-  118 GB to write 03 and fails. Options: free ~250 GB; or prove the w8a16
-  local path on **Qwen3-4B first** (~16 GB/stage, fits) before scaling. The
-  118 GB `01_optimum` is regeneratable (stage-1 script + model tracked) and
-  can be reclaimed.
+  **Two scaling walls found; one solved.** (1) **Disk — SOLVED.** The
+  118 GB ONNX was NOT 2× weights (only 59 GB is referenced — 443 inits,
+  correct for 14.8B fp32); the post-fix `onnx.save` left ~59 GB **dead
+  space**. New tool `end-to-end/scripts_helper/repack_onnx_external_data.py`
+  streams the referenced bytes into a tight 59 GB file (≤1 tensor in RAM,
+  113 s; validated byte-identical). Deleted the 118 GB original → 284 GB
+  free. (2) **RAM — OPEN (the live blocker).** `rewrite_qwen3_htp.py:100`
+  does `onnx.load(load_external_data=True)` → pulls all 59 GB into RAM;
+  on 48 GB it **thrashes on swap** (sys free pinned ~0.1 GB, no progress in
+  60 s) — confirmed + killed. **Fix design:** make the pathb rewrites
+  *graph-only* (`load_external_data=False`, manipulate structure, save
+  proto-only) sharing ONE external-data file across all stages — the
+  rewrites never touch weights, so the 59 GB file is written once and every
+  stage references it. That makes the chain near-zero extra disk AND RAM,
+  and is exactly the infra the 27B needs too. Real refactor of
+  rewrite_qwen3_htp / rewrite_qwen3_pathb / pin_shapes (not yet done).
 
-**Next (14B):** decide disk strategy (4B-first proof vs free disk for 14B),
-then pathb rewrites → split → qairt-converter + qairt-quantizer w8a16 (local
-PTQ, no AIMET) → context-bin-gen → bundle. **Next (SSM):** recurrence-structure at real seq
+**Next (14B):** build the graph-only / shared-external-data rewrite infra
+(the RAM-wall fix above), then pathb rewrites → split → qairt-converter +
+qairt-quantizer w8a16 (local PTQ, no AIMET) → context-bin-gen → bundle.
+**Next (SSM):** recurrence-structure at real seq
 (chunked/Scan/windowed — the seq=8 unroll is the last gap to a production
 prefill graph); repeat the 3-stage SSM proof on the real `qwen3_5` arch when
 transformers ships it.
