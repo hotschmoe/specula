@@ -13,8 +13,22 @@ Full writeup: **`docs/npu_engine_14b_runtime.md`**.
 on the box (`capture_calib_14b.py` + `requant_14b.sh --input_list`) →
 **int8, 1.66 GB/part, loads on the Hexagon**. (3) Hit a **second ceiling**:
 the full ~16 GB bundle exceeds the HTP's ~10 GB / ~6-context budget via
-ORT-QNN → built `engine_14b_swap.py` (2-group streaming, host-bridged
-fp32 seam+KV). w4a16 (~8 GB) is the clean long-term fit.
+ORT-QNN; built `engine_14b_swap.py` (2-group streaming) but the X2E DSP
+transport crashes under context churn / >~8 GB execution, and **no ORT-QNN
+runtime knob (shared-mem allocator / spill-fill) moves the wall** (tested).
+
+**STRATEGIC PIVOT (for the 27B end-goal):** ORT-QNN loads contexts fully
+resident → fundamentally capped at ~10 GB on this box → can never fit a 27B.
+Researched the ceiling (`docs/htp_memory_ceiling_problem.md`): it's a real,
+documented HTP/session limit (~2 GB/session) — **llama.cpp's Hexagon backend
+is the answer** (per-session layer split via `GGML_HEXAGON_NDEV` + `-ngl`
+NPU/GPU/CPU hybrid over unified 48 GB; builds `libggml-htp-v81.so` = our arch;
+GGUF Q4_0). **Staged the build on the X2E** (Hexagon SDK 6.6.0.0 + Adreno
+OpenCL SDK 2.3.2 downloaded + extracted to `C:\Qualcomm`; clang/cmake/ninja
+present; `cmake --preset arm64-windows-snapdragon-release` configures clean;
+build running). Remaining: user does **test-signing + self-signed HTP cert +
+reboot** (`docs/llama_hexagon_build_setup.md`), then run 4B→14B→27B with
+hybrid `-ngl`.
 
 - ✅ **Ground-truth IO contract extracted.** Bundle shipped with no
   `bin_info/`; regenerated it with `qnn-context-binary-utility` per `.bin`.
