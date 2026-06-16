@@ -130,6 +130,74 @@ B. **Stream around it efficiently.** If the ceiling is immovable, what is
 - Numerics already validated: calibrated int8 parts load + run correctly in
   isolation; a CPU fp32 reference exists for cos-sim.
 
+## RESEARCH FINDINGS (2026-06-16) — the ceiling is real + documented, and llama.cpp already solves it
+
+Web research (sources at bottom) confirms our measurements and points to a
+clear path.
+
+### Our ceiling is real and matches public limits
+- **llama.cpp's Hexagon backend documents the same wall:** *"each Hexagon
+  session has ~2 GB of dedicated memory"* and *"for models larger than
+  ~3.5 GB multiple devices are allocated using multi-GPU layer-splitting."*
+  This independently validates our per-context ~2 GB and total ~10 GB
+  findings — it is a **real HTP/session memory limit, not a bug in our code.**
+- ORT-QNN issue threads: quantized models can take minutes in
+  `FinalizeGraphs` and consume >4 GB on HTP; QNN added features
+  specifically to cut this.
+
+### Two ORT-QNN knobs we are NOT using (stopgap, keeps our engine)
+1. **`enable_htp_spill_fill_buffer=1`** (QNN ≥2.28; we have 2.45). For models
+   with **multiple context binaries + weight sharing**, all contexts **share
+   one spill/scratch buffer** (sized to the max) instead of each reserving
+   their own. Targets exactly "large models with large context binaries."
+   **Requires:** regenerate context bins offline (Linux — we have the box)
+   with `enable_htp_spill_fill_buffer|1`, AND **merge the contexts into ONE
+   ONNX** (multiple EPContext nodes); runtime loads the highest-`max_size`
+   context first. Our bins were built with `spill-fill-bufsize: 0` (OFF) —
+   this likely caused execution ceiling #3. **First thing to test.**
+2. **`enable_htp_shared_memory_allocator=1`** — uses `rpcmem`/`libcdsprpc`
+   for CPU↔HTP shared buffers; reduces fragmentation for multi-context.
+   Pair with #1.
+   (Also available: `vtcm_mb`, `htp_graph_finalization_optimization_mode 0-3`,
+   `qnn_context_priority`.)
+
+### RECOMMENDED PATH — adopt llama.cpp's Hexagon backend (purpose-built)
+The official **`ggml-org/llama.cpp` Hexagon backend** (`GGML_HEXAGON=ON`)
+already does everything we are hand-rolling, and better:
+- Builds **`libggml-htp-v81.so` — our exact DSP arch (v81)**; Windows ARM64
+  supported (VS + LLVM/Clang + **Hexagon SDK 6.6+** + OpenCL SDK 2.3+).
+- Each HTP session = a GGML **device** (`HTP0,HTP1,…`); **`GGML_HEXAGON_NDEV`**
+  allocates several and **splits layers across them** (multi-GPU style),
+  defeating the per-session ~2 GB limit.
+- **`-ngl` partitions layers between NPU and CPU/GPU** over the **unified
+  48 GB memory (no copy)** — so a **27B** can put ~10 GB of layers on the HTP
+  and the **rest on the Adreno GPU / CPU**. This is the realistic way past a
+  hard total-HTP limit.
+- Native **GGUF + Q4_0** (already our production default + we have the GGUF
+  files), KV cache, sampler, graph reuse. Measured ~51 t/s TG on a 1B on one
+  HTP session.
+- Open source in C/C++ — we can **extend it** (the user OK'd C/C++/Rust/Zig):
+  e.g. add true weight streaming / mmap if the per-session weights can stay
+  resident in DDR and be read in place via the SMMU.
+
+**Implication for the 27B goal:** stop fighting ORT-QNN's full-resident
+contexts. Build llama.cpp with `GGML_HEXAGON` on the X2E, run our Q4_0 GGUFs
+with `-ngl` tuned so the HTP holds what fits (~5 sessions) and the Adreno/CPU
+take the rest. Then investigate raising per-session memory / true DDR weight
+streaming inside the ggml-hexagon backend.
+
+### Open sub-questions to brainstorm/verify
+- Exact **per-session memory limit on v81 X2 Elite** (is it ~2 GB like
+  Android, or higher on the 48 GB laptop?) and **max concurrent sessions**.
+- Does ggml-hexagon keep weights **resident (repacked)** or **mmap-stream**
+  them? (REPACK buffers ≈ weight size suggests resident — so total is still
+  bounded; hybrid `-ngl` is the lever.)
+- Can the **HTP read Q4_0 weights in place from DDR** (unified memory +
+  SMMU) without a per-session resident copy? If yes → no ceiling. This is
+  the highest-value thing to prove (possibly a ggml-hexagon patch).
+- Is the FastRPC/cDSP user-PD limit configurable (signed vs unsigned PD,
+  `rpcmem` heap, `fastrpc` mmap budget)?
+
 ## What a useful answer looks like
 
 A concrete, testable hypothesis with the exact knob/API/approach and how to
