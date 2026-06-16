@@ -198,6 +198,39 @@ streaming inside the ggml-hexagon backend.
 - Is the FastRPC/cDSP user-PD limit configurable (signed vs unsigned PD,
   `rpcmem` heap, `fastrpc` mmap budget)?
 
+## Concrete next step — build llama.cpp Hexagon on the X2E (Windows ARM64)
+
+Box status (checked 2026-06-16): **llama.cpp already cloned**
+(`~/Documents/GitHub/llama.cpp`, ARM64 build at `~/llama-cpp-arm64/`). NPU
+driver present (ORT-QNN works). **Missing: Hexagon SDK + OpenCL SDK.**
+
+Recipe (from llama.cpp `docs/backend/snapdragon/windows.md`):
+1. **Download SDKs** (snapdragon-toolchain GitHub releases, arm64 WoS):
+   - Adreno OpenCL SDK v2.3.2 → `C:\Qualcomm\OpenCL_SDK\2.3.2`
+   - Hexagon SDK v6.6.0.0 → `C:\Qualcomm\Hexagon_SDK\6.6.0.0`
+2. **DSP code-signing** (the HTP skel must be signed — FastRPC signed PD):
+   - ⚠️ `bcdedit /set TESTSIGNING ON` (**system change + REBOOT** — user must
+     approve), then self-signed cert:
+     `makecert -r -pe -ss PrivateCertStore -n CN=GGML.HTP.v1 -eku
+     1.3.6.1.5.5.7.3.3 -sv ggml-htp-v1.pvk ggml-htp-v1.cer` →
+     `pvk2pfx` → import .pfx into Trusted Root + Trusted Publishers (`certlm`).
+3. **Build:**
+   ```
+   $env:OPENCL_SDK_ROOT="C:\Qualcomm\OpenCL_SDK\2.3.2"
+   $env:HEXAGON_SDK_ROOT="C:\Qualcomm\Hexagon_SDK\6.6.0.0"
+   $env:HEXAGON_TOOLS_ROOT="C:\Qualcomm\Hexagon_SDK\6.6.0.0\tools\HEXAGON_Tools\19.0.07"
+   $env:HEXAGON_HTP_CERT="...\ggml-htp-v1.pfx"
+   cmake --preset arm64-windows-snapdragon-release -B build-wos
+   cmake --build build-wos
+   ```
+4. **Run** (our Q4_0 GGUFs already on disk): set `--device HTP0` (+ multi via
+   `GGML_HEXAGON_NDEV=N`, `--device HTP0,HTP1,…`), `-ngl` to tune how many
+   layers go to the HTP vs Adreno/CPU. Start with the 4B Q4_0 we already
+   benchmark, then 14B, then 27B with hybrid `-ngl`.
+
+The test-signing + reboot + cert import are **system changes requiring user
+action**; the SDK downloads + build can be automated.
+
 ## What a useful answer looks like
 
 A concrete, testable hypothesis with the exact knob/API/approach and how to
