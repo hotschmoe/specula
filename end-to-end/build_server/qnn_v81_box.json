@@ -1,0 +1,6 @@
+{
+    "backend_extensions": {
+        "shared_library_path": "libQnnHtpNetRunExtensions.so",
+        "config_file_path": "/workspace/end-to-end/configs/qnn_v81_inner.json"
+    }
+}

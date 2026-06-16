@@ -96,11 +96,58 @@ Then the no-AIMET QAIRT half (in `specula-qairt:2.45`), per part:
   (commit on master). 4B never hit this (1.55 GB embed).
 - **QAIRT needs `libc++.so.1`** + **numpy 1.x** → the `specula-qairt` image.
 
+## QAIRT phase — no-AIMET w8a16, proven on the box
+
+The e2e pipeline normally feeds AIMET encodings into `qairt-converter`. We
+skip AIMET and do **native `qairt-quantizer` PTQ** instead. Per part:
+
+```
+qairt-converter --input_network part/model.onnx --output_path part.dlc \
+    --preserve_io_datatype                    # no --quantization_overrides
+qairt-quantizer  --input_dlc part.dlc --output_dlc part_q.dlc \
+    --weights_bitwidth 8 --act_bitwidth 16 --bias_bitwidth 8 \
+    --use_per_channel_quantization            # NO --input_list needed for a buildable w8a16
+qnn-context-binary-generator --backend libQnnHtp.so --dlc_path part_q.dlc \
+    --binary_file part --output_dir 09_bin --config_file qnn_v81_box.json
+```
+
+**Split** (`lib/split.py`) needs two adaptations, both done:
+- `extract_part` streams part external data (the protobuf-2 GiB fix, like the
+  rewrites) instead of materializing the 3.1 GB embed/lm_head inline.
+- transformers 4.57's fold-pathbmask emits a **live additive `attention_bias`
+  input** (not the old internal folded mask) → declare it as a direct input
+  on every decoder part (`split_14b.py`), not the `shared_mask` thread path.
+
+**`specula-qairt` image deps (all required, all found the hard way):**
+- `libc++1 libc++abi1` — the clang-built QAIRT binaries need `libc++.so.1`.
+- `numpy==1.26.4` — QAIRT's C ABI.
+- **`onnx==1.18.0`** — `qairt-converter` calls `onnx.version`, which onnx
+  ≥1.22 removed. protobuf version is irrelevant (X2E runs 6.31.1).
+- **`onnxsim`** — without it `qairt-converter` skips simplification and
+  **mis-infers the rotary `rotate_half` head_dim as 127** (dynamic
+  `Shape→Div→Slice` unfolded) → `getBroadcastedTensorShape [1,40,1,127] vs
+  [1,1,1,128]` on every decoder part. With onnxsim it folds to 128 and
+  converts. (part1/embed has no attention so it built without onnxsim — the
+  tell.)
+- **`QAIRT_TMP_DIR=/workspace/tmp`** — the converter spills >2 GB simplified
+  models to `$TMPDIR`; the container's `/tmp` is tiny → part8 (16 GB) failed
+  "Failed to copy external data". Point it at the SSD.
+
+### Status
+
+**`part1.bin` (1.56 GB) built end-to-end on the box** — export → 4 rewrites →
+split → convert → quantize → context-bin → a real X2 Elite HTP context binary,
+no AIMET, no cloud. part2 convert confirmed after the onnxsim fix; full 8-part
+build running.
+
 ## Next / TODO
 
-- Calibration capture for 14B (`capture_calibration_qwen3_4b.py` /
-  `qairt_prep_calibration_4b.py` — adapt the `_4b` shapes: 40 layers, 8 kv
-  heads, head_dim 128, ctx 512).
-- split → convert → quantize w8a16 → ctx-bin → bundle → rsync to X2E.
+- Finish the 8-part build → assemble bundle (`lib/bundle.py`) → rsync to X2E
+  → load via ORT-QNN on the Hexagon.
+- Calibration is optional for a buildable w8a16 (quantizer runs without
+  `--input_list`); add a real calib set later for quality (adapt
+  `capture_calibration_qwen3_4b.py`: 40 layers, head_dim 128, ctx 512).
 - v2: a FastAPI job service in the `specula-qairt` image (POST a build, poll,
   download the bundle) instead of ad-hoc ssh.
+- Fold the box-side drivers into the repo (`split_14b.py`, `build_qairt_14b.sh`,
+  `Dockerfile.qairt`, `qnn_v81_box.json`) once the bundle lands.

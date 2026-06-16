@@ -16,14 +16,24 @@ NPU-bundle steps the X2E's 48 GB can't. Full playbook:
 - ✅ **Stages 1–5 running natively** (export → rewrites) — the exact steps
   that OOM'd/thrashed on the X2E now run with headroom (export peaked
   ~114 GB; added a 64 GB SSD swap backstop, untapped).
-- ✅ **Fixed two 14B-scale bugs** (committed): `optimum-onnx` pin; and the
-  **protobuf 2 GiB cap** in the rewrites (`del+extend` deep-copies the 3.1 GB
-  embed/lm_head → `EncodeError`; switched to in-place prune). Stage 3 + 4
-  passed the fix.
-- ⏭ **Next (autonomous):** finish stages 1–5 → calibration → split →
-  qairt-convert → **qairt-quantize w8a16 (no AIMET)** → ctx-bin → bundle →
-  rsync the `.bin` back to the X2E. Working through each milestone +
-  committing. Any blocker needing the user is flagged here at the top.
+- ✅ **Full ONNX pipeline ran on the box** — stages 1–5 (export → 4 rewrites)
+  + split into 8 parts. Every step that OOM'd/thrashed/capped on the X2E now
+  runs (export peaked ~114 GB, 64 GB SSD swap backstop untapped).
+- ✅ **🏆 `part1.bin` (1.56 GB) — a real X2 Elite HTP context binary built
+  END-TO-END on the box** (export→rewrite→split→convert→quantize→context-bin),
+  **no AIMET, no cloud**. The no-AIMET w8a16 chain (`qairt-converter` →
+  `qairt-quantizer --weights_bitwidth 8 --act_bitwidth 16` → `qnn-context-
+  binary-generator`) is proven. The build-server architecture works.
+- ✅ **Fixed many 14B-scale bugs** (all committed): `optimum-onnx` pin;
+  **protobuf 2 GiB cap ×3** (rewrite prune ×2 + split `extract_part` — the
+  3.1 GB embed/lm_head; in-place / streaming fixes); split mask threading
+  (transformers 4.57 emits a live `attention_bias`, not the old folded mask);
+  QAIRT env (**onnx==1.18.0** for `onnx.version`, **onnxsim** to fold the
+  rotary `rotate_half` head_dim 127→128, `QAIRT_TMP_DIR` on the SSD, libc++).
+- ⏭ **Next (autonomous):** full 8-part build running (onnxsim + tmp fixes,
+  part2 convert confirmed) → assemble bundle (`lib/bundle.py`) → rsync to X2E
+  → load on the Hexagon. Then fold box drivers into the repo. No blocker
+  needs the user; all findings in `docs/threadripper_build_server.md`.
 
 ---
 
