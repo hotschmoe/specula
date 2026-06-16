@@ -1,5 +1,32 @@
 # specula -- current status
 
+## AUTONOMOUS RUN 2026-06-15 (build server) — stood up the Threadripper
+
+While the user is away (~8h), built out a **remote build server** on the
+unRAID Threadripper (192.168.10.5, 32t/125 GB/8 TB SSD) to run the heavy
+NPU-bundle steps the X2E's 48 GB can't. Full playbook:
+`docs/threadripper_build_server.md`. Progress:
+
+- ✅ **Build server live** — key-based SSH, Docker, code on the 8 TB SSD,
+  `.venv-box` (torch/onnx/transformers/optimum + `optimum-onnx==0.1.0`),
+  Qwen3-14B downloaded (28 GB), **QAIRT 2.45.40 Linux x86_64** extracted from
+  `Qualcomm.zip` (exact version match, no download needed), and a reusable
+  **`specula-qairt:2.45`** Docker image (libc++ + numpy-1.x) with all three
+  QAIRT tools verified working.
+- ✅ **Stages 1–5 running natively** (export → rewrites) — the exact steps
+  that OOM'd/thrashed on the X2E now run with headroom (export peaked
+  ~114 GB; added a 64 GB SSD swap backstop, untapped).
+- ✅ **Fixed two 14B-scale bugs** (committed): `optimum-onnx` pin; and the
+  **protobuf 2 GiB cap** in the rewrites (`del+extend` deep-copies the 3.1 GB
+  embed/lm_head → `EncodeError`; switched to in-place prune). Stage 3 + 4
+  passed the fix.
+- ⏭ **Next (autonomous):** finish stages 1–5 → calibration → split →
+  qairt-convert → **qairt-quantize w8a16 (no AIMET)** → ctx-bin → bundle →
+  rsync the `.bin` back to the X2E. Working through each milestone +
+  committing. Any blocker needing the user is flagged here at the top.
+
+---
+
 Last updated: 2026-06-15 (session 36 — **kicked off the Qwen3.6-27B NPU
 port.** New direction: push a 27B (then 35B-A3B) onto the Hexagon NPU —
 uncharted, a deliberate community/clout play. On-device-first; AI Hub
