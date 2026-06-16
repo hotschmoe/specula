@@ -62,15 +62,22 @@ so a first bundle needs no GPU/cloud.)
   on-device (stages 1-5, CPU), then **AI Hub `submit_quantize_job` (w8a16,
   free, no GPU) + `submit_compile_job`** — matches the on-device-first /
   AI-Hub strategy (AI Hub already proven end-to-end on the SSM probe).
-  Open risks: 14B optimum export on 48 GB ARM is memory-tight (hits the
-  2 GiB protobuf cap → needs the `optimum_export_4b.py` patched wrapper);
-  AI Hub w8a16 needs 500-1000 cal samples + multi-part split.
+  **EXPORT DONE ✅** — the `optimum_export_4b.py` wrapper produced a valid
+  111 GB fp32 ONNX (`runs/qwen3_14b_w8a16/01_optimum/model.onnx{,_data}`,
+  `[post-fix] OK: 83 inputs, 81 outputs`, loads in ORT). **14B export
+  survives on 48 GB ARM** — the wrapper streams weights per-tensor (peak
+  process RAM ~1.2 GB). Scaling question answered. **Route refinement:** the
+  111 GB fp32 ONNX is too big to upload to AI Hub, so w8a16 quant goes
+  **local via `qairt-quantizer`** (on-device, ~14 GB output; the 4B
+  reproduction already runs it on Prism) — AI Hub only for the final compile
+  if needed. Even *more* on-device than planned.
 
-**Next:** kick off the on-device 14B export (scaling test: does 14B export
-fit in 48 GB?) → AI Hub w8a16 quantize+compile; recurrence-structure work
-for the SSM at real seq (chunked/Scan/windowed — the seq=8 unroll is the
-last gap to a production prefill graph); repeat the 3-stage SSM proof on the
-real `qwen3_5` arch when transformers ships it.
+**Next (14B):** pathb rewrites (stages 2-5, on-device) → split into ~8 parts
+→ qairt-converter + qairt-quantizer w8a16 (local PTQ, no AIMET) →
+context-bin-gen → bundle. **Next (SSM):** recurrence-structure at real seq
+(chunked/Scan/windowed — the seq=8 unroll is the last gap to a production
+prefill graph); repeat the 3-stage SSM proof on the real `qwen3_5` arch when
+transformers ships it.
 Workstream map in README "Active workstream"; charter in
 `docs/qwen3_6_27b_npu_kickoff.md`.
 
