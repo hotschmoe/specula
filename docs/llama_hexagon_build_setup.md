@@ -13,6 +13,33 @@ only way a **27B dense** runs on this hardware.
 - ✅ **Adreno OpenCL SDK 2.3.2** → `C:\Qualcomm\OpenCL_SDK\2.3.2`
 - ✅ NPU driver present (ORT-QNN already runs on the HTP).
 
+## 🏆 WORKING (2026-06-16) — Qwen3-4B runs on the Hexagon NPU
+
+```
+ADSP_LIBRARY_PATH=<build-wos>\ggml\src\ggml-hexagon  (skel + signed .cat dir)
+bin\llama-bench.exe -m Qwen3-4B-Q4_0.gguf -ngl 99 --device HTP0 -p 128 -n 32
+| qwen3 4B Q4_0 | 2.21 GiB | OpenCL,HTP | 99 | HTP0 | pp128 | 101.77 t/s |
+|                                                    | HTP0 | tg32  |  17.98 t/s |
+```
+HTP session opens: `new session: HTP0 ... handle 0x...`. The ~10 GB ORT-QNN
+ceiling is bypassed — llama.cpp streams/splits across HTP sessions + GPU/CPU.
+
+### The two things that unlocked it (both required)
+1. **Signed skel catalog** (Windows code-integrity): build with
+   `-DGGML_HEXAGON_HTP_CERT=<pfx>` + `WINDOWS_SDK_BIN=<…\10.0.26100.0>` (parent
+   dir, so `/x86\inf2cat.exe` + `/arm64\signtool.exe` resolve). **`inf2cat`
+   needs the WDK** — `winget install Microsoft.WindowsWDK.10.0.26100`. The
+   cert var is a CMake CACHE entry, so pass it with `-D` (env alone won't
+   override a prior cert-less configure). `cmake --build build-wos --target
+   libggml-htp-cat` → `libggml-htp.cat` (~4 KB). (`makecat` produces a 1.3 KB
+   catalog that does NOT satisfy the loader — must be `inf2cat`.)
+2. **`ADSP_LIBRARY_PATH`** must point at the dir holding the skels **and** the
+   signed `.cat` — without it, `htp_iface_open` fails `0x80000406` even though
+   the code enables Unsigned PD. This was the final missing piece.
+
+Cert: `C:\Users\hotschmoe\Certs\ggml-htp-v1.pfx` (password-less, EKU
+1.3.6.1.5.5.7.3.3), imported to LocalMachine Root + TrustedPublisher.
+
 ## BUILD DONE + blocker confirmed (2026-06-16)
 - ✅ Built `llama-cli.exe` + `llama-bench.exe` and **`libggml-htp-v81.so`**
   (our arch; v68–v79 also built). `cmake --preset
