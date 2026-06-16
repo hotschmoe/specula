@@ -252,15 +252,15 @@ def extract_part(
         n for n in model.graph.node if id(n) in selected_node_set
     ]
 
-    selected_inits: list[onnx.TensorProto] = []
-    loaded_bytes = 0
-    for init in model.graph.initializer:
-        if init.name not in selected_init_names:
-            continue
-        if init.data_location == onnx.TensorProto.EXTERNAL:
-            load_external_data_for_tensor(init, str(src_dir))
-            loaded_bytes += len(init.raw_data)
-        selected_inits.append(init)
+    # Keep external-data initializers as references — do NOT materialize
+    # inline. protobuf cannot copy/serialize a single TensorProto > 2 GiB
+    # (Qwen3-14B's embed_tokens/lm_head are ~3.1 GB), and both make_graph and
+    # onnx.save deep-copy initializers. We stream their bytes into the part's
+    # own data file below instead.
+    selected_inits: list[onnx.TensorProto] = [
+        init for init in model.graph.initializer
+        if init.name in selected_init_names
+    ]
 
     def make_vi(name: str, elem: int, shape: list[int]) -> onnx.ValueInfoProto:
         return helper.make_tensor_value_info(name, elem, shape)
@@ -288,13 +288,46 @@ def extract_part(
         if f.suffix in {".onnx", ".data"} or f.name.endswith(".onnx_data"):
             f.unlink()
     dst_onnx = dst_dir / "model.onnx"
-    onnx.save(
-        sub_model, str(dst_onnx),
-        save_as_external_data=True,
-        all_tensors_to_one_file=True,
-        location="model.onnx_data",
-        size_threshold=1024,
-    )
+    dst_data = dst_dir / "model.onnx_data"
+    # Stream external initializer bytes into the part's own data file, never
+    # holding a > 2 GiB tensor inline (protobuf serialize cap). Inline DEFAULT
+    # initializers (small shape/mask constants) stay inline in the proto.
+    CHUNK = 64 * 1024 * 1024
+    loaded_bytes = 0
+    pos = 0
+    src_handles: dict = {}
+    try:
+        with open(dst_data, "wb") as out:
+            for init in sub_model.graph.initializer:
+                if init.data_location != onnx.TensorProto.EXTERNAL:
+                    continue
+                d = {kv.key: kv.value for kv in init.external_data}
+                loc = d["location"]
+                off = int(d.get("offset", 0))
+                ln = int(d["length"])
+                fh = src_handles.get(loc)
+                if fh is None:
+                    fh = open(src_dir / loc, "rb")
+                    src_handles[loc] = fh
+                fh.seek(off)
+                remaining = ln
+                while remaining:
+                    b = fh.read(min(CHUNK, remaining))
+                    if not b:
+                        raise IOError(f"short read on {init.name}")
+                    out.write(b)
+                    remaining -= len(b)
+                del init.external_data[:]
+                for k, v in (("location", "model.onnx_data"),
+                             ("offset", str(pos)), ("length", str(ln))):
+                    e = init.external_data.add()
+                    e.key, e.value = k, str(v)
+                pos += ln
+                loaded_bytes += ln
+    finally:
+        for fh in src_handles.values():
+            fh.close()
+    dst_onnx.write_bytes(sub_model.SerializeToString())
     data_path = dst_dir / "model.onnx_data"
     data_size = data_path.stat().st_size if data_path.exists() else 0
     info = {
