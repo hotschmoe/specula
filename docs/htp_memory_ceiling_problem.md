@@ -145,6 +145,17 @@ clear path.
   `FinalizeGraphs` and consume >4 GB on HTP; QNN added features
   specifically to cut this.
 
+### TESTED (2026-06-16): ORT-QNN runtime options do NOT move the ceiling
+`enable_htp_shared_memory_allocator=1` at session load (no rebuild) was tried
+on the 5-part group (~8 GB) that previously crashed. **It still crashed**
+with `DspTransport call failed 0x00000007 / CONN Reset` (just slightly later).
+Confirms the wall is **resident weight memory**, which IO/scratch-buffer
+sharing cannot fix. `enable_htp_spill_fill_buffer` needs regenerated bins and
+(per the mechanism) shares execution *scratch*, not weights — so it cannot
+fit a 16 GB bundle either. **Conclusion: no ORT-QNN runtime knob breaks the
+~10 GB weight wall.** The fit must come from fewer resident weight-bytes
+(w4a16) or a streaming/hybrid engine (llama.cpp Hexagon).
+
 ### Two ORT-QNN knobs we are NOT using (stopgap, keeps our engine)
 1. **`enable_htp_spill_fill_buffer=1`** (QNN ≥2.28; we have 2.45). For models
    with **multiple context binaries + weight sharing**, all contexts **share
