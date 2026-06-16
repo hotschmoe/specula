@@ -34,8 +34,12 @@ NPU-bundle steps the X2E's 48 GB can't. Full playbook:
   `runs/.../10_bundle/qwen3_14b-w8a16-specula-x2e/`: **10 ordered HTP context
   binaries** (`part_1..10_of_10.bin`, 28 GB) + `genie_config.json` +
   `htp_backend_ext_config.json` + tokenizer/config + metadata, genie-shaped.
-  Built end-to-end on the Threadripper, no AIMET, no cloud. Pulled to the X2E
-  at `models/qwen3_14b-w8a16-specula-x2e/`.
+  Built end-to-end on the Threadripper, no AIMET, no cloud. **Bundle lives on
+  the box** (`/mnt/vm_8tb/specula-build/runs/.../10_bundle/`, + a 29.6 GB tar).
+  The 28 GB pull to the X2E **stalled on the WiFi link** (SSH reset after the
+  transfer blocked for hours; 4/10 bins landed) — re-pull with a resumable
+  method (rsync from the box, or per-`.bin` scp), not a single tar-over-ssh.
+  Not urgent: loading needs the session-ceiling fix anyway (below).
 - **Split-balancing findings (per-context HTP limits):** a 10-layer part
   (~13 GB) failed `qnn-context-binary-generator` with **QNN 1002 (graph
   finalize)** — the HTP per-context ceiling is **~5 layers / ~3.3 GB**; and
