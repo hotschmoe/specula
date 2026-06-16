@@ -13,6 +13,22 @@ only way a **27B dense** runs on this hardware.
 - ✅ **Adreno OpenCL SDK 2.3.2** → `C:\Qualcomm\OpenCL_SDK\2.3.2`
 - ✅ NPU driver present (ORT-QNN already runs on the HTP).
 
+## BUILD DONE + blocker confirmed (2026-06-16)
+- ✅ Built `llama-cli.exe` + `llama-bench.exe` and **`libggml-htp-v81.so`**
+  (our arch; v68–v79 also built). `cmake --preset
+  arm64-windows-snapdragon-release` → `cmake --build build-wos --target
+  llama-cli llama-bench` (the 2 example targets `llama-debug`/
+  `llama-eval-callback` fail on an unrelated upstream `common_debug_cb_eval`
+  link error — ignore; build the targets we need explicitly).
+- ✅ Runtime detects the **Adreno X2-90 GPU** (OpenCL, max alloc 2048 MB) and
+  **Hexagon Arch v81**, loads `libcdsprpc.dll`.
+- 🛑 **`ggml-hex: failed to open session 0 : error 0x80000406`** — the HTP
+  skel is **unsigned**. This is the SAME `0x80000406` we'd blamed on a
+  "broken Genie DSP transport" — it is actually the **signed-PD requirement**:
+  ORT-QNN works because it uses Qualcomm's *pre-signed* QnnHtp skel; llama.cpp
+  ships a custom skel that must be signed. **Fix = the signing steps below,
+  then rebuild the skel with `HEXAGON_HTP_CERT` set so it gets signed.**
+
 ## YOUR part — DSP code-signing (one-time, needs admin + reboot)
 
 The HTP skel must be signed to load on the DSP via FastRPC. On Windows we use
