@@ -106,10 +106,25 @@ qairt-converter --input_network part/model.onnx --output_path part.dlc \
     --preserve_io_datatype                    # no --quantization_overrides
 qairt-quantizer  --input_dlc part.dlc --output_dlc part_q.dlc \
     --weights_bitwidth 8 --act_bitwidth 16 --bias_bitwidth 8 \
-    --use_per_channel_quantization            # NO --input_list needed for a buildable w8a16
+    --use_per_channel_quantization            # ⚠️ SEE WARNING BELOW — NOT loadable as-is
 qnn-context-binary-generator --backend libQnnHtp.so --dlc_path part_q.dlc \
     --binary_file part --output_dir 09_bin --config_file qnn_v81_box.json
 ```
+
+> **⚠️ CORRECTION (2026-06-16, runtime session).** This no-calibration chain
+> *builds* but the resulting decoder parts **do not load on the X2E HTP** —
+> they fail context-create with **QNN 1002**. Root cause: with **no
+> `--input_list`**, `qairt-quantizer` never computes activation encodings, so
+> the HTP compiles a **float (fp16) graph** and the int8 weights are stored
+> back as **fp16** → each 5-layer decoder context is **3.30 GB** (= 2 B/param)
+> and exceeds the **~2 GB X2E runtime per-context ceiling**. (The embed/head
+> parts are 1.56 GB and load; Qualcomm's loadable 7B parts are ≤1.09 GB with
+> **uint16** IO.) **For a loadable w8a16 you MUST calibrate:** pass
+> `--input_list <cal.txt>` (per-part activations from
+> `end-to-end/lib/cal.py::cal_iter`) and **drop `--preserve_io_datatype`** so
+> KV/activation IO quantizes to uint16/uint8 — that forces the real int8-weight
+> HTP path (~1.65 GB parts). Full analysis + fix spec:
+> `docs/npu_engine_14b_runtime.md` §4–5.
 
 **Split** (`lib/split.py`) needs two adaptations, both done:
 - `extract_part` streams part external data (the protobuf-2 GiB fix, like the
@@ -164,9 +179,12 @@ Box drivers (in `end-to-end/build_server/`): `run_stages_1_5.sh`,
 
 - Finish the 8-part build → assemble bundle (`lib/bundle.py`) → rsync to X2E
   → load via ORT-QNN on the Hexagon.
-- Calibration is optional for a buildable w8a16 (quantizer runs without
-  `--input_list`); add a real calib set later for quality (adapt
-  `capture_calibration_qwen3_4b.py`: 40 layers, head_dim 128, ctx 512).
+- ⚠️ **Calibration is REQUIRED, not optional** (corrected 2026-06-16). The
+  no-`--input_list` build produces fp16-weight decoder contexts (3.30 GB) that
+  fail to load on the X2E HTP (QNN 1002, exceed ~2 GB/context). Add the calib
+  set + drop `--preserve_io_datatype` for the *next* build (adapt
+  `capture_calibration_qwen3_4b.py` / `lib/cal.py::cal_iter`: 40 layers,
+  head_dim 128, ctx 512). See `docs/npu_engine_14b_runtime.md` §4–5.
 - v2: a FastAPI job service in the `specula-qairt` image (POST a build, poll,
   download the bundle) instead of ad-hoc ssh.
 - Fold the box-side drivers into the repo (`split_14b.py`, `build_qairt_14b.sh`,
