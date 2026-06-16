@@ -40,6 +40,20 @@ ceiling is bypassed — llama.cpp streams/splits across HTP sessions + GPU/CPU.
 Cert: `C:\Users\hotschmoe\Certs\ggml-htp-v1.pfx` (password-less, EKU
 1.3.6.1.5.5.7.3.3), imported to LocalMachine Root + TrustedPublisher.
 
+## 27B status — NPU ready, blocked on llama.cpp arch support
+- **Multi-session works:** the 27B attempt opened **4 HTP sessions** (HTP0–3,
+  domains 3/7/11/15) cleanly — the per-session split mechanism is proven.
+- **But `Qwen3.6-27B-MTP-Q4_0.gguf` won't load on ANY backend** (fails on CPU
+  too): `general.architecture = qwen35` — the Qwen3.6 hybrid SSM+attention
+  VLM arch is **not yet supported by llama.cpp** (build b8833). Not an NPU
+  issue. To run the 27B on the NPU, llama.cpp needs **`qwen35` arch support**
+  (we have deep arch knowledge from the AI-Hub SSM op-compilability work —
+  candidate to contribute upstream or patch locally).
+- **Next demo within reach:** convert our **Qwen3-14B** (HF, standard `qwen3`
+  arch, supported) → GGUF Q4_0 (~8 GB) and run it on the NPU with
+  `GGML_HEXAGON_NDEV` multi-session — proves a 14B-class model past the
+  per-session ceiling today.
+
 ## BUILD DONE + blocker confirmed (2026-06-16)
 - ✅ Built `llama-cli.exe` + `llama-bench.exe` and **`libggml-htp-v81.so`**
   (our arch; v68–v79 also built). `cmake --preset

@@ -17,6 +17,18 @@ ORT-QNN; built `engine_14b_swap.py` (2-group streaming) but the X2E DSP
 transport crashes under context churn / >~8 GB execution, and **no ORT-QNN
 runtime knob (shared-mem allocator / spill-fill) moves the wall** (tested).
 
+**🏆 BREAKTHROUGH — llama.cpp Hexagon NPU backend WORKING on the X2E.**
+`Qwen3-4B-Q4_0` runs on **HTP0** (pp128 **101.8 t/s**, tg32 **18.0 t/s**),
+all layers offloaded; **4 HTP sessions** open for multi-session split. The
+ORT-QNN ~10 GB ceiling is bypassed (llama.cpp splits across HTP sessions +
+GPU/CPU over unified mem). Unlocked by: signed skel catalog (WDK `inf2cat` +
+`-DGGML_HEXAGON_HTP_CERT`) **and** `ADSP_LIBRARY_PATH`→skel+cat dir (the final
+`0x80000406` fix). Repro: `docs/llama_hexagon_build_setup.md`,
+[[reference_llamacpp_hexagon_npu_works]]. **27B blocker:** the
+`Qwen3.6-27B-MTP-Q4_0.gguf` is arch `qwen35` — not yet supported by llama.cpp
+(fails to load on every backend); needs qwen35 arch support added. Next demo:
+convert Qwen3-14B (standard arch) → GGUF Q4_0 → run on NPU multi-session.
+
 **STRATEGIC PIVOT (for the 27B end-goal):** ORT-QNN loads contexts fully
 resident → fundamentally capped at ~10 GB on this box → can never fit a 27B.
 Researched the ceiling (`docs/htp_memory_ceiling_problem.md`): it's a real,
