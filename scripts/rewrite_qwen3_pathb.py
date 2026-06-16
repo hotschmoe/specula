@@ -273,10 +273,14 @@ def main() -> None:
         for inp in n.input:
             used_inits.add(inp)
     before = len(m.graph.initializer)
-    kept_inits = [init for init in m.graph.initializer if init.name in used_inits]
-    del m.graph.initializer[:]
-    m.graph.initializer.extend(kept_inits)
-    print(f"  initializers: {before} -> {len(kept_inits)}")
+    # Remove in place, not clear + extend: extend deep-copies each initializer
+    # and protobuf can't serialize a single TensorProto > 2 GiB (Qwen3-14B's
+    # 3.1 GB embed/lm_head), raising EncodeError. Deleting never serializes.
+    inits = m.graph.initializer
+    for idx in range(len(inits) - 1, -1, -1):
+        if inits[idx].name not in used_inits:
+            del inits[idx]
+    print(f"  initializers: {before} -> {len(inits)}")
 
     # 5. Save with consolidated external data.
     dst_dir.mkdir(parents=True, exist_ok=True)

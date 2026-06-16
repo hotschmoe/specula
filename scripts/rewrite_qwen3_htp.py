@@ -209,17 +209,27 @@ def prune_dead_nodes(model: onnx.ModelProto) -> int:
 
 
 def prune_unused_initializers(model: onnx.ModelProto) -> int:
-    """Drop initializers not referenced by any node's input."""
+    """Drop initializers not referenced by any node's input.
+
+    Remove in place rather than clear + extend: `extend` deep-copies each
+    initializer, and protobuf cannot serialize a single TensorProto > 2 GiB
+    (Qwen3-14B's embed_tokens/lm_head are ~3.1 GB each), so the copy raises
+    `EncodeError: Failed to serialize proto`. Deleting elements never
+    serializes, so this scales to any tensor size. (4B's 1.55 GB embed stayed
+    under the cap, which is why this only bites at >=14B.)
+    """
     refs: set[str] = set()
     for n in model.graph.node:
         for i in n.input:
             refs.add(i)
     for o in model.graph.output:
         refs.add(o.name)
-    kept = [init for init in model.graph.initializer if init.name in refs]
-    dropped = len(model.graph.initializer) - len(kept)
-    del model.graph.initializer[:]
-    model.graph.initializer.extend(kept)
+    inits = model.graph.initializer
+    dropped = 0
+    for idx in range(len(inits) - 1, -1, -1):
+        if inits[idx].name not in refs:
+            del inits[idx]
+            dropped += 1
     return dropped
 
 
