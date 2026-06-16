@@ -1,9 +1,20 @@
 # specula -- current status
 
-## SESSION 2026-06-16 — 14B NPU runtime: engine built, BUILD BUG found
+## SESSION 2026-06-16 — 14B NPU runtime: fp16 build bug found + FIXED, decode in progress
 
-Tried to run the 10-part Qwen3-14B w8a16 bundle on the X2E Hexagon.
+Ran the 10-part Qwen3-14B w8a16 bundle on the X2E Hexagon. Found two
+runtime ceilings, fixed the first, drove a corrected rebuild on the
+Threadripper, and built a streaming engine for the second.
 Full writeup: **`docs/npu_engine_14b_runtime.md`**.
+
+**Headline arc:** (1) decoder parts wouldn't load — root-caused to the
+"w8a16" build storing **fp16 weights** (no calibration → float HTP graph →
+3.3 GB/part > ~2 GB per-context ceiling). (2) Drove a **calibrated rebuild**
+on the box (`capture_calib_14b.py` + `requant_14b.sh --input_list`) →
+**int8, 1.66 GB/part, loads on the Hexagon**. (3) Hit a **second ceiling**:
+the full ~16 GB bundle exceeds the HTP's ~10 GB / ~6-context budget via
+ORT-QNN → built `engine_14b_swap.py` (2-group streaming, host-bridged
+fp32 seam+KV). w4a16 (~8 GB) is the clean long-term fit.
 
 - ✅ **Ground-truth IO contract extracted.** Bundle shipped with no
   `bin_info/`; regenerated it with `qnn-context-binary-utility` per `.bin`.
