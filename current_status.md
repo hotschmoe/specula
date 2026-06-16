@@ -72,9 +72,20 @@ so a first bundle needs no GPU/cloud.)
   reproduction already runs it on Prism) — AI Hub only for the final compile
   if needed. Even *more* on-device than planned.
 
-**Next (14B):** pathb rewrites (stages 2-5, on-device) → split into ~8 parts
-→ qairt-converter + qairt-quantizer w8a16 (local PTQ, no AIMET) →
-context-bin-gen → bundle. **Next (SSM):** recurrence-structure at real seq
+  **14B chain is DISK-BLOCKED (finding).** Two compounding issues: (1)
+  optimum `text-generation-with-past` **duplicated weights 2×** → 118 GB
+  fp32 (a 14.8B fp32 should be ~59 GB); (2) `rewrite_qwen3_htp.py::save_model`
+  copies all external data per stage (`save_as_external_data`,
+  `all_tensors_to_one_file`). At 118 GB/stage and only **202 GB free**, the
+  chain writes 02_staged (→84 GB free) then stage 3 (fold-pathbmask) needs
+  118 GB to write 03 and fails. Options: free ~250 GB; or prove the w8a16
+  local path on **Qwen3-4B first** (~16 GB/stage, fits) before scaling. The
+  118 GB `01_optimum` is regeneratable (stage-1 script + model tracked) and
+  can be reclaimed.
+
+**Next (14B):** decide disk strategy (4B-first proof vs free disk for 14B),
+then pathb rewrites → split → qairt-converter + qairt-quantizer w8a16 (local
+PTQ, no AIMET) → context-bin-gen → bundle. **Next (SSM):** recurrence-structure at real seq
 (chunked/Scan/windowed — the seq=8 unroll is the last gap to a production
 prefill graph); repeat the 3-stage SSM proof on the real `qwen3_5` arch when
 transformers ships it.
