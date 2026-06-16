@@ -55,6 +55,12 @@ NPU-bundle steps the X2E's 48 GB can't. Full playbook:
   runtime step. No blocker on the build side; all findings in
   `docs/threadripper_build_server.md`.
 
+**▶ NEXT SESSION STARTS HERE:** `docs/next_session_npu_engine_14b.md` — run
+the 10-part 14B bundle on the Hexagon (solve the >7-session ceiling). Also
+queued: `docs/qwen3_14b_w4a16_plan.md` — try w4a16 by re-quantizing the saved
+`06_split` on the box (`qairt-quantizer --weights_bitwidth 4`; AIMET only for
+higher quality + needs a GPU; AI Hub is int8-only).
+
 ---
 
 Last updated: 2026-06-15 (session 36 — **kicked off the Qwen3.6-27B NPU

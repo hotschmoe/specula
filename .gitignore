@@ -74,3 +74,10 @@ last_side_quest/sq4_cloud_adventure/_intermediates
 
 # Claude Code local state (agent worktrees, session files)
 .claude/
+
+# --- build-server / probe run artifacts (regeneratable, large) ---
+end-to-end/runs/
+end-to-end/probes/out/
+# --- fetched datasets + scratch perf logs (curate findings into results/) ---
+data/
+output/
