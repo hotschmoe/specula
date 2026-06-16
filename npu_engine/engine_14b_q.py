@@ -182,14 +182,21 @@ class Session:
             raise RuntimeError(f"{self.tag} fell back")
         return time.perf_counter() - t0
 
-    def bind(self, buf):
+    def alloc(self):
+        """Per-session IO buffers (typed). Buffers are NOT shared across
+        sessions by name — the same seam tensor is float32 in its producer part
+        and uint16 in its consumer part, so each session needs its own."""
+        self.buf = {n: np.zeros(t.shape, dtype=t.np)
+                    for n, t in {**self.gin, **self.gout}.items()}
+
+    def bind(self):
         self.io = self.s.io_binding()
         for n, t in self.gout.items():
-            a = buf[n]
+            a = self.buf[n]
             self.io.bind_output(name=n, device_type="cpu", device_id=0,
                                 element_type=t.np, shape=t.shape, buffer_ptr=a.ctypes.data)
         for n, t in self.gin.items():
-            a = buf[n]
+            a = self.buf[n]
             self.io.bind_input(name=n, device_type="cpu", device_id=0,
                                element_type=a.dtype.type, shape=a.shape, buffer_ptr=a.ctypes.data)
 
@@ -228,13 +235,10 @@ def main():
         print(f"  {s.tag}: {dt:.1f}s")
     print(f"  load total {time.perf_counter() - t0:.1f}s")
 
-    # Host buffers per graph tensor (typed). Canonical fp32 seam + KV stores.
-    buf = {}
-    for p in parts:
-        for t in list(p.ins) + list(p.outs):
-            buf.setdefault(t.name, np.zeros(t.shape, dtype=t.np))
+    # Per-session typed IO buffers + canonical fp32 seam + KV host stores.
     for s in sessions:
-        s.bind(buf)
+        s.alloc()
+        s.bind()
     fp32_seam = {}  # seam tensor name -> fp32 canonical [1,1,5120]
     kv = {(L, k): np.zeros((1, 8, ctx - 1, head_dim), np.float32)
           for L in range(n_layers) for k in ("key", "value")}
@@ -256,32 +260,31 @@ def main():
         ab[..., ctx - 1 - pos:] = 0.0
         logits = None
         for s in sessions:          # sessions are in part order; seams flow forward
-            # ---- inputs (only this session's external graph inputs) ----
+            b = s.buf
             for nm, t in s.gin.items():
                 if nm == "input_ids":
-                    buf[nm][0, 0] = tid
+                    b[nm][0, 0] = tid
                 elif nm == "position_ids_cos":
-                    _set(buf[nm], cb.reshape(buf[nm].shape), t)
+                    _set(b[nm], cb.reshape(b[nm].shape), t)
                 elif nm == "position_ids_sin":
-                    _set(buf[nm], sb.reshape(buf[nm].shape), t)
+                    _set(b[nm], sb.reshape(b[nm].shape), t)
                 elif nm == "attention_bias":
-                    _set(buf[nm], ab.reshape(buf[nm].shape), t)
+                    _set(b[nm], ab.reshape(b[nm].shape), t)
                 elif nm.startswith("past_key_values"):
                     L = _layer(nm)
-                    _set(buf[nm], kv[(L, "key" if nm.endswith("key") else "value")], t)
+                    _set(b[nm], kv[(L, "key" if nm.endswith("key") else "value")], t)
                 else:               # seam_in (bridged via fp32 canonical)
-                    _set(buf[nm], fp32_seam[nm], t)
+                    _set(b[nm], fp32_seam[nm], t)
             s.run()
-            # ---- outputs (this session's external graph outputs) ----
             for nm, t in s.gout.items():
                 if nm == "logits":
-                    logits = _get(buf[nm], t).reshape(-1)
+                    logits = _get(b[nm], t).reshape(-1)
                 elif nm.startswith("present"):
                     L = _layer(nm)
                     kv[(L, "key" if nm.endswith("key") else "value")][:] = \
-                        _get(buf[nm], t)[:, :, 1:, :]
+                        _get(b[nm], t)[:, :, 1:, :]
                 else:               # seam_out -> fp32 canonical for next session
-                    fp32_seam[nm] = _get(buf[nm], t).copy()
+                    fp32_seam[nm] = _get(b[nm], t).copy()
         return logits
 
     # warmup + reset

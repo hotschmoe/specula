@@ -252,6 +252,33 @@ Qualcomm-native path (their 7B ref ships it) and it loads. So we embrace it.
   0/-65504 mask). Model on `npu_engine/qualcomm_qwen3_4b_oracle.py` (already
   runs Qualcomm uint16-IO bundles).
 
+## 9. SECOND ceiling (2026-06-16) — HTP can't hold all 10 contexts at once
+
+With the calibrated bundle assembled (8× int8 decoder @1.66 GB + 2× fp16
+embed/head @1.56 GB ≈ **16.4 GB total**), individual parts load — but the
+**whole model does not fit on the HTP at once via ORT-QNN**:
+
+- 10 separate sessions → **6 load, the 7th fails QNN 1002** (~9.9 GB resident).
+- 5 paired EPContext sessions (`1-2|3-4|5-6|7-8|9-10`) → **3 sessions / 6
+  contexts load, the 4th fails** — same ~10 GB wall.
+
+So it is **not** an ORT-session-count limit (grouping doesn't help) — it's a
+**total HTP context-memory ceiling around ~10 GB** (≈6 of these contexts).
+The 4B w4a16 bundle reached 7 contexts because they're smaller; the wall is
+GB, not count. ORT-QNN loads each EPContext fully resident (it does **not**
+honor genie's `use-mmap`, which is how Genie would stream a >RAM bundle — but
+Genie's DSP transport is broken on X2E, [[reference_genie_dsp_transport_broken]]).
+
+**Implications / paths to a full 14B decode on this HTP:**
+1. **w4a16** — decoder parts ~0.83 GB; embed/head int8 ~0.78 GB → ~8.2 GB
+   total, fits under the ~10 GB wall. The production-relevant precision and the
+   real fix (`docs/qwen3_14b_w4a16_plan.md`). Next build cycle.
+2. **2-group streaming swap** — load parts 1–5, run, unload, load 6–10, run;
+   the engine's host-side fp32 seam + KV stores thread state across the swap.
+   Slow (per-token reload) but proves the *current* int8 bundle decodes
+   correctly + yields the cos-sim quality number without a rebuild.
+   (`engine_14b_swap.py`, prefill-batched: one swap for all prompt tokens.)
+
 ## 7. Progress log
 
 - **2026-06-16** — bin_info extracted + topology confirmed; CPU fp ref
