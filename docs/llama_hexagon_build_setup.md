@@ -40,6 +40,24 @@ ceiling is bypassed — llama.cpp streams/splits across HTP sessions + GPU/CPU.
 Cert: `C:\Users\hotschmoe\Certs\ggml-htp-v1.pfx` (password-less, EKU
 1.3.6.1.5.5.7.3.3), imported to LocalMachine Root + TrustedPublisher.
 
+## 🏆🏆 14B VERIFIED on the NPU (2026-06-16) — ceiling broken
+
+`Qwen3-14B-Q4_0.gguf` (7.92 GiB; converted HF→GGUF via
+`convert_hf_to_gguf.py --outtype f16` + `llama-quantize Q4_0`) **runs on the
+Hexagon NPU** — which ORT-QNN could not do (14B died at the >10 GB wall):
+```
+GGML_HEXAGON_NDEV=4 bin\llama-bench -m Qwen3-14B-Q4_0.gguf \
+   --device HTP0,HTP1,HTP2,HTP3 -ngl 34 -p 64 -n 16
+| qwen3 14B Q4_0 | 7.92 GiB | OpenCL,HTP | 34 | pp64 40.9 t/s | tg16 11.2 t/s |
+```
+
+### Hardware limit found: exactly 4 HTP sessions
+HTP0–3 open (domains 3/7/11/15); a **5th session fails `error 0x200`**. At
+~2 GB/session that's **~8 GB max resident on the NPU** — this IS the root of
+the ~10 GB ceiling (4 process domains). **Models >~8 GB require hybrid
+`-ngl`** (overflow layers to Adreno GPU/CPU over unified 48 GB). 14B (8.5 GB)
+→ `-ngl 34` (34/40 on HTP, 6 on GPU/CPU). A 27B (16 GB Q4_0) → ~50/50.
+
 ## 27B status — NPU ready, blocked on llama.cpp arch support
 - **Multi-session works:** the 27B attempt opened **4 HTP sessions** (HTP0–3,
   domains 3/7/11/15) cleanly — the per-session split mechanism is proven.
