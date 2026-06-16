@@ -208,6 +208,50 @@ decoder parts load — that's gated on task #7.
 (QNN context destruction) *after* all work + prints complete. Benign;
 ignore the exit-time `Segmentation fault`.
 
+## 8. FIX PROVEN (2026-06-16, same session) — calibration → int8 → loads
+
+Drove the rebuild on the Threadripper (`root@192.168.10.5`, code +
+intermediates on `/mnt/vm_8tb/specula-build`, `specula-qairt:2.45` Docker
+image with QAIRT 2.45 **and** onnxruntime 1.23.2). Helper:
+`end-to-end/build_server/boxssh.py` (paramiko; SFTP write fails on the unRAID
+FUSE mount → use the `putx` base64-over-exec op; set `MSYS_NO_PATHCONV=1`).
+
+Pipeline confirmed against `06_split` (9 ONNX parts: embed + 8×5-layer
+decoder; **no lm_head ONNX** — part10 bin came from `05_pathb_ctx512`):
+
+1. **Calibration capture** (`capture_calib_14b.py`, in-container ORT): runs
+   the fp32 chain AR1 over 6 pre-tokenized prompts, threads the KV ring, dumps
+   each decoder part's real input feeds as `.raw` + `input_list.txt`.
+2. **Re-quant** (`requant_14b.sh`): convert → `qairt-quantizer … --input_list
+   <cal>` → context-bin. **part2 dropped 3.30 GB → 1.66 GB** (`constSize`
+   1.656 GB = int8 ✅). **It LOADS on the X2E Hexagon in 2.6 s** via ORT-QNN
+   (QNNExecutionProvider). The fp16→unloadable / int8→loadable causality is
+   nailed shut.
+
+### IO is uint16, not fp32 — and that's the right answer
+
+With calibration the quantizer makes **all IO `UFIXED_POINT_16`** (per-tensor
+`scaleOffset`, QNN convention `real = scale·(q + offset)`). Attempts to force
+fp32 IO failed: bare `--preserve_io_datatype` is ignored once calibration is
+on; `--config` float32 on every IO makes `qnn-context-binary-generator` fail
+op-validation (1002) — a *quantized* graph can't take float IO (the original
+fp32-IO bins only built because they were *fully float*). uint16 IO is the
+Qualcomm-native path (their 7B ref ships it) and it loads. So we embrace it.
+
+### Refined plan (lower scope than a full 10-part rebuild)
+
+- **Re-quantize only parts 2–9** (the broken decoder parts) → uint16 IO + int8
+  weights (~1.66 GB each, loadable). **Keep part1 + part10** fp16 bins (they
+  already load at 1.56 GB).
+- **Engine bridges fp32↔uint16 at the two outer seams only:** quantize part1's
+  fp32 embed seam → uint16 for part2; dequant part9's uint16 seam → fp32 for
+  part10. Internal decoder seams + KV stay uint16 (bridge with the per-tensor
+  `scaleOffset` if consecutive-part encodings differ; threaded calibration
+  should make them match). cos/sin/attention_bias fed as uint16 per part
+  (quantized with that part's encoding; 16-bit is ample for rope + the
+  0/-65504 mask). Model on `npu_engine/qualcomm_qwen3_4b_oracle.py` (already
+  runs Qualcomm uint16-IO bundles).
+
 ## 7. Progress log
 
 - **2026-06-16** — bin_info extracted + topology confirmed; CPU fp ref
