@@ -173,6 +173,11 @@ class Session:
         self.build()
         opts = {"backend_path": str(SYS_QNN), "htp_performance_mode": "burst",
                 "soc_model": "88", "htp_arch": "81", "enable_htp_fp16_precision": "1"}
+        import os
+        if os.environ.get("HTP_SHARED_MEM") == "1":
+            opts["enable_htp_shared_memory_allocator"] = "1"
+        if os.environ.get("HTP_SPILL_FILL") == "1":
+            opts["enable_htp_spill_fill_buffer"] = "1"
         so = ort.SessionOptions()
         so.log_severity_level = 3
         t0 = time.perf_counter()
