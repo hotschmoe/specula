@@ -30,10 +30,24 @@ NPU-bundle steps the X2E's 48 GB can't. Full playbook:
   (transformers 4.57 emits a live `attention_bias`, not the old folded mask);
   QAIRT env (**onnx==1.18.0** for `onnx.version`, **onnxsim** to fold the
   rotary `rotate_half` head_dim 127→128, `QAIRT_TMP_DIR` on the SSD, libc++).
-- ⏭ **Next (autonomous):** full 8-part build running (onnxsim + tmp fixes,
-  part2 convert confirmed) → assemble bundle (`lib/bundle.py`) → rsync to X2E
-  → load on the Hexagon. Then fold box drivers into the repo. No blocker
-  needs the user; all findings in `docs/threadripper_build_server.md`.
+- ✅ **🏆🏆 COMPLETE Qwen3-14B w8a16 NPU bundle built on local hardware** —
+  `runs/.../10_bundle/qwen3_14b-w8a16-specula-x2e/`: **10 ordered HTP context
+  binaries** (`part_1..10_of_10.bin`, 28 GB) + `genie_config.json` +
+  `htp_backend_ext_config.json` + tokenizer/config + metadata, genie-shaped.
+  Built end-to-end on the Threadripper, no AIMET, no cloud. Pulled to the X2E
+  at `models/qwen3_14b-w8a16-specula-x2e/`.
+- **Split-balancing findings (per-context HTP limits):** a 10-layer part
+  (~13 GB) failed `qnn-context-binary-generator` with **QNN 1002 (graph
+  finalize)** — the HTP per-context ceiling is **~5 layers / ~3.3 GB**; and
+  the **3.1 GB lm_head must be its OWN part** (breaks the converter's symbolic
+  shape inference if mixed with attention layers). Final layout: embed +
+  8×(5-layer) + lm_head = 10 parts. Directly informs how to split the 27B.
+- ⏭ **DEPLOY caveat (next, for the user):** loading all 10 parts on the X2E
+  NPU will hit the **~7 ORT-QNN HTP session ceiling**
+  ([[reference_ortqnn_session_limit]]) — needs the combined-wrapper / sidecar
+  to load. The *build* is done; *running* the 14B on-device is the next
+  runtime step. No blocker on the build side; all findings in
+  `docs/threadripper_build_server.md`.
 
 ---
 

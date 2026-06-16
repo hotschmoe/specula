@@ -133,12 +133,32 @@ qnn-context-binary-generator --backend libQnnHtp.so --dlc_path part_q.dlc \
   models to `$TMPDIR`; the container's `/tmp` is tiny → part8 (16 GB) failed
   "Failed to copy external data". Point it at the SSD.
 
-### Status
+### Status — COMPLETE ✅
 
-**`part1.bin` (1.56 GB) built end-to-end on the box** — export → 4 rewrites →
-split → convert → quantize → context-bin → a real X2 Elite HTP context binary,
-no AIMET, no cloud. part2 convert confirmed after the onnxsim fix; full 8-part
-build running.
+**Full Qwen3-14B w8a16 NPU bundle built end-to-end on the box** — export → 4
+rewrites → split → convert → quantize → context-bin → assemble → 28 GB
+genie-shaped bundle, **no AIMET, no cloud**, pulled to the X2E
+(`models/qwen3_14b-w8a16-specula-x2e/`).
+
+**Split balancing (HTP per-context limits — learned by failing):**
+- A **10-layer part (~13 GB)** fails `qnn-context-binary-generator` with
+  **QNN 1002 (graph finalize)** — the HTP per-context ceiling is **~5 layers
+  / ~3.3 GB `.bin`**. Split decoder layers ≤5 per part.
+- The **3.1 GB lm_head must be its own part** — mixed with attention layers
+  it breaks the converter's symbolic shape inference (`TensorProto exceeded
+  2GB` on `/lm_head/Transpose`), which then leaves the rotary 127 unfolded.
+- Working layout for 14B (40 layers): **embed + 8×(5-layer) + lm_head = 10
+  parts**. (`build_part_specs` default puts extra layers + lm_head in the
+  last part — override it; for the 27B, plan ~5-layer decoder parts + a
+  standalone lm_head part from the start.)
+
+**Deploy caveat:** 10 parts > the **~7 ORT-QNN HTP session ceiling**
+([[reference_ortqnn_session_limit]]) — loading needs the combined-wrapper /
+sidecar. The build is done; on-device run is the next runtime step.
+
+Box drivers (in `end-to-end/build_server/`): `run_stages_1_5.sh`,
+`split_14b.py` (+ `split_tail2.py` for the balanced tail), `build_qairt_14b.sh`
+(+ `build_part8_9.sh`), `bundle_14b.py`, `Dockerfile.qairt`, `qnn_v81_box.json`.
 
 ## Next / TODO
 
