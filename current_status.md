@@ -1,5 +1,43 @@
 # specula -- current status
 
+## SESSION 2026-06-16 — 14B NPU runtime: engine built, BUILD BUG found
+
+Tried to run the 10-part Qwen3-14B w8a16 bundle on the X2E Hexagon.
+Full writeup: **`docs/npu_engine_14b_runtime.md`**.
+
+- ✅ **Ground-truth IO contract extracted.** Bundle shipped with no
+  `bin_info/`; regenerated it with `qnn-context-binary-utility` per `.bin`.
+  Confirms topology **embed + 8×(5-layer) + lm_head-alone = 10 parts**,
+  **live `attention_bias[1,1,1,512]`** input (not the 4B folded ScatterND
+  mask), **rope_theta=1e6**. Mirrored (tracked) to `npu_engine/bin_info_14b/`.
+- ✅ **General N-part ORT-QNN engine** (`npu_engine/engine_14b.py`) — reads
+  bin_info, wires seam + live attention_bias + full-dim RoPE + KV ring,
+  supports separate-session *and* combined-EPContext-group loading, has a
+  ceiling-probe mode. Validated: part1 embed lookup runs; **combined
+  2-EPContext-node-per-session wrapper works** (the >7-session fix —
+  part1+part10 in one QNN session, finite logits). The 4B name-collision
+  failure does NOT recur for these distinct AR1 parts.
+- ✅ **CPU fp reference** (`npu_engine/ref_cpu_14b.py`, transformers 4.57):
+  coherent — `'<think>\nOkay, the user is asking…'`, first-decode argmax
+  151667. Saved `results/pathb_eval/ref_cpu_14b.npz` for cos-sim.
+- 🛑 **BLOCKER — the bundle can't run as built.** Decoder parts (2-9) fail
+  to create an HTP context (**QNN 1002**) *alone* — not a session-count
+  issue. Root cause (3× confirmed): the "w8a16" build stored **fp16
+  weights, not int8** (`constSize` 3.30 GB = exactly 2 B/param; all IO
+  `FLOAT_32`; `qairt-quantizer` ran with **no `--input_list` calibration** +
+  `--preserve_io_datatype`). No activation calibration → HTP compiled a
+  **float graph** → weights materialized to fp16 → 2× oversize (3.30 GB) →
+  exceeds the **~2 GB X2E runtime per-context ceiling** (part1/10 at 1.56 GB
+  load; Qualcomm's 7B parts ≤1.09 GB load). Calibration here is *required
+  for loadability*, not just accuracy.
+- ⏭ **NEXT — rebuild on the Threadripper** from saved `06_split` ONNX:
+  re-quantize **with `--input_list` calibration + quantized (uint16/uint8)
+  IO** → ~1.65 GB int8 decoder parts that load under the ceiling. Then
+  `engine_14b.py` runs the full chain end-to-end + logit cos-sim vs the CPU
+  ref. Spec in `docs/npu_engine_14b_runtime.md` §5.
+
+---
+
 ## AUTONOMOUS RUN 2026-06-15 (build server) — stood up the Threadripper
 
 While the user is away (~8h), built out a **remote build server** on the

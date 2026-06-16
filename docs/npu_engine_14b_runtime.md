@@ -121,7 +121,98 @@ the combined wrapper (M parts/session) to get under the ceiling.
 
 ---
 
-## 4. Progress log
+## 4. RUNTIME BLOCKER (2026-06-16): decoder parts are fp16-oversized
 
-- **2026-06-16** — bin_info extracted + topology confirmed (above). CPU fp
-  reference generation kicked off. Engine implementation next.
+**The shipped w8a16 bundle cannot run on the X2E HTP as built.** The 8
+decoder parts (parts 2-9) fail to load with **QNN 1002**
+(`Failed to create context from binary`) — and they fail **alone**, not
+just when co-resident, so this is *not* the >7-session ceiling.
+
+What loads vs. what doesn't (each tested in isolation, ORT 1.24.4 + SYS_QNN):
+
+| part | role | size | constSize | loads? |
+|------|------|------|-----------|--------|
+| 1  | embed   | 1.56 GB | 1.555 GB (fp16 embedding) | ✅ |
+| 2-9| decoder | 3.30 GB | **3.303 GB** | ❌ QNN 1002 |
+| 10 | lm_head | 1.56 GB | 1.555 GB (fp16 head)      | ✅ |
+
+### Root cause — the "w8a16" build stored fp16 weights, not int8
+
+Three independent confirmations:
+
+1. **`constSize` math.** One Qwen3-14B layer = 330.3M params; 5 layers =
+   1.65B. int8 (1 B/param) → **1.65 GB**; fp16 (2 B/param) → **3.30 GB**.
+   The decoder `constSize` is **3,303,236,608 B = 3.30 GB → fp16 weights.**
+2. **All graph IO is `FLOAT_32`.** A *true* w8a16 HTP bundle (Qualcomm's 7B
+   ref) ships **uint16/uint8** quantized KV/activation IO. Ours is fp32
+   everywhere — the build used `qairt-converter --preserve_io_datatype`.
+3. **No calibration.** `build_qairt_14b.sh` runs
+   `qairt-quantizer … --weights_bitwidth 8 --act_bitwidth 16
+   --use_per_channel_quantization` with **no `--input_list`** (basic-PTQ).
+
+**The chain:** no activation calibration → activations get no int16
+encodings → `qnn-context-binary-generator` compiles a **float (fp16)**
+HTP graph → the int8 weights are materialized back to **fp16** for the
+fp16 compute path → each decoder context is **2× oversized (3.30 GB)** →
+exceeds the X2E runtime **per-context ceiling (between 1.56 and 3.30 GB,
+~2 GB**; Qualcomm's loadable parts top out at 1.09 GB) → **QNN 1002**.
+
+So for *this* 5-layer split, calibration is not merely an accuracy nicety
+(as `next_session_npu_engine_14b.md` assumed) — it is **required for the
+int8 weight storage that keeps a part under the runtime context ceiling.**
+
+### Comparison anchor — the working 7B w8a16 bundle
+
+`models/qualcomm-qwen2_5-7b-ref/` loads fine: decoder parts **711 MB**
+(7 layers, w8a16, hidden 3584), uint16 KV IO, identical
+`htp_backend_ext_config.json`. The only material difference is real int8
+weights + quantized IO. Confirms the fix direction.
+
+## 5. Build fix spec (→ task #7)
+
+Re-quantize on the Threadripper from the saved `06_split` fp32 ONNX:
+
+- **Add calibration:** `qairt-quantizer --input_list <cal.txt>` with
+  representative per-part activations (see `end-to-end/lib/cal.py` for the
+  AR1 cos/sin/attention_bias/KV construction; feed a handful of real
+  prompt steps). This is what lets the HTP build a true int8-weight graph.
+- **Quantize IO:** drop `--preserve_io_datatype` on the converter (or set
+  IO to uint16/uint8) so KV/activation tensors are quantized like
+  Qualcomm's 7B — smaller + native HTP consumption, and it forces the
+  quantized compute path.
+- **Target:** ~1.65 GB int8 decoder parts. 1.65 GB is just above the
+  proven-loadable 1.56 GB, so it should load; if 1.65 GB still trips the
+  ceiling, fall back to **4 layers/part** (~1.32 GB) → 12 parts, which the
+  combined wrapper (§6) collapses under the session ceiling.
+
+## 6. Engine + session-ceiling fix — VALIDATED on loadable parts
+
+`npu_engine/engine_14b.py` is written general over part count + topology
+and **validated as far as the (broken) bundle allows**:
+
+- **part1 embed lookup runs:** `input_ids→[1,1,5120]`, all 5120 nonzero,
+  mean≈0 std 0.024 — a sane embedding. Load→bind→run path correct.
+- **Combined EPContext wrapper WORKS (the >7-session fix):** part1+part10
+  loaded as **two EPContext nodes in ONE ORT-QNN session**
+  (`QNNExecutionProvider`), correct gin/gout, ran to finite logits. The 4B
+  combined-wrapper failure (`docs/npu_engine_prefill_sidequest.md`, dup
+  AR1/AR128 input names) **does not recur** — these AR1 parts have distinct
+  names and the shared cos/sin/bias are one tensor feeding several nodes.
+  So once correctly-sized parts exist, `--groups` collapses 10 parts into
+  ≤7 sessions (or fewer) and the full chain runs.
+
+The engine cannot be exercised end-to-end (seam + KV + decode) until the
+decoder parts load — that's gated on task #7.
+
+**Known cosmetic issue:** ORT-QNN segfaults at interpreter teardown
+(QNN context destruction) *after* all work + prints complete. Benign;
+ignore the exit-time `Segmentation fault`.
+
+## 7. Progress log
+
+- **2026-06-16** — bin_info extracted + topology confirmed; CPU fp ref
+  built (coherent: `'<think>\nOkay, the user is asking…'`, argmax 151667).
+  Engine written + validated (part1 embed, combined 2-node wrapper).
+  **Found the runtime blocker: decoder parts are fp16-oversized (no-calib
+  build) and exceed the ~2 GB X2E HTP per-context ceiling.** Fix = re-quant
+  with calibration + quantized IO (task #7). Next: drive the rebuild.
