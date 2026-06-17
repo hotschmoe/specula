@@ -379,6 +379,41 @@ HMX accumulate (our evidence says no → expand to fp16). Key sources: arxiv
 `haozixu/htp-ops-lib`, ExecuTorch QNN backend docs, llama.cpp PR #23368 / issue
 #18139. Full ledger in this session's agent reports.
 
+## Phase 6 — APPLIED: 4.5× prefill on our llama.cpp (187 → 844 pp)
+
+We turned the analysis into speed. Examining our production Q4_0 HMX kernel
+showed it was **already well-optimised** (int4-in-VTCM dequant, out-stationary
+K-blocking, cost-based M/N tiling, DMA double-buffering) — so the gap wasn't a
+missing kernel trick. The decisive lever was the literature agent's #1: **our
+base `45cac7c` (2026-04-17) was 34 hexagon commits behind master**, missing
+exactly the levers this doc identified:
+
+- **#23368** HMX quantized matmul rework, **#23989** MUL_MAT/FA/GDN optimisations
+- **#23835** op fusion + RMS_NORM+MUL fusion ← the whole-graph-fusion lever
+- **#22347** HMX flash attention ← attention was 34% of prefill
+- **#22334** HMX frequency → max corner; **#22724** M-tail on HMX; op profiling
+
+Our branch had **zero custom commits**, so fast-forward `hotschmoe-npu-work` →
+`74ade52`, rebuild signed HTP backend. Measured A/B, Qwen3-4B Q4_0, HTP0, burst:
+
+| build | pp512 -fa 0 | pp512 -fa 1 | tg |
+|---|---|---|---|
+| base 45cac7c (old) | 187 | (fa was slower) | 19.9 |
+| **master 74ade52 (new)** | **499** | **844.7** | **21.6** |
+
+**= 4.5× prefill** (187 → 844), and **`-fa 1` now wins** (the HMX flash-attention
+PR flipped the old "-fa 0" rule on HTP). **Gap to the Qualcomm w4a16 bundle:
+11.9× → 2.64×.** Decode 19.9 → 21.6 (gap 1.29×). pp peaks at batch 512
+(844 > pp1024 783 > pp2048 686 — attention O(ctx²) grows). Knobs: `-fa 1`,
+`-t 16`, default `GGML_HEXAGON_OPBATCH=1024` (whole-layer batching already on).
+
+**Remaining 2.64×** is the architectural residue this doc maps: Qualcomm's
+finalised, statically-scheduled, weight-resident whole-part graph + deeper op
+fusion + AR128 amortisation that ggml's per-op dispatch can't fully match. Next
+levers (diminishing): the new op profiler (`GGML_HEXAGON_PROFILE`) to find the
+top remaining op, wider fusion, and — for decode — speculative decode (decode is
+GEMV-starved, not kernel-fixable).
+
 ## Executive summary — how Qualcomm hits 2200+ pp
 1. **w4 (block-wise) weights, uint16 fixed-point activations, uint8 KV**, uint16
    tied embed/lm_head. The matmul **expands block-wise int4→fp16 in HVX**
