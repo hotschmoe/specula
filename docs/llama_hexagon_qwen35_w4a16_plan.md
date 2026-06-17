@@ -111,11 +111,23 @@ mixed int-weight×fp16-activation. Consequences:
   **uint8** activation → int32) — a new scheme with an activation-precision
   tradeoff, NOT w4a16.
 
-**Revised #11 priority:**
-1. **Batched-prefill HMX utilization (fp16 path)** — investigate how
-   llama.cpp's HTP matmul tiles prefill activations vs Qualcomm AR128; widen to
-   saturate HMX. Accuracy-free; likely the bulk of the 22×. **Do this first.**
-2. **w4a8 integer path** (draft on `npu-int4a16-hmx`, compile-gated
+**MEASURED (2026-06-16) — batching is NOT the lever; the matmul kernel is.**
+4B Q4_0 on one HTP session, prefill t/s vs batch: pp64 61, pp128 104, pp256
+149, pp512 175, pp1024 (ubatch 2048) **167** → **hard plateau ~170 t/s**
+regardless of batch/ubatch. llama.cpp already batches fully; it just **can't
+saturate the HMX**. So the ~13× remaining gap to Qualcomm's 2224 is **matmul
+kernel HMX efficiency** (int4→fp16 dequant overhead + 2× fp16 weight bandwidth
++ tiling/pipelining), NOT batch width. ⇒ **#12 (batching) is closed: maxed.**
+The lever is the kernel → **w4a8** converges #11 and #12.
+
+**Revised priority (post-measurement):**
+1. **w4a8 integer kernel** — skip the int4→fp16 dequant, keep weights int4
+   (¼ VTCM/DMA bandwidth), integer HMX. This IS the HMX-efficiency fix. The
+   accuracy-free fp16-batching idea is exhausted (plateau 170). Draft exists.
+2. (deeper, later) op-fusion / VTCM pipelining to approach the fused-graph
+   efficiency QNN gets — harder, llama.cpp architecture-level.
+   --- original notes ---
+   **w4a8 integer path** (draft on `npu-int4a16-hmx`, compile-gated
    `GGML_HEXAGON_W4A16`, default OFF, `-1` guard): `core_dot_chunk_int4_int8`
    (`Q6_weight_ubit` no-dequant × `Q6_activation_ub` → int32 → rescale). Builds
    clean. Needs the **V81 HMX PRM** for int4 tile bit-packing + `Rt` region +
