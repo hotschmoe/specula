@@ -65,3 +65,38 @@ used finite DSPQUEUE_TIMEOUT and GGML_ABORT'd on AEE_EWOULDBLOCK (0x0e, queue
 full). Fix: on EWOULDBLOCK, drain completed responses (flush_pending) + retry
 (matches the op_queue->push backpressure pattern). Host-only change (no skel
 rebuild). Required for using these models in a coding harness.
+
+## Follow-ups (this session): pp512, crash fix, gpu-overflow, spec-decode
+
+### pp512 at -ngl 99 (35B, max NPU)
+pp512 **113-115** t/s / tg ~13.5 (vs pp128 63 — pp512 amortizes the per-batch cost
+much better). Use pp512+ for real prefill.
+
+### Execution-time crash FIXED (the critical one)
+ggml-hexagon.cpp flush_batch: dspqueue request queue fills under 4-session heavy
+load; the blocking write expired (DSPQUEUE_TIMEOUT 1s) and GGML_ABORT'd MID-EXECUTION
+(crashed pp512 before results). The full/timeout code is **0x0e (14)**, NOT the
+documented AEE_EWOULDBLOCK (516) — fixed: blocking write + on full/timeout
+flush_pending(drain responses, breaks deadlock) + retry, no abort. Verified:
+35B 4-session pp512 now runs both reps, zero dspqueue aborts. (commits 82a19a1→bdf59b9)
+REMAINING: a separate teardown access-violation (0xC0000005) at PROCESS-EXIT only,
+after all work — a session-shutdown concurrency race (callback active at htp_iface_stop).
+Lower priority: for a persistent llama-server harness it's shutdown-only. Needs a
+debugger/stack-trace to fix.
+
+### GPU-overflow (keep CPU free) — mechanism CONFIRMED
+`--override-tensor "ffn_.*_exps\.=OpenCL"` routes the MoE experts to the Adreno
+GPU (verified: "buffer type overridden to OpenCL"; buffer-type name is **OpenCL**,
+not GPUOpenCL). This keeps the 8GB of experts off the CPU (UX goal). Full bench
+pending (OpenCL load of 8GB experts + kernel compile is slow; finish/debug later).
+
+### Speculative decode for 35B-A3B MoE (research)
+- MTP self-draft IS supported in mainline (qwen35moe graph_mtp, `--spec-type
+  draft-mtp --spec-draft-n-max N`), single-backend (runs on the target's HTP+hybrid
+  placement). BUT needs the **MTP-head GGUF** (our file is non-MTP, no nextn block):
+  unsloth/Qwen3.6-35B-A3B-MTP-GGUF (~22GB). Watch: gated-delta-net needs F32/contig
+  inputs on HTP or it falls back to CPU (graph fragmentation).
+- Standard draft model: NO viable small Qwen3.6 draft (tokenizer/no-model; benchmarks
+  show no A3B speedup anyway).
+- Zero-download option that works TODAY: `--spec-type ngram-mod` (self-speculation,
+  no head/draft) — often the bigger win for a CODING harness (verbatim code repetition).
