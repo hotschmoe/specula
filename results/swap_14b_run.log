@@ -1,0 +1,17 @@
+=== engine_14b_swap: qwen3_14b-w8a16-specula-x2e-calib | 30 prompt tok | split A=parts1-5 B=parts6-10 ===
+  boundary seam: _model_layers_19_Add_1_output_0
+
+--- prefill group A (parts 1-5) over 30 tokens ---
+  group A loaded 15.1s
+ <E> DspTransport call failed, error 0x00000007
+ <E> CONN Reset
+ <E> Failed to destroy perf context: 1007
+ <E> Failed to destroy perf power config id 3235771282
+ <E> Failed to destroy perf power config id 3235771282
+ <E> Failed to destroy powerConfigId with error 0x3ef
+ <E> DspTransport call failed, error 0x00000007
+ <E> CONN Reset
+ <E> Failed to destroy perf context: 1007
+ <E> Failed to destroy perf power config id 3235771283
+ <E> Failed to destroy perf power config id 3235771283
+ <E> Failed to destroy powerConfigId with error 0x3ef

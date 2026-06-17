@@ -1,0 +1,6 @@
+{
+ "backend_extensions": {
+  "shared_library_path": "QnnHtpNetRunExtensions.dll",
+  "config_file_path": "C:\\Users\\hotschmoe\\Documents\\GitHub\\specula\\models\\qualcomm-qwen3-4b-ref\\qwen3_4b-genie-w4a16-qualcomm_snapdragon_x2_elite\\htp_backend_ext_config.json"
+ }
+}

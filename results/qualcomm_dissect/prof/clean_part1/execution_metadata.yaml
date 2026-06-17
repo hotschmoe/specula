@@ -1,0 +1,116 @@
+---
+timestamp: 18155592469
+command: C:\Qualcomm\AIStack\QAIRT\2.45.40.260406\bin\aarch64-windows-msvc\qnn-net-run.exe --backend C:\Users\hotschmoe\Documents\GitHub\specula\.venv-ort21\Lib\site-packages\onnxruntime_qnn\QnnHtp.dll --retrieve_context C:\Users\hotschmoe\Documents\GitHub\specula\models\qualcomm-qwen3-4b-ref\qwen3_4b-genie-w4a16-qualcomm_snapdragon_x2_elite\qwen3_4b_part_1_of_4.bin --input_list C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\prompt_ar128_cl512_1_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\token_ar1_cl512_1_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\prompt_ar128_cl1024_1_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\token_ar1_cl1024_1_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\prompt_ar128_cl2048_1_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\token_ar1_cl2048_1_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\prompt_ar128_cl3072_1_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\token_ar1_cl3072_1_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\prompt_ar128_cl4096_1_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\token_ar1_cl4096_1_of_4\input_list.txt --config_file C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\netrun_ext.json --profiling_level basic --perf_profile burst --use_native_input_files --num_inferences 60 --output_dir C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\clean_part1
+execution_mode: synchronous
+inferences_completed: 60
+graphs:
+  - graph_name: prompt_ar128_cl512_1_of_4
+    input_tensors:
+    - tensor_name: input_ids
+      id: 2
+      datatype: QNN_DATATYPE_INT_32
+      dimensions: [1,128]
+    output_tensors:
+    - tensor_name: _model_model_embed_tokens_Gather_output_0
+      id: 4
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,128,2560]
+  - graph_name: token_ar1_cl512_1_of_4
+    input_tensors:
+    - tensor_name: input_ids
+      id: 6
+      datatype: QNN_DATATYPE_INT_32
+      dimensions: [1,1]
+    output_tensors:
+    - tensor_name: _model_model_embed_tokens_Gather_output_0
+      id: 8
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,2560]
+  - graph_name: prompt_ar128_cl1024_1_of_4
+    input_tensors:
+    - tensor_name: input_ids
+      id: 10
+      datatype: QNN_DATATYPE_INT_32
+      dimensions: [1,128]
+    output_tensors:
+    - tensor_name: _model_model_embed_tokens_Gather_output_0
+      id: 12
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,128,2560]
+  - graph_name: token_ar1_cl1024_1_of_4
+    input_tensors:
+    - tensor_name: input_ids
+      id: 14
+      datatype: QNN_DATATYPE_INT_32
+      dimensions: [1,1]
+    output_tensors:
+    - tensor_name: _model_model_embed_tokens_Gather_output_0
+      id: 16
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,2560]
+  - graph_name: prompt_ar128_cl2048_1_of_4
+    input_tensors:
+    - tensor_name: input_ids
+      id: 18
+      datatype: QNN_DATATYPE_INT_32
+      dimensions: [1,128]
+    output_tensors:
+    - tensor_name: _model_model_embed_tokens_Gather_output_0
+      id: 20
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,128,2560]
+  - graph_name: token_ar1_cl2048_1_of_4
+    input_tensors:
+    - tensor_name: input_ids
+      id: 22
+      datatype: QNN_DATATYPE_INT_32
+      dimensions: [1,1]
+    output_tensors:
+    - tensor_name: _model_model_embed_tokens_Gather_output_0
+      id: 24
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,2560]
+  - graph_name: prompt_ar128_cl3072_1_of_4
+    input_tensors:
+    - tensor_name: input_ids
+      id: 26
+      datatype: QNN_DATATYPE_INT_32
+      dimensions: [1,128]
+    output_tensors:
+    - tensor_name: _model_model_embed_tokens_Gather_output_0
+      id: 28
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,128,2560]
+  - graph_name: token_ar1_cl3072_1_of_4
+    input_tensors:
+    - tensor_name: input_ids
+      id: 30
+      datatype: QNN_DATATYPE_INT_32
+      dimensions: [1,1]
+    output_tensors:
+    - tensor_name: _model_model_embed_tokens_Gather_output_0
+      id: 32
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,2560]
+  - graph_name: prompt_ar128_cl4096_1_of_4
+    input_tensors:
+    - tensor_name: input_ids
+      id: 34
+      datatype: QNN_DATATYPE_INT_32
+      dimensions: [1,128]
+    output_tensors:
+    - tensor_name: _model_model_embed_tokens_Gather_output_0
+      id: 36
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,128,2560]
+  - graph_name: token_ar1_cl4096_1_of_4
+    input_tensors:
+    - tensor_name: input_ids
+      id: 38
+      datatype: QNN_DATATYPE_INT_32
+      dimensions: [1,1]
+    output_tensors:
+    - tensor_name: _model_model_embed_tokens_Gather_output_0
+      id: 40
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,2560]

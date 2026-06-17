@@ -1,0 +1,17 @@
+`torch_dtype` is deprecated! Use `dtype` instead!
+=== CPU fp reference: Qwen3-14B ===
+  prompt file: C:\Users\hotschmoe\Documents\GitHub\specula\models\qwen3_14b-w8a16-specula-x2e\sample_prompt.txt
+  prompt tokens: 30
+Loading checkpoint shards:   0%|          | 0/8 [00:00<?, ?it/s]Loading checkpoint shards:  88%|████████▊ | 7/8 [00:00<00:00, 56.96it/s]Loading checkpoint shards: 100%|██████████| 8/8 [00:00<00:00, 61.29it/s]
+  model loaded in 0.3s (14.77B params)
+  prefill (30 tok) in 52.7s
+  gen step 0
+  gen step 8
+  gen step 16
+  gen step 24
+
+  first-decode argmax: 151667 ('<think>')
+  top-5: [(151667, '<think>'), (38800, 'ного'), (93297, '.DataTable'), (74814, 'avatars'), (120925, '蛲')]
+  continuation: '<think>\nOkay, the user is asking, "What is gravity? Keep the answer under ten words." Let me start by recalling the basic definition of gravity.'
+
+  saved: C:\Users\hotschmoe\Documents\GitHub\specula\results\pathb_eval\ref_cpu_14b.npz

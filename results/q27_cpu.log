@@ -1,0 +1,33 @@
+﻿llama-bench.exe : ggml_opencl: selected platform: 'QUALCOMM Snapdragon(TM)'
+At line:5 char:1
++ & bin\llama-bench.exe -m $model -ngl 0 -p 4 -n 4 2>&1 | Out-String |  ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ggml_opencl: se...Snapdragon(TM)':String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+ggml_opencl: device: 'Qualcomm(R) Adreno(TM) X2-90 GPU (OpenCL 3.0 Qualcomm(R) Adreno(TM) X2-90 GPU)'
+ggml_opencl: OpenCL driver: OpenCL 3.0 QUALCOMM build: 863.0 Compiler DX.50.39.00
+ggml_opencl: vector subgroup broadcast support: true
+ggml_opencl: device FP16 support: true
+ggml_opencl: mem base addr align: 128
+ggml_opencl: max mem alloc size: 2048 MB
+ggml_opencl: device max image buffer size (pixels): 134217728
+ggml_opencl: device max workgroup size: 1024
+ggml_opencl: SVM coarse grain buffer support: true
+ggml_opencl: SVM fine grain buffer support: true
+ggml_opencl: SVM fine grain system support: false
+ggml_opencl: SVM atomics support: true
+ggml_opencl: flattening quantized weights representation as struct of arrays (GGML_OPENCL_SOA_Q)
+ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)
+ggml_opencl: loading OpenCL kernels............................................................................................................
+ggml_opencl: default device: 'Qualcomm(R) Adreno(TM) X2-90 GPU (OpenCL 3.0 Qualcomm(R) Adreno(TM) X2-90 GPU)'
+ggml-hex: Loading driver C:\Windows\System32\DriverStore\FileRepository\qcnspmcdm8480.inf_arm64_4feba84cfc7ee278\libcdsprpc.dll
+ggml-hex: Hexagon backend (experimental) : allocating new registry : ndev 1
+ggml-hex: Hexagon Arch version v81
+ggml-hex: allocating new session: HTP0
+ggml-hex: failed to open session 0 : error 0x80000406
+ggml-hex: releasing session: HTP0
+ggml-hex: failed to create device/session 0
+C:/Users/hotschmoe/Documents/GitHub/llama.cpp/ggml/src/ggml-backend.cpp:584: GGML_ASSERT(device) failed
+

@@ -1,0 +1,2156 @@
+---
+timestamp: 18172113998
+command: C:\Qualcomm\AIStack\QAIRT\2.45.40.260406\bin\aarch64-windows-msvc\qnn-net-run.exe --backend C:\Users\hotschmoe\Documents\GitHub\specula\.venv-ort21\Lib\site-packages\onnxruntime_qnn\QnnHtp.dll --retrieve_context C:\Users\hotschmoe\Documents\GitHub\specula\models\qualcomm-qwen3-4b-ref\qwen3_4b-genie-w4a16-qualcomm_snapdragon_x2_elite\qwen3_4b_part_3_of_4.bin --input_list C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\prompt_ar128_cl512_3_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\token_ar1_cl512_3_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\prompt_ar128_cl1024_3_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\token_ar1_cl1024_3_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\prompt_ar128_cl2048_3_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\token_ar1_cl2048_3_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\prompt_ar128_cl3072_3_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\token_ar1_cl3072_3_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\prompt_ar128_cl4096_3_of_4\input_list.txt,C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\all\token_ar1_cl4096_3_of_4\input_list.txt --config_file C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\netrun_ext.json --profiling_level basic --perf_profile burst --use_native_input_files --num_inferences 60 --output_dir C:\Users\hotschmoe\Documents\GitHub\specula\results\qualcomm_dissect\prof\clean_part3
+execution_mode: synchronous
+inferences_completed: 60
+graphs:
+  - graph_name: prompt_ar128_cl512_3_of_4
+    input_tensors:
+    - tensor_name: attention_mask
+      id: 1
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,128,512]
+    - tensor_name: past_key_12_in
+      id: 4
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,384]
+    - tensor_name: past_value_12_in
+      id: 21
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,384,128]
+    - tensor_name: past_key_13_in
+      id: 38
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,384]
+    - tensor_name: past_value_13_in
+      id: 55
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,384,128]
+    - tensor_name: past_key_14_in
+      id: 72
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,384]
+    - tensor_name: past_value_14_in
+      id: 89
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,384,128]
+    - tensor_name: past_key_15_in
+      id: 106
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,384]
+    - tensor_name: past_value_15_in
+      id: 123
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,384,128]
+    - tensor_name: past_key_16_in
+      id: 140
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,384]
+    - tensor_name: past_value_16_in
+      id: 157
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,384,128]
+    - tensor_name: past_key_17_in
+      id: 174
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,384]
+    - tensor_name: past_value_17_in
+      id: 191
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,384,128]
+    - tensor_name: past_key_18_in
+      id: 208
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,384]
+    - tensor_name: past_value_18_in
+      id: 225
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,384,128]
+    - tensor_name: past_key_19_in
+      id: 242
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,384]
+    - tensor_name: past_value_19_in
+      id: 259
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,384,128]
+    - tensor_name: past_key_20_in
+      id: 276
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,384]
+    - tensor_name: past_value_20_in
+      id: 293
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,384,128]
+    - tensor_name: past_key_21_in
+      id: 310
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,384]
+    - tensor_name: past_value_21_in
+      id: 327
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,384,128]
+    - tensor_name: past_key_22_in
+      id: 344
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,384]
+    - tensor_name: past_value_22_in
+      id: 361
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,384,128]
+    - tensor_name: past_key_23_in
+      id: 378
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,384]
+    - tensor_name: past_value_23_in
+      id: 395
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,384,128]
+    - tensor_name: _model_model_layers_11_Add_1_output_0
+      id: 412
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,128,2560]
+    - tensor_name: position_ids_cos
+      id: 880
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,128,64]
+    - tensor_name: position_ids_sin
+      id: 882
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,128,64]
+    output_tensors:
+    - tensor_name: _model_model_layers_23_Add_1_output_0
+      id: 14047
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,128,2560]
+    - tensor_name: past_key_12_out
+      id: 14048
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_12_out
+      id: 14049
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_13_out
+      id: 14050
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_13_out
+      id: 14051
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_14_out
+      id: 14052
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_14_out
+      id: 14053
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_15_out
+      id: 14054
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_15_out
+      id: 14055
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_16_out
+      id: 14056
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_16_out
+      id: 14057
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_17_out
+      id: 14058
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_17_out
+      id: 14059
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_18_out
+      id: 14060
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_18_out
+      id: 14061
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_19_out
+      id: 14062
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_19_out
+      id: 14063
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_20_out
+      id: 14064
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_20_out
+      id: 14065
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_21_out
+      id: 14066
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_21_out
+      id: 14067
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_22_out
+      id: 14068
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_22_out
+      id: 14069
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_23_out
+      id: 14070
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_23_out
+      id: 14071
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+  - graph_name: token_ar1_cl512_3_of_4
+    input_tensors:
+    - tensor_name: attention_mask
+      id: 14072
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,1,512]
+    - tensor_name: past_key_12_in
+      id: 14075
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,511]
+    - tensor_name: past_value_12_in
+      id: 14092
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,511,128]
+    - tensor_name: past_key_13_in
+      id: 14109
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,511]
+    - tensor_name: past_value_13_in
+      id: 14126
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,511,128]
+    - tensor_name: past_key_14_in
+      id: 14143
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,511]
+    - tensor_name: past_value_14_in
+      id: 14160
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,511,128]
+    - tensor_name: past_key_15_in
+      id: 14177
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,511]
+    - tensor_name: past_value_15_in
+      id: 14194
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,511,128]
+    - tensor_name: past_key_16_in
+      id: 14211
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,511]
+    - tensor_name: past_value_16_in
+      id: 14228
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,511,128]
+    - tensor_name: past_key_17_in
+      id: 14245
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,511]
+    - tensor_name: past_value_17_in
+      id: 14262
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,511,128]
+    - tensor_name: past_key_18_in
+      id: 14279
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,511]
+    - tensor_name: past_value_18_in
+      id: 14296
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,511,128]
+    - tensor_name: past_key_19_in
+      id: 14313
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,511]
+    - tensor_name: past_value_19_in
+      id: 14330
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,511,128]
+    - tensor_name: past_key_20_in
+      id: 14347
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,511]
+    - tensor_name: past_value_20_in
+      id: 14364
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,511,128]
+    - tensor_name: past_key_21_in
+      id: 14381
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,511]
+    - tensor_name: past_value_21_in
+      id: 14398
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,511,128]
+    - tensor_name: past_key_22_in
+      id: 14415
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,511]
+    - tensor_name: past_value_22_in
+      id: 14432
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,511,128]
+    - tensor_name: past_key_23_in
+      id: 14449
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,511]
+    - tensor_name: past_value_23_in
+      id: 14466
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,511,128]
+    - tensor_name: _model_model_layers_11_Add_1_output_0
+      id: 14483
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,2560]
+    - tensor_name: position_ids_cos
+      id: 14951
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,1,64]
+    - tensor_name: position_ids_sin
+      id: 14953
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,1,64]
+    output_tensors:
+    - tensor_name: _model_model_layers_23_Add_1_output_0
+      id: 28094
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,2560]
+    - tensor_name: past_key_12_out
+      id: 28095
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_12_out
+      id: 28096
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_13_out
+      id: 28097
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_13_out
+      id: 28098
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_14_out
+      id: 28099
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_14_out
+      id: 28100
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_15_out
+      id: 28101
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_15_out
+      id: 28102
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_16_out
+      id: 28103
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_16_out
+      id: 28104
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_17_out
+      id: 28105
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_17_out
+      id: 28106
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_18_out
+      id: 28107
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_18_out
+      id: 28108
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_19_out
+      id: 28109
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_19_out
+      id: 28110
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_20_out
+      id: 28111
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_20_out
+      id: 28112
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_21_out
+      id: 28113
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_21_out
+      id: 28114
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_22_out
+      id: 28115
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_22_out
+      id: 28116
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_23_out
+      id: 28117
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_23_out
+      id: 28118
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+  - graph_name: prompt_ar128_cl1024_3_of_4
+    input_tensors:
+    - tensor_name: attention_mask
+      id: 28119
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,128,1024]
+    - tensor_name: past_key_12_in
+      id: 28122
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,896]
+    - tensor_name: past_value_12_in
+      id: 28139
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,896,128]
+    - tensor_name: past_key_13_in
+      id: 28156
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,896]
+    - tensor_name: past_value_13_in
+      id: 28173
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,896,128]
+    - tensor_name: past_key_14_in
+      id: 28190
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,896]
+    - tensor_name: past_value_14_in
+      id: 28207
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,896,128]
+    - tensor_name: past_key_15_in
+      id: 28224
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,896]
+    - tensor_name: past_value_15_in
+      id: 28241
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,896,128]
+    - tensor_name: past_key_16_in
+      id: 28258
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,896]
+    - tensor_name: past_value_16_in
+      id: 28275
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,896,128]
+    - tensor_name: past_key_17_in
+      id: 28292
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,896]
+    - tensor_name: past_value_17_in
+      id: 28309
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,896,128]
+    - tensor_name: past_key_18_in
+      id: 28326
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,896]
+    - tensor_name: past_value_18_in
+      id: 28343
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,896,128]
+    - tensor_name: past_key_19_in
+      id: 28360
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,896]
+    - tensor_name: past_value_19_in
+      id: 28377
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,896,128]
+    - tensor_name: past_key_20_in
+      id: 28394
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,896]
+    - tensor_name: past_value_20_in
+      id: 28411
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,896,128]
+    - tensor_name: past_key_21_in
+      id: 28428
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,896]
+    - tensor_name: past_value_21_in
+      id: 28445
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,896,128]
+    - tensor_name: past_key_22_in
+      id: 28462
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,896]
+    - tensor_name: past_value_22_in
+      id: 28479
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,896,128]
+    - tensor_name: past_key_23_in
+      id: 28496
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,896]
+    - tensor_name: past_value_23_in
+      id: 28513
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,896,128]
+    - tensor_name: _model_model_layers_11_Add_1_output_0
+      id: 28530
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,128,2560]
+    - tensor_name: position_ids_cos
+      id: 28998
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,128,64]
+    - tensor_name: position_ids_sin
+      id: 29000
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,128,64]
+    output_tensors:
+    - tensor_name: _model_model_layers_23_Add_1_output_0
+      id: 42165
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,128,2560]
+    - tensor_name: past_key_12_out
+      id: 42166
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_12_out
+      id: 42167
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_13_out
+      id: 42168
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_13_out
+      id: 42169
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_14_out
+      id: 42170
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_14_out
+      id: 42171
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_15_out
+      id: 42172
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_15_out
+      id: 42173
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_16_out
+      id: 42174
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_16_out
+      id: 42175
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_17_out
+      id: 42176
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_17_out
+      id: 42177
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_18_out
+      id: 42178
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_18_out
+      id: 42179
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_19_out
+      id: 42180
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_19_out
+      id: 42181
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_20_out
+      id: 42182
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_20_out
+      id: 42183
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_21_out
+      id: 42184
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_21_out
+      id: 42185
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_22_out
+      id: 42186
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_22_out
+      id: 42187
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_23_out
+      id: 42188
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_23_out
+      id: 42189
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+  - graph_name: token_ar1_cl1024_3_of_4
+    input_tensors:
+    - tensor_name: attention_mask
+      id: 42190
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,1,1024]
+    - tensor_name: past_key_12_in
+      id: 42193
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1023]
+    - tensor_name: past_value_12_in
+      id: 42210
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1023,128]
+    - tensor_name: past_key_13_in
+      id: 42227
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1023]
+    - tensor_name: past_value_13_in
+      id: 42244
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1023,128]
+    - tensor_name: past_key_14_in
+      id: 42261
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1023]
+    - tensor_name: past_value_14_in
+      id: 42278
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1023,128]
+    - tensor_name: past_key_15_in
+      id: 42295
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1023]
+    - tensor_name: past_value_15_in
+      id: 42312
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1023,128]
+    - tensor_name: past_key_16_in
+      id: 42329
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1023]
+    - tensor_name: past_value_16_in
+      id: 42346
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1023,128]
+    - tensor_name: past_key_17_in
+      id: 42363
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1023]
+    - tensor_name: past_value_17_in
+      id: 42380
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1023,128]
+    - tensor_name: past_key_18_in
+      id: 42397
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1023]
+    - tensor_name: past_value_18_in
+      id: 42414
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1023,128]
+    - tensor_name: past_key_19_in
+      id: 42431
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1023]
+    - tensor_name: past_value_19_in
+      id: 42448
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1023,128]
+    - tensor_name: past_key_20_in
+      id: 42465
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1023]
+    - tensor_name: past_value_20_in
+      id: 42482
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1023,128]
+    - tensor_name: past_key_21_in
+      id: 42499
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1023]
+    - tensor_name: past_value_21_in
+      id: 42516
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1023,128]
+    - tensor_name: past_key_22_in
+      id: 42533
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1023]
+    - tensor_name: past_value_22_in
+      id: 42550
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1023,128]
+    - tensor_name: past_key_23_in
+      id: 42567
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1023]
+    - tensor_name: past_value_23_in
+      id: 42584
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1023,128]
+    - tensor_name: _model_model_layers_11_Add_1_output_0
+      id: 42601
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,2560]
+    - tensor_name: position_ids_cos
+      id: 43069
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,1,64]
+    - tensor_name: position_ids_sin
+      id: 43071
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,1,64]
+    output_tensors:
+    - tensor_name: _model_model_layers_23_Add_1_output_0
+      id: 56212
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,2560]
+    - tensor_name: past_key_12_out
+      id: 56213
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_12_out
+      id: 56214
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_13_out
+      id: 56215
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_13_out
+      id: 56216
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_14_out
+      id: 56217
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_14_out
+      id: 56218
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_15_out
+      id: 56219
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_15_out
+      id: 56220
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_16_out
+      id: 56221
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_16_out
+      id: 56222
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_17_out
+      id: 56223
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_17_out
+      id: 56224
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_18_out
+      id: 56225
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_18_out
+      id: 56226
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_19_out
+      id: 56227
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_19_out
+      id: 56228
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_20_out
+      id: 56229
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_20_out
+      id: 56230
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_21_out
+      id: 56231
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_21_out
+      id: 56232
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_22_out
+      id: 56233
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_22_out
+      id: 56234
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_23_out
+      id: 56235
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_23_out
+      id: 56236
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+  - graph_name: prompt_ar128_cl2048_3_of_4
+    input_tensors:
+    - tensor_name: attention_mask
+      id: 56237
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,128,2048]
+    - tensor_name: past_key_12_in
+      id: 56240
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1920]
+    - tensor_name: past_value_12_in
+      id: 56257
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1920,128]
+    - tensor_name: past_key_13_in
+      id: 56274
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1920]
+    - tensor_name: past_value_13_in
+      id: 56291
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1920,128]
+    - tensor_name: past_key_14_in
+      id: 56308
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1920]
+    - tensor_name: past_value_14_in
+      id: 56325
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1920,128]
+    - tensor_name: past_key_15_in
+      id: 56342
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1920]
+    - tensor_name: past_value_15_in
+      id: 56359
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1920,128]
+    - tensor_name: past_key_16_in
+      id: 56376
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1920]
+    - tensor_name: past_value_16_in
+      id: 56393
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1920,128]
+    - tensor_name: past_key_17_in
+      id: 56410
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1920]
+    - tensor_name: past_value_17_in
+      id: 56427
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1920,128]
+    - tensor_name: past_key_18_in
+      id: 56444
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1920]
+    - tensor_name: past_value_18_in
+      id: 56461
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1920,128]
+    - tensor_name: past_key_19_in
+      id: 56478
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1920]
+    - tensor_name: past_value_19_in
+      id: 56495
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1920,128]
+    - tensor_name: past_key_20_in
+      id: 56512
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1920]
+    - tensor_name: past_value_20_in
+      id: 56529
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1920,128]
+    - tensor_name: past_key_21_in
+      id: 56546
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1920]
+    - tensor_name: past_value_21_in
+      id: 56563
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1920,128]
+    - tensor_name: past_key_22_in
+      id: 56580
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1920]
+    - tensor_name: past_value_22_in
+      id: 56597
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1920,128]
+    - tensor_name: past_key_23_in
+      id: 56614
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1920]
+    - tensor_name: past_value_23_in
+      id: 56631
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1920,128]
+    - tensor_name: _model_model_layers_11_Add_1_output_0
+      id: 56648
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,128,2560]
+    - tensor_name: position_ids_cos
+      id: 57116
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,128,64]
+    - tensor_name: position_ids_sin
+      id: 57118
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,128,64]
+    output_tensors:
+    - tensor_name: _model_model_layers_23_Add_1_output_0
+      id: 70283
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,128,2560]
+    - tensor_name: past_key_12_out
+      id: 70284
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_12_out
+      id: 70285
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_13_out
+      id: 70286
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_13_out
+      id: 70287
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_14_out
+      id: 70288
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_14_out
+      id: 70289
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_15_out
+      id: 70290
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_15_out
+      id: 70291
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_16_out
+      id: 70292
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_16_out
+      id: 70293
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_17_out
+      id: 70294
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_17_out
+      id: 70295
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_18_out
+      id: 70296
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_18_out
+      id: 70297
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_19_out
+      id: 70298
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_19_out
+      id: 70299
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_20_out
+      id: 70300
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_20_out
+      id: 70301
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_21_out
+      id: 70302
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_21_out
+      id: 70303
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_22_out
+      id: 70304
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_22_out
+      id: 70305
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_23_out
+      id: 70306
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_23_out
+      id: 70307
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+  - graph_name: token_ar1_cl2048_3_of_4
+    input_tensors:
+    - tensor_name: attention_mask
+      id: 70308
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,1,2048]
+    - tensor_name: past_key_12_in
+      id: 70311
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2047]
+    - tensor_name: past_value_12_in
+      id: 70328
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2047,128]
+    - tensor_name: past_key_13_in
+      id: 70345
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2047]
+    - tensor_name: past_value_13_in
+      id: 70362
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2047,128]
+    - tensor_name: past_key_14_in
+      id: 70379
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2047]
+    - tensor_name: past_value_14_in
+      id: 70396
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2047,128]
+    - tensor_name: past_key_15_in
+      id: 70413
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2047]
+    - tensor_name: past_value_15_in
+      id: 70430
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2047,128]
+    - tensor_name: past_key_16_in
+      id: 70447
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2047]
+    - tensor_name: past_value_16_in
+      id: 70464
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2047,128]
+    - tensor_name: past_key_17_in
+      id: 70481
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2047]
+    - tensor_name: past_value_17_in
+      id: 70498
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2047,128]
+    - tensor_name: past_key_18_in
+      id: 70515
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2047]
+    - tensor_name: past_value_18_in
+      id: 70532
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2047,128]
+    - tensor_name: past_key_19_in
+      id: 70549
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2047]
+    - tensor_name: past_value_19_in
+      id: 70566
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2047,128]
+    - tensor_name: past_key_20_in
+      id: 70583
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2047]
+    - tensor_name: past_value_20_in
+      id: 70600
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2047,128]
+    - tensor_name: past_key_21_in
+      id: 70617
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2047]
+    - tensor_name: past_value_21_in
+      id: 70634
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2047,128]
+    - tensor_name: past_key_22_in
+      id: 70651
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2047]
+    - tensor_name: past_value_22_in
+      id: 70668
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2047,128]
+    - tensor_name: past_key_23_in
+      id: 70685
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2047]
+    - tensor_name: past_value_23_in
+      id: 70702
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2047,128]
+    - tensor_name: _model_model_layers_11_Add_1_output_0
+      id: 70719
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,2560]
+    - tensor_name: position_ids_cos
+      id: 71187
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,1,64]
+    - tensor_name: position_ids_sin
+      id: 71189
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,1,64]
+    output_tensors:
+    - tensor_name: _model_model_layers_23_Add_1_output_0
+      id: 84330
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,2560]
+    - tensor_name: past_key_12_out
+      id: 84331
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_12_out
+      id: 84332
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_13_out
+      id: 84333
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_13_out
+      id: 84334
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_14_out
+      id: 84335
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_14_out
+      id: 84336
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_15_out
+      id: 84337
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_15_out
+      id: 84338
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_16_out
+      id: 84339
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_16_out
+      id: 84340
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_17_out
+      id: 84341
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_17_out
+      id: 84342
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_18_out
+      id: 84343
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_18_out
+      id: 84344
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_19_out
+      id: 84345
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_19_out
+      id: 84346
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_20_out
+      id: 84347
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_20_out
+      id: 84348
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_21_out
+      id: 84349
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_21_out
+      id: 84350
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_22_out
+      id: 84351
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_22_out
+      id: 84352
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_23_out
+      id: 84353
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_23_out
+      id: 84354
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+  - graph_name: prompt_ar128_cl3072_3_of_4
+    input_tensors:
+    - tensor_name: attention_mask
+      id: 84355
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,128,3072]
+    - tensor_name: past_key_12_in
+      id: 84358
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2944]
+    - tensor_name: past_value_12_in
+      id: 84375
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2944,128]
+    - tensor_name: past_key_13_in
+      id: 84392
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2944]
+    - tensor_name: past_value_13_in
+      id: 84409
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2944,128]
+    - tensor_name: past_key_14_in
+      id: 84426
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2944]
+    - tensor_name: past_value_14_in
+      id: 84443
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2944,128]
+    - tensor_name: past_key_15_in
+      id: 84460
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2944]
+    - tensor_name: past_value_15_in
+      id: 84477
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2944,128]
+    - tensor_name: past_key_16_in
+      id: 84494
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2944]
+    - tensor_name: past_value_16_in
+      id: 84511
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2944,128]
+    - tensor_name: past_key_17_in
+      id: 84528
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2944]
+    - tensor_name: past_value_17_in
+      id: 84545
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2944,128]
+    - tensor_name: past_key_18_in
+      id: 84562
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2944]
+    - tensor_name: past_value_18_in
+      id: 84579
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2944,128]
+    - tensor_name: past_key_19_in
+      id: 84596
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2944]
+    - tensor_name: past_value_19_in
+      id: 84613
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2944,128]
+    - tensor_name: past_key_20_in
+      id: 84630
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2944]
+    - tensor_name: past_value_20_in
+      id: 84647
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2944,128]
+    - tensor_name: past_key_21_in
+      id: 84664
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2944]
+    - tensor_name: past_value_21_in
+      id: 84681
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2944,128]
+    - tensor_name: past_key_22_in
+      id: 84698
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2944]
+    - tensor_name: past_value_22_in
+      id: 84715
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2944,128]
+    - tensor_name: past_key_23_in
+      id: 84732
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,2944]
+    - tensor_name: past_value_23_in
+      id: 84749
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,2944,128]
+    - tensor_name: _model_model_layers_11_Add_1_output_0
+      id: 84766
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,128,2560]
+    - tensor_name: position_ids_cos
+      id: 85234
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,128,64]
+    - tensor_name: position_ids_sin
+      id: 85236
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,128,64]
+    output_tensors:
+    - tensor_name: _model_model_layers_23_Add_1_output_0
+      id: 98401
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,128,2560]
+    - tensor_name: past_key_12_out
+      id: 98402
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_12_out
+      id: 98403
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_13_out
+      id: 98404
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_13_out
+      id: 98405
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_14_out
+      id: 98406
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_14_out
+      id: 98407
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_15_out
+      id: 98408
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_15_out
+      id: 98409
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_16_out
+      id: 98410
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_16_out
+      id: 98411
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_17_out
+      id: 98412
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_17_out
+      id: 98413
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_18_out
+      id: 98414
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_18_out
+      id: 98415
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_19_out
+      id: 98416
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_19_out
+      id: 98417
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_20_out
+      id: 98418
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_20_out
+      id: 98419
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_21_out
+      id: 98420
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_21_out
+      id: 98421
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_22_out
+      id: 98422
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_22_out
+      id: 98423
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_23_out
+      id: 98424
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_23_out
+      id: 98425
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+  - graph_name: token_ar1_cl3072_3_of_4
+    input_tensors:
+    - tensor_name: attention_mask
+      id: 98426
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,1,3072]
+    - tensor_name: past_key_12_in
+      id: 98429
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3071]
+    - tensor_name: past_value_12_in
+      id: 98446
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3071,128]
+    - tensor_name: past_key_13_in
+      id: 98463
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3071]
+    - tensor_name: past_value_13_in
+      id: 98480
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3071,128]
+    - tensor_name: past_key_14_in
+      id: 98497
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3071]
+    - tensor_name: past_value_14_in
+      id: 98514
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3071,128]
+    - tensor_name: past_key_15_in
+      id: 98531
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3071]
+    - tensor_name: past_value_15_in
+      id: 98548
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3071,128]
+    - tensor_name: past_key_16_in
+      id: 98565
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3071]
+    - tensor_name: past_value_16_in
+      id: 98582
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3071,128]
+    - tensor_name: past_key_17_in
+      id: 98599
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3071]
+    - tensor_name: past_value_17_in
+      id: 98616
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3071,128]
+    - tensor_name: past_key_18_in
+      id: 98633
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3071]
+    - tensor_name: past_value_18_in
+      id: 98650
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3071,128]
+    - tensor_name: past_key_19_in
+      id: 98667
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3071]
+    - tensor_name: past_value_19_in
+      id: 98684
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3071,128]
+    - tensor_name: past_key_20_in
+      id: 98701
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3071]
+    - tensor_name: past_value_20_in
+      id: 98718
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3071,128]
+    - tensor_name: past_key_21_in
+      id: 98735
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3071]
+    - tensor_name: past_value_21_in
+      id: 98752
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3071,128]
+    - tensor_name: past_key_22_in
+      id: 98769
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3071]
+    - tensor_name: past_value_22_in
+      id: 98786
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3071,128]
+    - tensor_name: past_key_23_in
+      id: 98803
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3071]
+    - tensor_name: past_value_23_in
+      id: 98820
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3071,128]
+    - tensor_name: _model_model_layers_11_Add_1_output_0
+      id: 98837
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,2560]
+    - tensor_name: position_ids_cos
+      id: 99305
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,1,64]
+    - tensor_name: position_ids_sin
+      id: 99307
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,1,64]
+    output_tensors:
+    - tensor_name: _model_model_layers_23_Add_1_output_0
+      id: 112448
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,2560]
+    - tensor_name: past_key_12_out
+      id: 112449
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_12_out
+      id: 112450
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_13_out
+      id: 112451
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_13_out
+      id: 112452
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_14_out
+      id: 112453
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_14_out
+      id: 112454
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_15_out
+      id: 112455
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_15_out
+      id: 112456
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_16_out
+      id: 112457
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_16_out
+      id: 112458
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_17_out
+      id: 112459
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_17_out
+      id: 112460
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_18_out
+      id: 112461
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_18_out
+      id: 112462
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_19_out
+      id: 112463
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_19_out
+      id: 112464
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_20_out
+      id: 112465
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_20_out
+      id: 112466
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_21_out
+      id: 112467
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_21_out
+      id: 112468
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_22_out
+      id: 112469
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_22_out
+      id: 112470
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_23_out
+      id: 112471
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_23_out
+      id: 112472
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+  - graph_name: prompt_ar128_cl4096_3_of_4
+    input_tensors:
+    - tensor_name: attention_mask
+      id: 112473
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,128,4096]
+    - tensor_name: past_key_12_in
+      id: 112476
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3968]
+    - tensor_name: past_value_12_in
+      id: 112493
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3968,128]
+    - tensor_name: past_key_13_in
+      id: 112510
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3968]
+    - tensor_name: past_value_13_in
+      id: 112527
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3968,128]
+    - tensor_name: past_key_14_in
+      id: 112544
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3968]
+    - tensor_name: past_value_14_in
+      id: 112561
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3968,128]
+    - tensor_name: past_key_15_in
+      id: 112578
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3968]
+    - tensor_name: past_value_15_in
+      id: 112595
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3968,128]
+    - tensor_name: past_key_16_in
+      id: 112612
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3968]
+    - tensor_name: past_value_16_in
+      id: 112629
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3968,128]
+    - tensor_name: past_key_17_in
+      id: 112646
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3968]
+    - tensor_name: past_value_17_in
+      id: 112663
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3968,128]
+    - tensor_name: past_key_18_in
+      id: 112680
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3968]
+    - tensor_name: past_value_18_in
+      id: 112697
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3968,128]
+    - tensor_name: past_key_19_in
+      id: 112714
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3968]
+    - tensor_name: past_value_19_in
+      id: 112731
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3968,128]
+    - tensor_name: past_key_20_in
+      id: 112748
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3968]
+    - tensor_name: past_value_20_in
+      id: 112765
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3968,128]
+    - tensor_name: past_key_21_in
+      id: 112782
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3968]
+    - tensor_name: past_value_21_in
+      id: 112799
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3968,128]
+    - tensor_name: past_key_22_in
+      id: 112816
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3968]
+    - tensor_name: past_value_22_in
+      id: 112833
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3968,128]
+    - tensor_name: past_key_23_in
+      id: 112850
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,3968]
+    - tensor_name: past_value_23_in
+      id: 112867
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,3968,128]
+    - tensor_name: _model_model_layers_11_Add_1_output_0
+      id: 112884
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,128,2560]
+    - tensor_name: position_ids_cos
+      id: 113352
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,128,64]
+    - tensor_name: position_ids_sin
+      id: 113354
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,128,64]
+    output_tensors:
+    - tensor_name: _model_model_layers_23_Add_1_output_0
+      id: 126519
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,128,2560]
+    - tensor_name: past_key_12_out
+      id: 126520
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_12_out
+      id: 126521
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_13_out
+      id: 126522
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_13_out
+      id: 126523
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_14_out
+      id: 126524
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_14_out
+      id: 126525
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_15_out
+      id: 126526
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_15_out
+      id: 126527
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_16_out
+      id: 126528
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_16_out
+      id: 126529
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_17_out
+      id: 126530
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_17_out
+      id: 126531
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_18_out
+      id: 126532
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_18_out
+      id: 126533
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_19_out
+      id: 126534
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_19_out
+      id: 126535
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_20_out
+      id: 126536
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_20_out
+      id: 126537
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_21_out
+      id: 126538
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_21_out
+      id: 126539
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_22_out
+      id: 126540
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_22_out
+      id: 126541
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_key_23_out
+      id: 126542
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+    - tensor_name: past_value_23_out
+      id: 126543
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,128]
+  - graph_name: token_ar1_cl4096_3_of_4
+    input_tensors:
+    - tensor_name: attention_mask
+      id: 126544
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,1,4096]
+    - tensor_name: past_key_12_in
+      id: 126547
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,4095]
+    - tensor_name: past_value_12_in
+      id: 126564
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,4095,128]
+    - tensor_name: past_key_13_in
+      id: 126581
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,4095]
+    - tensor_name: past_value_13_in
+      id: 126598
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,4095,128]
+    - tensor_name: past_key_14_in
+      id: 126615
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,4095]
+    - tensor_name: past_value_14_in
+      id: 126632
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,4095,128]
+    - tensor_name: past_key_15_in
+      id: 126649
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,4095]
+    - tensor_name: past_value_15_in
+      id: 126666
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,4095,128]
+    - tensor_name: past_key_16_in
+      id: 126683
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,4095]
+    - tensor_name: past_value_16_in
+      id: 126700
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,4095,128]
+    - tensor_name: past_key_17_in
+      id: 126717
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,4095]
+    - tensor_name: past_value_17_in
+      id: 126734
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,4095,128]
+    - tensor_name: past_key_18_in
+      id: 126751
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,4095]
+    - tensor_name: past_value_18_in
+      id: 126768
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,4095,128]
+    - tensor_name: past_key_19_in
+      id: 126785
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,4095]
+    - tensor_name: past_value_19_in
+      id: 126802
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,4095,128]
+    - tensor_name: past_key_20_in
+      id: 126819
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,4095]
+    - tensor_name: past_value_20_in
+      id: 126836
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,4095,128]
+    - tensor_name: past_key_21_in
+      id: 126853
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,4095]
+    - tensor_name: past_value_21_in
+      id: 126870
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,4095,128]
+    - tensor_name: past_key_22_in
+      id: 126887
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,4095]
+    - tensor_name: past_value_22_in
+      id: 126904
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,4095,128]
+    - tensor_name: past_key_23_in
+      id: 126921
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,4095]
+    - tensor_name: past_value_23_in
+      id: 126938
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,4095,128]
+    - tensor_name: _model_model_layers_11_Add_1_output_0
+      id: 126955
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,2560]
+    - tensor_name: position_ids_cos
+      id: 127423
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,1,64]
+    - tensor_name: position_ids_sin
+      id: 127425
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,1,64]
+    output_tensors:
+    - tensor_name: _model_model_layers_23_Add_1_output_0
+      id: 140566
+      datatype: QNN_DATATYPE_UFIXED_POINT_16
+      dimensions: [1,1,2560]
+    - tensor_name: past_key_12_out
+      id: 140567
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_12_out
+      id: 140568
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_13_out
+      id: 140569
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_13_out
+      id: 140570
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_14_out
+      id: 140571
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_14_out
+      id: 140572
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_15_out
+      id: 140573
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_15_out
+      id: 140574
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_16_out
+      id: 140575
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_16_out
+      id: 140576
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_17_out
+      id: 140577
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_17_out
+      id: 140578
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_18_out
+      id: 140579
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_18_out
+      id: 140580
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_19_out
+      id: 140581
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_19_out
+      id: 140582
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_20_out
+      id: 140583
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_20_out
+      id: 140584
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_21_out
+      id: 140585
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_21_out
+      id: 140586
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_22_out
+      id: 140587
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_22_out
+      id: 140588
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]
+    - tensor_name: past_key_23_out
+      id: 140589
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,128,1]
+    - tensor_name: past_value_23_out
+      id: 140590
+      datatype: QNN_DATATYPE_UFIXED_POINT_8
+      dimensions: [8,1,1,128]

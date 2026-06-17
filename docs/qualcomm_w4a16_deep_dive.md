@@ -245,13 +245,15 @@ algorithm above, not the binary.**
 
 ## Phase 4 — delta vs llama.cpp + synthesis
 
-### Measured throughput (same X2 Elite, this project)
+### Measured throughput — clean A/B, same X2 Elite, this session
 | path | prefill | decode | quant | data movement |
 |---|---|---|---|---|
-| **Qualcomm w4a16, ORT-QNN, AR128** | **2229 pp** | 27.8 tg | w4 / uint16 act / uint8 KV | shared_buffer zero-copy, mmap weights |
-| llama.cpp HTP, Q4_0 | ~102–175 pp (plateau) | ~18 tg | Q4_0 → **fp16 dequant** then fp16 HMX | per-op DDR↔VTCM, LUT dequant pre-pass |
+| **Qualcomm w4a16, ORT-QNN, AR128** | **2229 pp** | **27.8 tg** | w4 block-wise / uint16 act / uint8 KV | shared_buffer zero-copy, mmap weights |
+| llama.cpp HTP, Q4_0 (fresh, `llama-bench` today) | **187 pp** | **19.9 tg** | Q4_0 → fp16/W4A8 HMX | per-op DDR↔VTCM |
 
-The ~13× prefill gap is **not** a magic matmul (Phase 3 shows the w4 Conv is only
+**Prefill gap 11.9×; decode gap only 1.4×.** Decode is close because *both* are
+weight-bandwidth-bound AND GEMV-starved (AR1 wastes 31/32 of the HMX tile) — so
+the whole story is prefill, and the prefill gap is **not** a magic matmul (Phase 3 shows the w4 Conv is only
 ~15% of prefill, and the probe in the sibling doc proved there is no native
 int4×fp16 HMX primitive). It decomposes as:
 
