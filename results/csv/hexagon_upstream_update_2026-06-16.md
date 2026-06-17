@@ -34,3 +34,34 @@ not a single fixable op.
 -ngl 34 (small hybrid offload) slightly beats all-on-HTP. Both crash on TEARDOWN
 (dspqueue_write 0x0e, 4-session churn — known fragility) but results are valid.
 Q4_0 GGUF IS the w4a16-equivalent (int4 weights -> fp16 HMX); no special download.
+
+## Qwen3.6-35B-A3B-MXFP4_MOE (20.2 GiB) — max-NPU-residency for background/battery UX
+
+New build, -fa 1, GGML_HEXAGON_NDEV=4, HTP0-3. Goal: max NPU residency (silent,
+power-efficient, leaves CPU/GPU free), speed secondary.
+
+| -ngl | pp | tg16 | NPU resident | overflow |
+|-----:|---:|-----:|-------------:|---------:|
+| 24 | pp512 138.8 | 15.42 | (less) | more on GPU/CPU (faster) |
+| 30 | pp128 79.9 | 15.55 | | |
+| 40 | pp128 65.2 | - | | |
+| **99 (max NPU)** | pp128 63.7 | 13.4 | **~12 GB (HTP-REPACK)** | **~8 GB CPU_REPACK** |
+
+- At -ngl 99: **~12 GB of the 20 GB model is NPU-resident**, ~8 GB spills to CPU
+  (the MXFP4 MoE experts). 41/41 offloadable layers on HTP. tg16 13.4 (A3B = ~3B
+  active/token, so decode beats the 14B's 12.2).
+- Each HTP session maps 3.35 GB vmem (v81 default) -> ~13.4 GB HTP-mappable (more
+  than the old ~8 GB assumption).
+- Tradeoff confirmed: more -ngl = more NPU residency but slower pp (HTP prefill <
+  GPU for MoE). User priority = residency -> -ngl 99.
+- Overflow currently -> CPU. Redirect to GPU (keep CPU free) needs --override-tensor
+  routing the *_exps tensors to GPUOpenCL (adding GPUOpenCL to --device alone
+  didn't move them). TODO.
+
+## Teardown crash FIXED (host-side, ggml-hexagon.cpp:2180)
+
+Root cause: 4-session heavy load fills the DSP request queue; host flush_batch
+used finite DSPQUEUE_TIMEOUT and GGML_ABORT'd on AEE_EWOULDBLOCK (0x0e, queue
+full). Fix: on EWOULDBLOCK, drain completed responses (flush_pending) + retry
+(matches the op_queue->push backpressure pattern). Host-only change (no skel
+rebuild). Required for using these models in a coding harness.
