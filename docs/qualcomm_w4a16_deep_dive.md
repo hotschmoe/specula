@@ -159,9 +159,95 @@ Accelerator execute total **36.4M cycles**.
   decode (~26 t/s) is per-op-overhead-bound, which is why decode is slow regardless
   of quant.
 
-## Phase 2 — HTP instruction-level dissection (the "how")
-_(in progress — disassemble the Conv/MatMul kernels in the .bin HTP blob with
-hexagon-llvm-objdump to confirm the int4→fp16 decompress + HMX tiling)_
+## Phase 2 — HTP instruction-level dissection (the "how") — tooling-blocked
+
+The `.bin` does **not** contain custom matmul machine code — QNN HTP references
+**pre-compiled op kernels in `libQnnHtpV81Skel.so`** (the DSP skel, 11 MB, 6.5 MB
+`.text`) by op type + params. So the real w4a16 matmul HMX instructions live in
+the skel, shared across all models.
+
+Disassembling the skel (`hexagon-llvm-objdump -d`, the SDK 6.6 LLVM-19 build):
+- Decodes standard Hexagon scalar + **HVX** (`vmem`, vector ALU) fine — the
+  kernels are HVX-heavy (9051 `vmem`).
+- **Cannot decode the HMX matrix instructions** — they appear as **`<unknown>`
+  (6117 of them)**. `--mattr=help` exposes only `mhvx`/`mv81`; there is **no HMX
+  feature flag** in the public LLVM Hexagon backend (HMX matrix ops are a
+  Qualcomm-internal extension). Skel symbols are stripped (no kernel names).
+
+So the exact matmul mnemonics (`weight.ubit` vs `weight.hf`, the tiling) are
+**not recoverable with the available tools** — the same undocumented-HMX-ISA wall
+that blocks our w4a8 kernel (see `hmx_single_tile_probe_findings.md`), now
+confirmed from the binary side: the HMX matrix instructions exist as
+undecodable words embedded in HVX-heavy kernels. Reading them would need the
+internal Qualcomm assembler/PRM. The structural (Phase 1) + per-op-timing
+(Phase 3) evidence stands on its own for the mechanism.
+
+## Phase 4 — delta vs llama.cpp + synthesis
+
+### Measured throughput (same X2 Elite, this project)
+| path | prefill | decode | quant | data movement |
+|---|---|---|---|---|
+| **Qualcomm w4a16, ORT-QNN, AR128** | **2229 pp** | 27.8 tg | w4 / uint16 act / uint8 KV | shared_buffer zero-copy, mmap weights |
+| llama.cpp HTP, Q4_0 | ~102–175 pp (plateau) | ~18 tg | Q4_0 → **fp16 dequant** then fp16 HMX | per-op DDR↔VTCM, LUT dequant pre-pass |
+
+The ~13× prefill gap is **not** a magic matmul (Phase 3 shows the w4 Conv is only
+~15% of prefill, and the probe in the sibling doc proved there is no native
+int4×fp16 HMX primitive). It decomposes as:
+
+1. **Per-op overhead amortisation (the big one).** Each layer is ~hundreds of
+   ops (Phase 3: 792 MatMul + 600 Conv + 1945 Mul + … across 12 layers). Every op
+   has a fixed ~10–18k-cycle floor (kernel launch + VTCM acquire + weight DMA).
+   Qualcomm's **AR128** graph pays that floor once per op for **128 tokens**
+   (~46× more cycle-efficient/token than AR1). llama.cpp batches too but
+   **plateaus ~170 pp** — its per-op dispatch + graph-build overhead and VTCM
+   churn keep it from amortising as well as the **fully-compiled, statically-
+   scheduled QNN context** (one finalised HTP program for the whole 12-layer
+   part, weights resident, IO shared-buffer).
+2. **Weight bandwidth.** Qualcomm keeps weights **w4 in VTCM** (¼ the DDR→VTCM
+   traffic) and decompresses inline; llama.cpp's HTP path runs a separate
+   `q4_0_to_fp16_lut` pass that **materialises full fp16 weight tiles** → 2×
+   weight bandwidth + an extra pass. Prefill is bandwidth-sensitive.
+3. **Zero-copy IO + uint8 KV + burst + poll.** shared_buffer removes the FastRPC
+   IO copy; uint8 KV is ¼/½ the KV traffic; burst pins clocks; poll removes
+   wakeup latency. llama.cpp's backend does more explicit DDR↔VTCM movement.
+4. **Whole-graph fusion/scheduling.** The QNN compiler fuses RoPE/norm/dequant/
+   matmul and schedules DMA double-buffering across the finalised layer graph;
+   llama.cpp executes ggml ops one-at-a-time with the scheduler between them.
+
+### What this means for an open engine (actionable)
+- **The single biggest lever is reducing per-op overhead / increasing fusion +
+  static scheduling**, not the quant scheme — Qualcomm's win is mostly that a
+  whole 12-layer part is ONE finalised, weight-resident, shared-buffer HTP
+  program executed over a 128-wide batch.
+- **Cheap, no-new-kernel win for llama.cpp:** keep Q4_0 weights packed into VTCM
+  and decompress **inline/fused** (drop the `q4_0_to_fp16_lut` full-tile pre-pass)
+  → recover much of lever #2 with the existing fp16 HMX matmul.
+- **uint8 KV + shared-buffer IO** in the llama.cpp HTP backend → lever #3.
+- w4a8 (integer HMX, sibling doc) is a *later* increment — it adds throughput +
+  ¼ activation bandwidth but is gated on the undocumented HMX integer ISA.
+
+---
+
+## Executive summary — how Qualcomm hits 2200+ pp
+1. **w4 weights, uint16 (fixed-point) activations, uint8 KV**, uint16 tied
+   embed/lm_head. The matmul is int4-weight × uint16-act, decompressed inline
+   (no native int4×fp16 primitive exists — proven in the sibling probe doc).
+2. **AR128 batched prefill** processes 128 tokens per graph call, amortising the
+   ~hundreds-of-ops-per-layer fixed overhead + weight DMA → **~46× more
+   cycle-efficient per token than AR1 decode** (the dominant lever).
+3. **One finalised, statically-scheduled HTP program per 12-layer part**, with
+   **weight sharing** across all 10 graphs (prefill+decode × 5 ctx tiers), so the
+   615 MB w4 weights load once (730 ms) and stay resident.
+4. **Zero-copy data movement**: shared_buffer IO, mmap weights, uint8 KV, burst
+   clocks, busy-poll completion.
+5. In prefill the **w4 matmul (Conv) is only ~15%** of cycles; attention (34%)
+   and elementwise (22%) dominate — i.e. the quant/matmul is already cheap and
+   amortised, and the rest is well-tiled and fused. The gap to llama.cpp is
+   overhead/fusion/bandwidth, not arithmetic.
+
+Reproduce: `scripts/dissect_qualcomm_bundle.py` (Phase 1),
+`scripts/qnn_profile_allgraphs.py` + `qnn-net-run` + `qnn-profile-viewer` +
+`scripts/parse_qnn_profile.py` (Phase 3); DSP transport via ORT's signed skel.
 
 ## Phase 4 — delta vs llama.cpp + synthesis
 _(in progress)_
