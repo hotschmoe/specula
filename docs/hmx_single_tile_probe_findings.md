@@ -111,5 +111,43 @@ moot given the ~6500× magnitude error with no clean scale.)
   per-32-block Q4_0 fp16 scale. The fp16 Rosetta tile (slot 11) anchors the
   readout decode.
 
+## w4a8 fold — precise characterization (from the naive-layout probe)
+
+A single `Q6_mxmem_AR_after_uh_2x2` call on the integer accumulator (naive
+`off=r*32+c` view of the raw 1024-float dump):
+
+- **Writes 256 of 1024 positions**: naive rows {0,2,4,…,14} only (even, <16),
+  all 32 naive cols. Odd rows and rows ≥16 stay 0.
+- **Row map + scale** (slot4 ramp, value = 8·(naive_r+1)) is consistent with
+  `value = acc/8` where `acc = 32·(true_r+1)` and `true_r = 2·naive_r+1`
+  (i.e. one call captures only true rows ≡ 1 (mod 4) — 8 of 32). Equivalent
+  reading: only ~4 of 32 K-lanes contract (acc≈4 for all-ones) → same numbers.
+- **Col fold** (slot5 colpair): naive cols collapse to a `[8,8,12,12]`
+  repeat — only ~2 distinct true col-pairs captured.
+
+Every one of these (1/4 rows, fixed scale, col fold, K-subset) is a symptom of
+the **naive row-major tile fill not matching HMX's required layouts**. The fix
+is not more probing of the naive fill — it is to feed inputs in the documented
+QAIRT layouts.
+
+## Scoped next steps (w4a8, in order)
+
+1. **Implement the authoritative input layouts** in the probe fill functions:
+   `R4Weights8x4Layout` for the int4 weight tile and the uint8-activation
+   crouton (`QNN/HTP/core/memory_layout.h` + `tile_extract.h`). Re-probe
+   all-ones: success = uniform value across the full set the readout writes,
+   with the correct magnitude (32, not 4).
+2. **Resolve the `uh_2x2` partial readout**: determine the call count / variant
+   (`uh_2x2` vs `uh_2x1`, `:retain`) needed to emit all 1024 outputs, and the
+   `(r,c)→offset` permutation. Anchor with the fp16 Rosetta tile (slot 11,
+   known crouton).
+3. **Pin the fixed scale** (the ÷8 / K-subset factor) once layouts are right.
+4. Fold the **per-32-block Q4_0 fp16 scale** (the structural Unknown #3) via
+   per-block partial readouts or the `mxmem2` column-bias.
+5. Then flip `HTP_W4A16_VALIDATED`, validate one real Q4_0 tile vs CPU
+   (`test-backend-ops -o MUL_MAT` on HTP, single small shape), then full
+   `llama-bench` numerics (cos vs fp16 path) + PP vs the 175/2224 references.
+
 Artifacts: `results/hmx_probe_raw*.bin`, `scripts/analyze_hmx_probe.py`,
-probe + harness on branch `npu-int4a16-hmx`.
+probe + harness on branch `npu-int4a16-hmx`
+(`-DGGML_HEXAGON_W4A16_PROBE=ON` → `tests/test-hmx-probe.exe`).

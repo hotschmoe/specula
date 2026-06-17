@@ -1,5 +1,38 @@
 # specula -- current status
 
+## SESSION 2026-06-16 (late) — HMX single-tile probe: native w4a16 DISPROVEN, w4a8 MAC confirmed
+
+Built an **on-device HMX single-tile reverse-engineering probe** to settle the
+two open kernel questions on real v81 silicon. Full writeup:
+**`docs/hmx_single_tile_probe_findings.md`**.
+
+**Headline (success criterion #1, definitive):** there is **NO native
+int4-weight × fp16-activation ("w4a16") HMX primitive** on v81. On a harness
+validated by the proven `fp16×fp16` all-ones tile reading back exactly **32.0**,
+all three int4 weight loaders fail to dequantize in an fp16 pass:
+`Q6_weight_ubit`→0.0099, `Q6_weight_n`→0.0049, `Q6_weight_sbit`→0.0099 vs the
+required 32 (~3000–6500× too small; `ubit` also non-linear in the weight value).
+The REOPENED "plausible native w4a16" hypothesis is now **empirically disproven**
+— closed in `docs/llama_hexagon_qwen35_w4a16_plan.md` and memory
+[[reference_hmx_w4a16_no_native_primitive]].
+
+**w4a8 (int4 × uint8 → int32) MAC CONFIRMED WORKING** — structure-preserving
+(uniform→uniform, row/col ramps tracked). Remaining: the naive row-major tile
+fill causes consistent folding (a single `uh_2x2` writes 256/1024, ÷8-ish scale,
+row/col fold) → next step is the authoritative QAIRT tile layouts
+(`R4Weights8x4Layout` + uint8 crouton) + partial-readout assembly + per-block
+scale. Precise fold characterization + scoped next steps in the findings doc.
+
+**Reusable harness (branch `npu-int4a16-hmx` in `llama-int4a16` worktree):**
+`hmx_w4a16_probe()` builds KNOWN VTCM tiles and dumps RAW readout tiles to a
+host-visible dst (DSP FARF is NOT visible on stdout on Windows — verified — so
+dump-to-dst is the mechanism). Built with `-DGGML_HEXAGON_W4A16_PROBE=ON`; host
+reader `tests/test-hmx-probe.cpp`; offline analysis `scripts/analyze_hmx_probe.py`.
+Also confirmed this session: the signed-cat HTP stack loads on HTP0 and the fp16
+dequant matmul path runs on-device (`test-backend-ops -o MUL_MAT -b HTP0`).
+
+---
+
 ## SESSION 2026-06-16 — 14B NPU runtime: fp16 build bug found + FIXED, decode in progress
 
 Ran the 10-part Qwen3-14B w8a16 bundle on the X2E Hexagon. Found two
