@@ -94,6 +94,34 @@ De-risk order: confirm dequant cost via `GGML_HEXAGON_PROFILE`; int8×int8
 first; validate numerics (cos vs fp16 path) + PP on the 4B at each step.
 Detailed file-level plan: subagent report captured in this session's log.
 
+## w4a8 UNBLOCK (2026-06-16) — HMX tile layouts ARE documented (in QAIRT)
+
+The HMX integer matrix *ISA* (operand semantics, `Rt`) is undocumented (htp-ops-lib
++ the paper reverse-engineered it from binaries). BUT the HMX **tile layouts**
+are formally defined in **QAIRT's `include/QNN/HTP/core/memory_layout.h` +
+`tile_extract.h`** — present locally at
+`C:\Qualcomm\AIStack\QAIRT\2.45.40.260406\include\QNN\HTP\core\` AND on the box
+(the PRM agent missed them — they're in the QAIRT *AIStack* include tree, not
+the Hexagon SDK). Key classes (`ChunkedMemoryLayout` templates):
+- **`R4Crouton2x2Layout`** (YYXXDDDDDYX) = the `uh_2x2` integer readout (Gap 3).
+- **`R4Weights8x4Layout`** = HMX weight tile packing (Gap 1).
+- `R4CroutonLayout` (8×8×32) = the fp16 activation/output Crouton (matches the
+  verified `test.c` formula `tile[(i&~1)*32 + j*2 + (i&1)]`).
+`tile_extract.h` has the pack/extract helpers that consume these.
+
+Resolved (PRM agent): int32 accumulation from uint8×int4 = YES (`Q6_mxclracc`
+non-hf); do NOT use `mxmem2` for the per-(row,col) rescale or the Q4_0 −8
+zero-point — do those in HVX post-readout. `Rt` = packed-tile-byte-count−1
+(fp16: 2048·n−1; int4/uint8 byte sizes differ, decode from the layouts).
+
+**w4a8 path forward (a focused sub-project, not a dead end):** decode
+`R4Weights8x4Layout` (int4 weight pack) + `R4Crouton2x2Layout` (int readout)
+from the headers → fill the 3 stubs in `core_dot_chunk_int4_int8` /
+`hmx_mat_mul_permuted_q4_0_w4a16` on `npu-int4a16-hmx` → **on-device single-tile
+numeric probe** (32×256×32, compare to CPU ref) to confirm packing/Rt/readout →
+full bench vs fp16. Keep the compile-gated `-1` guard until the single-tile
+probe passes (prevents wrong output / crashes).
+
 ## ⚠️ PREMISE CORRECTION (2026-06-16) — "int4×fp16 HMX" is not a primitive
 
 Verified against the **on-target** intrinsics header

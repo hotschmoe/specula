@@ -88,6 +88,16 @@ the ~10 GB ceiling (4 process domains). **Models >~8 GB require hybrid
   ships a custom skel that must be signed. **Fix = the signing steps below,
   then rebuild the skel with `HEXAGON_HTP_CERT` set so it gets signed.**
 
+## Dev environment: native Windows ARM64 only (NOT WSL/Docker)
+The Hexagon NPU is driven via FastRPC → `libcdsprpc.dll` → the `qcnspmcdm`
+Windows kernel driver — a **Windows-native** stack. **WSL2 has no NPU
+passthrough; Windows/Linux containers can't reach the cDSP.** Test-signing,
+the skel cert, and the runtime are all Windows-only and every DSP test must
+run natively. So all NPU build+run work happens in native Windows ARM64 here.
+(Offline build steps — export/quantize/context-bin — DO run in Linux/Docker on
+the Threadripper; that's x86, no NPU execution. Native-Linux-on-Snapdragon is a
+separate device class, not this laptop.)
+
 ## YOUR part — DSP code-signing (one-time, needs admin + reboot)
 
 The HTP skel must be signed to load on the DSP via FastRPC. On Windows we use
