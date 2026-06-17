@@ -94,6 +94,46 @@ De-risk order: confirm dequant cost via `GGML_HEXAGON_PROFILE`; int8×int8
 first; validate numerics (cos vs fp16 path) + PP on the 4B at each step.
 Detailed file-level plan: subagent report captured in this session's log.
 
+## #11 kernel — concrete spec + findings (2026-06-16)
+
+**De-risk DONE — integer HMX is real on v81.** `hmx_hexagon_protos.h`
+(SDK 6.6 / HEXAGON_Tools 19.0.07) exposes: activations `Q6_activation_ub`
+(uint8), `_hf` (fp16), `_f8` (fp8) — **no int16 activation**, so "w4a16" =
+int4-weight × **fp16**-activation; weights `Q6_weight_b` (int8),
+`Q6_weight_ubit/sbit` (int4 unsigned/signed), `_hf` (fp16); accumulators
+`Q6_mxclracc` (int) / `_hf` (fp16). HMX supports INT4/INT8/INT16/FP16 and
+**applies per-output-channel scale+bias in hardware** (the `Q6_bias_mxmem2`
+path the fp16 kernel already uses for Q4_0/Q8_0 scales).
+
+**The proven fp16 template to mirror** (`hmx-matmul-ops.c::core_dot_chunk_fp16`):
+```c
+Q6_bias_mxmem2_A(scales);            // per-channel scales
+for r,c tiles:
+    Q6_mxclracc_hf();                // clear fp16 acc
+    for k: Q6_activation_hf_mxmem_RR(act); Q6_weight_hf_mxmem_RR(wt);  // matmul-acc
+    Q6_mxmem_AR_after_hf(out, 0);    // readout fp16
+```
+Two candidate integer paths:
+- **int8×int8 (stepping stone, `npu-int8-hmx`):** `Q6_mxclracc()` +
+  `Q6_activation_ub_mxmem_RR` (uint8 act, needs per-row fp32→uint8 quant +
+  zero-point) + `Q6_weight_b_mxmem_RR` (int8 wt, reuse Q8_0 x4x2 quants, skip
+  the fp16 dequant) → int32 readout → rescale by act_scale×wt_scale. Clearest
+  integer semantics; more host code (activation quant + rescale).
+- **int4×fp16 (the prize, `npu-int4a16-hmx`, agent):** keep `Q6_activation_hf`
+  (no activation quant!) + `Q6_weight_ubit/sbit_mxmem` (int4, no dequant, ¼
+  weight bandwidth). Minimal-change vs fp16 if int4-wt × fp16-act is a valid
+  HMX mode with fp16 accumulate.
+
+**BLOCKED ON: the HMX matrix-instruction semantics** — valid activation×weight
+pairings, accumulator/readout per pairing, int8 tile layout, and exact
+scale/zero-point application. NOT in the SDK (the `qhl_hmx` sample was removed;
+`haozixu/htp-ops-lib` is fp16-only). Authoritative source = **Hexagon V79
+Programmer's Reference, matrix (HMX) instructions**
+(docs.qualcomm.com/.../80-N2040-60/instructions.html). **Do NOT write+run HMX
+intrinsics on the DSP without these — wrong intrinsics crash the FastRPC
+transport (machine-level).** Plan: confirm semantics from the V79 manual →
+compile-only draft → isolated single-tile numeric test → integrate.
+
 ## Suggested order
 1. ✅ Quant baseline bench (#9, done — Q4_0 for dense).
 2. ✅ `qwen35` arch (#10, already in llama.cpp; 27B+35B run hybrid on NPU).
