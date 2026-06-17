@@ -94,6 +94,23 @@ De-risk order: confirm dequant cost via `GGML_HEXAGON_PROFILE`; int8×int8
 first; validate numerics (cos vs fp16 path) + PP on the 4B at each step.
 Detailed file-level plan: subagent report captured in this session's log.
 
+## w4a8 KERNEL — compile-complete, 3 on-device unknowns (2026-06-16)
+
+`npu-int4a16-hmx` commit `2aad888`: stubs filled from the QAIRT headers + the
+fp16 path. Compiles clean (`-Werror`) with `-DGGML_HEXAGON_W4A16=ON` and the
+`HTP_W4A16_VALIDATED` branch; still `-1`-guarded (no DSP output until validated).
+- **Rt**: uint8 tile→1023, int4 tile→511 (HIGH; `packed_bytes−1`).
+- **Rescale**: full 4-term int32→fp32 correction `dot = acc −8·Σq −128·Σv +8·128·K`
+  (host-exact). Fixed a missing +128 zero-point bug in the original draft.
+- **uh_2x2 readout**: `elem_off(h,w,d)=(w&1)+2*(h&1)+4*d+128*(w>>1)+512*(h>>1)`
+  (formula HIGH; isolated in `hmx_uh_2x2_elem_off()`).
+- **3 ON-DEVICE UNKNOWNS** (the probe resolves these): (1) int4 nibble order
+  inside the `ubit` tile (`repack_q4_0_x4x2_to_int4_tiles`); (2) the
+  acc(row,col)→(h,w,d) axis assignment in `hmx_uh_2x2_elem_off`; (3) **per-block
+  Q4_0 scale** — the single full-K `uh_2x2` readout sums over K so per-32-block
+  fp16 scales collapse; needs **per-block partial readouts** (or push scale into
+  the `mxmem2` column-bias). This is structural, the dominant accuracy residual.
+
 ## w4a8 UNBLOCK (2026-06-16) — HMX tile layouts ARE documented (in QAIRT)
 
 The HMX integer matrix *ISA* (operand semantics, `Rt`) is undocumented (htp-ops-lib
