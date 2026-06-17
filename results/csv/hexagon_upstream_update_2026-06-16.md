@@ -13,3 +13,24 @@ Key: HMX flash attention (#22347) makes -fa 1 win (was -fa 0). Gap to Qualcomm
 w4a16 bundle (2229 pp ORT-QNN): 11.9x -> 2.64x. Pin -fa 1 on HTP.
 Levers in the update: #23368 (HMX matmul rework), #23835 (op fusion), #22347
 (HMX FA), #22334 (max clock), #23989 (MUL_MAT/FA opt).
+
+## Profiling the remaining 2.64x (GGML_HEXAGON_PROFILE=1, -v)
+
+pp512 forward = ONE op-batch of 687 ops, htp-ops-usec 595883 (=596ms, matches 844 t/s).
+Op-type counts confirm all upstream wins are ENGAGED:
+- MUL_MAT 504 (7 projections x 72) | RMS_NORM+MUL 290 (FUSION working, #23835)
+- FLASH_ATTN_EXT 72 (HMX flash attn #22347) | SWIGLU 72 | ROPE/SET_ROWS/ADD 144 each
+Per-op usec NOT exposed in mode 1 (metadata only; batch total only). The 2.64x
+residue is architectural (687 separate ggml ops vs QNN's one finalized graph),
+not a single fixable op.
+
+## Qwen3-14B-Q4_0 (8.5GB) on new build, 4 sessions, -fa 1
+
+| config | pp512 | tg16 |
+|--------|------:|-----:|
+| NDEV=4 HTP0-3 -ngl 34 | 156.8 | 12.17 |
+| NDEV=4 HTP0-3 -ngl 99 | 153.2 | 11.38 |
+
+-ngl 34 (small hybrid offload) slightly beats all-on-HTP. Both crash on TEARDOWN
+(dspqueue_write 0x0e, 4-session churn — known fragility) but results are valid.
+Q4_0 GGUF IS the w4a16-equivalent (int4 weights -> fp16 HMX); no special download.
