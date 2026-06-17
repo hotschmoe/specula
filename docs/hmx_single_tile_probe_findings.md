@@ -130,17 +130,35 @@ the **naive row-major tile fill not matching HMX's required layouts**. The fix
 is not more probing of the naive fill — it is to feed inputs in the documented
 QAIRT layouts.
 
+## w4a8 readout mechanism — RESOLVED (probe v3)
+
+The integer readout's partial coverage is a property of the readout intrinsic +
+its `Rt`, now characterized on-device (int all-ones, naive input):
+
+| readout | positions written | row coverage |
+|---|---|---|
+| `Q6_mxmem_AR_after_uh_2x2`, Rt=0    | 256  | 8 rows (even 0..14) |
+| `Q6_mxmem_AR_after_uh_2x2`, Rt=1023 | 512  | 16 rows (even 0..30) |
+| `Q6_mxmem_AR_after_uh_2x1`, Rt=0    | **1024** | **all 32 rows** |
+| `Q6_mxmem_AR_after_hf` (fp16 ref)   | 1024 | all 32 rows |
+
+So **`uh_2x1` reads out the full 32×32 integer tile** (and `Rt` widens `uh_2x2`
+coverage). Use `uh_2x1` (or paired `uh_2x2` calls) for the integer readout. The
+remaining value error (uniform input still yields a 4-vs-240 split by row half)
+is the **naive input tile layout** folding — not the readout. That isolates the
+last unknown cleanly to the input layouts.
+
 ## Scoped next steps (w4a8, in order)
 
-1. **Implement the authoritative input layouts** in the probe fill functions:
+1. **Implement the authoritative input layouts** in the probe fill functions
+   (THE remaining unknown — readout is now resolved: use `uh_2x1`):
    `R4Weights8x4Layout` for the int4 weight tile and the uint8-activation
    crouton (`QNN/HTP/core/memory_layout.h` + `tile_extract.h`). Re-probe
    all-ones: success = uniform value across the full set the readout writes,
    with the correct magnitude (32, not 4).
-2. **Resolve the `uh_2x2` partial readout**: determine the call count / variant
-   (`uh_2x2` vs `uh_2x1`, `:retain`) needed to emit all 1024 outputs, and the
-   `(r,c)→offset` permutation. Anchor with the fp16 Rosetta tile (slot 11,
-   known crouton).
+2. ~~Resolve the `uh_2x2` partial readout~~ **DONE** — use `Q6_mxmem_AR_after_uh_2x1`
+   for full 32-row coverage (see table above). Still to pin: the exact
+   `(r,c)→offset` permutation, anchored against the fp16 Rosetta (slot 11).
 3. **Pin the fixed scale** (the ÷8 / K-subset factor) once layouts are right.
 4. Fold the **per-32-block Q4_0 fp16 scale** (the structural Unknown #3) via
    per-block partial readouts or the `mxmem2` column-bias.

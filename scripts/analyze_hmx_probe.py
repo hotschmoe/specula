@@ -35,6 +35,8 @@ SLOT_DESC = [
     "w4a16-mixed N    act row r=(r+1)",
     "w4a16-mixed sbit all-ones (Q6_weight_sbit; expect 32)",
     "fp16xfp16   PROVEN all-ones (Rosetta; acc=32)",
+    "w4a8-int    uh_2x2 Rt=1023 (coverage vs slot3?)",
+    "w4a8-int    uh_2x1 readout variant",
 ]
 NSLOT = len(SLOT_DESC)
 
