@@ -289,10 +289,101 @@ int4×fp16 HMX primitive). It decomposes as:
 
 ---
 
+## Phase 5 — RECONCILIATION: native A16W4 vs fp16-expand (the real answer)
+
+Two independent research passes (on-device binary RE of the skel + a literature
+sweep) converge on a nuanced, high-confidence conclusion that also explains our
+own w4a8 probe wall.
+
+**There are two distinct w4-on-HMX paths, and our bundle uses the second:**
+
+1. **Native integer A16W4** — HMX *does* have a native integer MAC taking a
+   16-bit fixed-point activation × 4-bit integer weight (corroborated:
+   ExecuTorch `16a4w`/`16a4w_block`, RWKV-Qualcomm A16W4 @62 tok/s, AI Hub
+   A8W4/A16W8 configs, Hot Chips '23 — the last tool-unverifiable but
+   substance-corroborated). **Constraint: it applies per-output-CHANNEL scale
+   only** (the 256-byte in-engine scale/bias region; integer accumulator sums
+   over K so it cannot carry per-K-block scales).
+
+2. **HVX int4→fp16 block-expand → fp16 HMX** — what our Qwen3-4B bundle actually
+   does (binary-confirmed: `expand_bq_s4_to_pkweights_fp16` + `hmx_convf16_*`,
+   `QNN_QUANTIZATION_ENCODING_BLOCKWISE_EXPANSION`).
+
+**Why our bundle takes path 2:** Qwen3-4B's w4 is **block-wise** (per-32-K-block
+fp16 scales, like Q4_0). Block scales **don't fit** the native integer MAC's
+per-output-channel-only scaling — so QNN expands int4→fp16 in HVX, *folding the
+per-block scale via `vmpy.hf`*, then runs fp16 HMX. **This is exactly the
+per-block-scale wall our w4a8 single-tile probe hit** (`hmx_single_tile_probe_findings.md`,
+"Unknown #3"): the integer HMX accumulator collapses per-block scales. Qualcomm
+doesn't solve that wall — it *avoids* it by expanding to fp16. The on-device
+probe (no usable native int4×fp16) + the binary RE + the literature now tell one
+consistent story.
+
+**Implication:** to use the *native integer A16W4* (and skip the fp16 expand) you
+must quantize weights **per-output-channel** (not per-block) in Qualcomm's exact
+packed-int4 + crouton layout. Block-wise w4 (the accuracy-friendly default)
+**cannot** use it. So for block-wise w4, "w4a16" == int4-storage + fp16 compute,
+and the speed is all amortisation/fusion/bandwidth — never a magic matmul.
+
+### Full-model clean timing (cl512, burst, qnn-net-run, all 4 parts)
+| part | layers | prompt_ar128 (128 tok) | token_ar1 (1 tok) |
+|---|---|---|---|
+| 1 (embed) | — | 0.055 ms | 0.025 ms |
+| 2 | 0–11 | 11.75 ms | 6.97 ms |
+| 3 | 12–23 | 11.50 ms | 6.78 ms |
+| 4 (+lm_head) | 24–35 | **20.83 ms** | **11.28 ms** |
+| **total** | 36 | **44.1 ms** | **25.1 ms** |
+
+- Full-model HTP compute: prefill **128/0.0441 = 2901 t/s**, decode
+  **1/0.0251 = 39.9 t/s** — vs measured end-to-end **2229 / 27.8** ⇒ ~23–30%
+  host/FastRPC-seam overhead. Numbers close cleanly.
+- **part4 is ~2× parts 2/3** purely from the **lm_head** (151936-vocab × 2560
+  projection on uint16) — the final projection is the single most expensive op,
+  ~9 ms of the 20.8 ms.
+- Embedding (part1) is negligible (gather + quantize).
+
+### Actionable for an open engine (from the literature + RE)
+1. **llama.cpp already has an HMX path** — PR **#23368** "hexagon: HMX quantized
+   matmul rework" (merged 2026-05-20): W4A8 (repack Q4_0→Q4x4x2 + dynamic int8
+   activations), +10% pp512 on Llama-3B. **Cheapest win: re-bench the X2E on a
+   post-2026-05 build** (our records predate it). [updates the "HVX-only"
+   premise — the backend is HMX now.]
+2. The QNN-vs-llama.cpp gap (issue **#18139**) is attributed to **(a)** latency
+   linear in K (no batch/staging) and **(b)** activations in VTCM rather than
+   weight-stationary — i.e. our **AR128 batching + weight-stationary tiling**
+   levers, exactly. PR #23368's activation-depth mode + 1K ubatch is the first
+   move on (a).
+3. **Match Qualcomm's path-2 recipe in ggml-hexagon:** int4→fp16 via `vlut16`
+   block-expand (fold per-block scale) into Crouton-packed VTCM tiles streamed
+   weight-stationary into fp16 HMX — reference: `haozixu/htp-ops-lib` +
+   `haozixu/llama.cpp-npu`. This is *the* reproducible recipe; it needs no
+   native-integer ISA.
+4. **Decode is architecturally GEMV-starved** — AR1 runs a [1,32] activation
+   through the 32×32 HMX tile, wasting 31/32 rows. No kernel rework fixes decode
+   utilisation; only **batching (speculative / multi-sequence decode)** does.
+   Strongest argument for the speculative-decode workstream over kernel micro-opt.
+
+### Confidence / sources
+High-confidence (direct, verified on this box or by primary fetch): our bundle's
+fp16-expand path (decoded skel symbols + HVX sequence); the clean timings; the
+full IO contract; HMX 32×32 / 2 KB tile, TCM-only, per-output-channel 256 B
+scale; the vlut16 int4→fp16 open path (arxiv 2509.23324, verbatim). Medium /
+corroborated-not-tool-verified: native integer A16W4 exists (Hot Chips '23 deck
+substance, ExecuTorch 16a4w, RWKV) — believed real but exact wording unverified.
+Undocumented anywhere public: exact int4 nibble→register unpack in the native
+integer path, integer accumulator width, whether block scales can ever fuse into
+HMX accumulate (our evidence says no → expand to fp16). Key sources: arxiv
+2509.23324 (EuroSys'26, HMX microarch), arxiv 2511.11248 (T-MAN),
+`haozixu/htp-ops-lib`, ExecuTorch QNN backend docs, llama.cpp PR #23368 / issue
+#18139. Full ledger in this session's agent reports.
+
 ## Executive summary — how Qualcomm hits 2200+ pp
-1. **w4 weights, uint16 (fixed-point) activations, uint8 KV**, uint16 tied
-   embed/lm_head. The matmul is int4-weight × uint16-act, decompressed inline
-   (no native int4×fp16 primitive exists — proven in the sibling probe doc).
+1. **w4 (block-wise) weights, uint16 fixed-point activations, uint8 KV**, uint16
+   tied embed/lm_head. The matmul **expands block-wise int4→fp16 in HVX**
+   (`vlut`+`vmpy.hf`, folding the per-block scale) **then runs fp16 HMX** — int4
+   is storage-only. (HMX *does* have a native integer A16W4 MAC, but it only does
+   per-output-channel scale; block-wise w4 can't use it — which is exactly the
+   per-block-scale wall our w4a8 probe hit. See Phase 5.)
 2. **AR128 batched prefill** processes 128 tokens per graph call, amortising the
    ~hundreds-of-ops-per-layer fixed overhead + weight DMA → **~46× more
    cycle-efficient per token than AR1 decode** (the dominant lever).
