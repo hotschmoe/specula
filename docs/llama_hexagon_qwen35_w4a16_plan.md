@@ -56,7 +56,46 @@ llama.cpp = scales (14B runs, 27B will) but fp16-HMX PP is 22× slower. Goal:
    activations to int16 in-graph). This is the Qualcomm-blessed path.
 3. Measure PP/TG vs Q4_0; target closing the 22× PP gap.
 
+## Why not just patch ORT-QNN for big models? (decided 2026-06-16)
+
+ORT-QNN runs **whole pre-compiled HTP context binaries** (`.bin` = HTP-only
+machine code); it has **no per-op multi-device scheduler**, so it cannot
+interleave HTP + CPU within a graph the way ggml does. You can hand-roll a
+part-level hybrid (we did: `engine_14b_q.py`/`engine_14b_swap.py`) but it's
+strictly worse: HTP still caps at 4 PDs/~8 GB, >4 parts churn-crashes the DSP
+transport, and **CPU-overflow layers can't run the HTP `.bin`** (they'd need a
+separate CPU graph → lose the w4a16 speed there anyway). Decisive point: the
+**w4a16/HMX speed is a property of HTP-resident layers**; ANY runtime running a
+>~8 GB model offloads the rest to CPU/GPU, where there's no HMX win. So
+ORT-QNN-w4a16 is already the fastest option for models that *fit* the HTP
+(≤~8 GB), and for bigger models the runtime choice doesn't fix the CPU
+bottleneck. ⇒ Don't patch ORT-QNN. Bring **integer-HMX into llama.cpp**
+(scalable hybrid) instead — task #11 — so the HTP-resident layers get the HMX
+speed inside the engine that also handles big models.
+
+## #11 detail — integer-HMX matmul (int8×int8 stepping stone → int4×int16)
+
+Current HTP matmul (`ggml/src/ggml-hexagon/htp/hmx-matmul-ops.c`) dequantizes
+Q4_0/MXFP4 → **fp16** then runs an **fp16 HMX** matmul (`q4_0_to_fp16_lut`,
+`core_dot_chunk_fp16` using `_hf` intrinsics). HMX **integer** throughput is
+~2–4× fp16 + skips the dequant ⇒ the 22× PP gap. v81 exposes integer HMX
+intrinsics (`_b`/`_h` suffix; `Q6_mxclracc_b/h`).
+
+**Two-step plan, landed on separate branches off `hotschmoe-npu-work`:**
+- **int8×int8** (`npu-int8-hmx`, stepping stone): reuse Q8_0 weight packing,
+  quantize activations to int8 per-row, `core_dot_chunk_int8` (`_b` HMX
+  intrinsics, int32 accumulate), rescale int32→fp32 by (act_scale×wt_scale).
+  Simpler (no 4-bit unpack); validates the integer-HMX path + the rescale.
+- **int4×int16** (`npu-int4a16-hmx`, the prize, parallel agent): int4 weights
+  kept packed, int16 activations, int4×int16 HMX, rescale. The Qualcomm-blessed
+  w4a16. Builds on the int8 learnings.
+
+De-risk order: confirm dequant cost via `GGML_HEXAGON_PROFILE`; int8×int8
+first; validate numerics (cos vs fp16 path) + PP on the 4B at each step.
+Detailed file-level plan: subagent report captured in this session's log.
+
 ## Suggested order
-1. Quant baseline bench (A is unblocked regardless).
-2. `qwen35` arch → get the 27B loading + running hybrid on the NPU (the goal).
-3. w4a16 integer-HMX kernel for PP speed once correctness is proven.
+1. ✅ Quant baseline bench (#9, done — Q4_0 for dense).
+2. ✅ `qwen35` arch (#10, already in llama.cpp; 27B+35B run hybrid on NPU).
+3. ▶ integer-HMX (#11): int8×int8 stepping stone, then int4×int16 (w4a16).
+4. Then: SSM HTP kernel (gated-delta-net) + `-ngl`/NHVX tuning.
