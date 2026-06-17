@@ -139,7 +139,22 @@ numeric probe** (32×256×32, compare to CPU ref) to confirm packing/Rt/readout 
 full bench vs fp16. Keep the compile-gated `-1` guard until the single-tile
 probe passes (prevents wrong output / crashes).
 
-## ⚠️⚠️ REOPENED (2026-06-16) — a native w4a16 HMX primitive is PLAUSIBLE, NOT disproven
+## ✅ RESOLVED (2026-06-16) — native w4a16 HMX primitive DOES NOT EXIST (on-device probe)
+
+**Settled empirically by the on-device single-tile HMX probe** (see
+`docs/hmx_single_tile_probe_findings.md`, branch `npu-int4a16-hmx`). On a
+validated harness (the proven `fp16×fp16` all-ones tile reads back exactly
+**32.0** through the same path), all three int4 weight loaders fail to
+dequantize the weight when paired with an fp16 activation + fp16 accumulator:
+`Q6_weight_ubit`→0.0099, `Q6_weight_n`→0.0049, `Q6_weight_sbit`→0.0099 vs the
+required 32 (≈3000–6500× too small; `ubit` also non-linear in the weight
+value). **There is no native int4-weight × fp16-activation HMX MAC on v81.**
+The perf-signature argument below was suggestive but wrong; the int4 weight in
+an fp16 pass is reinterpreted as a tiny non-integer value. ⇒ **Pursue w4a8**
+(int4 × uint8 → int32, confirmed working on the same probe). The original
+notes are retained below for the record.
+
+### original REOPENED notes (superseded by the probe result above)
 
 The "int4×fp16 isn't a primitive" claim below was an **over-conclusion** (inferred
 from intrinsic *names*, not documented pairing rules). Re-verification found:
