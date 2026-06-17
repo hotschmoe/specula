@@ -1,5 +1,37 @@
 # specula -- current status
 
+## SESSION 2026-06-16 (latest) — Qualcomm w4a16 deep-dive → 4.5× prefill on our llama.cpp
+
+Dissected the blessed Qualcomm Qwen3-4B w4a16 bundle end-to-end (how it hits
+~2229 pp) and **applied the learnings to our llama.cpp HTP backend for a measured
+4.5× prefill win.** Full writeup: **`docs/qualcomm_w4a16_deep_dive.md`**.
+
+**The deep-dive (5 phases, on-device tools):** static graph dump
+(`qnn-context-binary-utility`), per-op HTP profiling (`qnn-net-run` +
+`qnn-profile-viewer`, unlocked via ORT's signed skel + `--use_native_input_files`),
+instruction-level skel RE (`hexagon-llvm-objdump --mv81 --mhvx`), literature sweep.
+Headline mechanism: bundle = **w4 block-wise weights + uint16 fixed-point
+activations + uint8 KV**; 10 graphs/part (5 ctx × ar128/ar1), 615 MB weights
+shared across graphs; the w4 matmul **HVX-expands int4→fp16 then runs fp16 HMX**
+(NOT native integer — block-wise scales can't use the native A16W4 MAC, which is
+exactly the per-block-scale wall our w4a8 probe hit). The 2229 pp is **AR128
+amortisation + whole-graph fusion + bandwidth**, not a magic matmul. Skel reuse
+in llama.cpp: not feasible (proprietary FastRPC IDL + GPL license).
+See [[reference_qualcomm_w4a16_deep_dive]], [[reference_hmx_w4a16_no_native_primitive]].
+
+**🏆 APPLIED → 4.5× prefill.** Our llama.cpp base 45cac7c (2026-04-17) was **34
+hexagon commits behind** master (HMX matmul rework #23368, op fusion #23835, **HMX
+flash attention #22347**, max-corner clocks #22334). Branch had no custom commits →
+fast-forwarded `hotschmoe-npu-work` → 74ade52, rebuilt signed HTP (`build-new`).
+**Qwen3-4B Q4_0 HTP0: pp512 187 → 499 (-fa 0) → 844 (-fa 1); tg 19.9 → 21.6.**
+**`-fa 1` now WINS on HTP** (HMX flash attn flipped the old `-fa 0` rule). Gap to
+Qualcomm (2229 pp) closed **11.9× → 2.64×**. Remaining gap is architectural
+(QNN's finalised weight-resident whole-part graph + AR128). Results:
+`results/csv/hexagon_upstream_update_2026-06-16.md`. **New production HTP build =
+`build-new` with `-fa 1`.**
+
+---
+
 ## SESSION 2026-06-16 (late) — HMX single-tile probe: native w4a16 DISPROVEN, w4a8 MAC confirmed
 
 Built an **on-device HMX single-tile reverse-engineering probe** to settle the
