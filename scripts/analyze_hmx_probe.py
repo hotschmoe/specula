@@ -37,6 +37,8 @@ SLOT_DESC = [
     "fp16xfp16   PROVEN all-ones (Rosetta; acc=32)",
     "w4a8-int    uh_2x2 Rt=1023 (coverage vs slot3?)",
     "w4a8-int    uh_2x1 readout variant",
+    "w4a8-int    2KB Rt=2047 all-ones uh_2x1 (uniform 32?)",
+    "w4a8-int    2KB Rt=2047 ramp 8x8x32 uh_2x1",
 ]
 NSLOT = len(SLOT_DESC)
 

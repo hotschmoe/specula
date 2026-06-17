@@ -148,10 +148,47 @@ remaining value error (uniform input still yields a 4-vs-240 split by row half)
 is the **naive input tile layout** folding — not the readout. That isolates the
 last unknown cleanly to the input layouts.
 
+## w4a8 INTEGER DATA PATH — confirmed in-engine (probe v4)
+
+The decisive correction (from QAIRT `tile_extract.h`): an **HMX tile is always
+2 KB**, and a **uint8 tile is 8×8×32 = 2048 elements in 'flat' order** (not the
+32×32 / 1024-byte / `Rt=1023` the first draft assumed; 16-bit fp16 is the
+*different* 8h×4w×32 crouton = 1024 elem × 2 B). The earlier fold/scale/partial
+coverage was entirely this tile-size mismatch.
+
+Re-probed in the live backend (the probe dispatches through `op_matmul` on a
+real HTP session — same path the model uses) with **full 2 KB tiles + `Rt=2047`
++ `uh_2x1` readout**:
+
+| config | result |
+|---|---|
+| naive 32×32, `Rt=1023`, `uh_2x2` Rt=0 | 256/1024 written, folded |
+| naive 32×32, `Rt=1023`, `uh_2x1`      | 1024 written but split 4 / 240 |
+| **2 KB, `Rt=2047`, `uh_2x1`, all-ones** | **1024 written, UNIFORM 4.0** ✓ |
+| **2 KB, `Rt=2047`, `uh_2x1`, ramp**     | clean, fully decodable (below) |
+
+So the integer data path is: **uint8 activation in 8×8×32 flat (M = h·8+w
+spatial, d = depth/K), int4 weight (`R4Weights8x4`), `Q6_activation_ub` +
+`Q6_weight_ubit` with `Rt=2047`, `uh_2x1` readout → full clean 1024-coverage.**
+
+Decoded mapping (ramp `act[M]=M+1`, recovered value = `4·(M+1)`):
+- **readout row `r` → activation spatial `M = 4·(r//2)+1`** (rows pair up;
+  value constant across all output columns), distinct M = {1,5,9,…,61}.
+- A single activation+weight+readout pass covers a **strided subset** of the
+  output — exactly like the proven fp16 `core_dot_chunk_fp16`, which composes
+  the full result with nested `r`/`c`/`k` tile loops. The full w4a8 matmul must
+  loop passes the same way.
+- **A fixed ÷8 readout scale** (all-ones K=32 → acc 32 → reads 4); fold into
+  the rescale (or it may be a `uh_2x1` vs `uh_2x2` property — pin by varying K).
+
+This is the "exact data path to target," verified on silicon. It is NOT the
+fp16 path's 32×32 geometry — the integer path is denser (8-bit 8×8×32 tiles).
+
 ## Scoped next steps (w4a8, in order)
 
-1. **Implement the authoritative input layouts** in the probe fill functions
-   (THE remaining unknown — readout is now resolved: use `uh_2x1`):
+1. **Build the full integer matmul on the confirmed geometry** (2 KB / `Rt=2047`
+   / `uh_2x1`), looping passes like `core_dot_chunk_fp16`; pack int4 weights in
+   `R4Weights8x4` and uint8 activations in 8×8×32 flat:
    `R4Weights8x4Layout` for the int4 weight tile and the uint8-activation
    crouton (`QNN/HTP/core/memory_layout.h` + `tile_extract.h`). Re-probe
    all-ones: success = uniform value across the full set the readout writes,
