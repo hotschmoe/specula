@@ -159,28 +159,89 @@ Accelerator execute total **36.4M cycles**.
   decode (~26 t/s) is per-op-overhead-bound, which is why decode is slow regardless
   of quant.
 
-## Phase 2 — HTP instruction-level dissection (the "how") — tooling-blocked
+### Clean (non-profiled) timing + bandwidth — part2 (12 layers), burst, qnn-net-run
+Steady-state HTP `Accelerator (execute)` time, median of 100 runs (no per-op
+profiling overhead):
 
-The `.bin` does **not** contain custom matmul machine code — QNN HTP references
-**pre-compiled op kernels in `libQnnHtpV81Skel.so`** (the DSP skel, 11 MB, 6.5 MB
-`.text`) by op type + params. So the real w4a16 matmul HMX instructions live in
-the skel, shared across all models.
+| graph | cl512 | cl1024 | cl2048 | cl4096 |
+|---|---|---|---|---|
+| `prompt_ar128` (128 tok) | 11.75 ms | 12.50 ms | 15.88 ms | 21.10 ms |
+| `token_ar1` (1 tok) | 6.97 ms | 7.12 ms | 7.95 ms | 10.08 ms |
 
-Disassembling the skel (`hexagon-llvm-objdump -d`, the SDK 6.6 LLVM-19 build):
-- Decodes standard Hexagon scalar + **HVX** (`vmem`, vector ALU) fine — the
-  kernels are HVX-heavy (9051 `vmem`).
-- **Cannot decode the HMX matrix instructions** — they appear as **`<unknown>`
-  (6117 of them)**. `--mattr=help` exposes only `mhvx`/`mv81`; there is **no HMX
-  feature flag** in the public LLVM Hexagon backend (HMX matrix ops are a
-  Qualcomm-internal extension). Skel symbols are stripped (no kernel names).
+- prefill **91.8 µs/token** (12 layers, cl512) vs decode **6968 µs/token** →
+  **decode is ~76× slower per token** (clean confirmation of the AR128 win; even
+  larger than the profiled 46× because profiling inflates prefill more). Times
+  grow with ctx tier (attention is O(ctx)).
+- Extrapolated decoder (36 layers ≈ 3× part2): prefill ~3630 t/s, decode ~48 t/s
+  — consistent with the measured end-to-end **2229 pp / 27.8 tg** once embed +
+  lm_head + host-seam overhead are added.
+- **Bandwidth (weights resident, 615 MB w4 per part):** decode reads the part's
+  weights in 6.97 ms = **88 GB/s** (≈39% of the 228 GB/s LPDDR5X) for ONE token →
+  decode is heavily weight-bandwidth-bound. Prefill spreads the same 615 MB over
+  128 tokens = **0.41 GB/s/token effective** → prefill is compute-bound, not
+  bandwidth-bound. This is *the* quantitative reason w4 + AR128 wins prefill and
+  why decode stays ~27 t/s regardless.
 
-So the exact matmul mnemonics (`weight.ubit` vs `weight.hf`, the tiling) are
-**not recoverable with the available tools** — the same undocumented-HMX-ISA wall
-that blocks our w4a8 kernel (see `hmx_single_tile_probe_findings.md`), now
-confirmed from the binary side: the HMX matrix instructions exist as
-undecodable words embedded in HVX-heavy kernels. Reading them would need the
-internal Qualcomm assembler/PRM. The structural (Phase 1) + per-op-timing
-(Phase 3) evidence stands on its own for the mechanism.
+## Phase 2 — HTP instruction-level dissection (the "how") — CRACKED
+
+The `.bin` contains no custom matmul code — QNN HTP references **pre-compiled op
+kernels in `libQnnHtpV81Skel.so`** (11 MB; src tree `QAISW/FirstParty/QNN/HTP/
+.../ops/int/matmul.cc`, `fp/fp16_matmul.cc`). The skel disassembles with
+`hexagon-llvm-objdump --mv81 --mhvx` (my first pass missed `--mhvx`, hence the
+`<unknown>`s): HMX **control** ops decode (`mxclracc.hf`, …); the matrix-MAC
+opcodes (class `0x92` = `mxmem`/`mxmpy`, `0xa6` = `mx*` convert/store) still need
+the internal assembler, but their structure is unambiguous from the symbols and
+the surrounding HVX.
+
+### The w4a16 matmul, decoded — int4 is STORAGE-ONLY; the HMX runs fp16
+Two-stage, exactly mirroring what an open engine would do (just fused + tiled):
+
+**Stage 1 — int4→fp16 decompress in HVX** (`expand_bq_s4_to_pkweights_fp16`,
+`QNN_QUANTIZATION_ENCODING_BLOCKWISE_EXPANSION`). Decoded inner loop:
+```
+v16 = vmem(r1++#1)                       ; load packed 4-bit weights
+v2  = vand(v16, 0x0f000f00)              ; mask a nibble field
+v16.uw = vrotr(v16.uw, ...)              ; rotate to next nibble
+v5.b = vlut32(v3.b, v12.b, r6)           ; LUT: int4 code -> value (codebook)
+v7:6.qf32 = vmpy(v4.hf, v0.hf)           ; * per-block fp16 scale (v0)
+v13.hf = v7:6.qf32                        ; -> fp16
+vmem(r0++#1) = v13                        ; store to pkWeightsF16
+```
+i.e. **`vand` (nibble mask) + `vrotr` (nibble select) + `vlut32` (codebook) +
+`vmpy.hf` (× per-block scale) → fp16**, written to a `pkWeightsF16` (packed-fp16,
+Crouton-tiled) buffer. (The int8 sibling `expand_bq_pkweights_s8` is the same
+shape with `vmpy(v0.ub, v2.b)`.)
+
+**Stage 2 — fp16 HMX matmul** (`hmx_convf16_1x1_stride1` et al.):
+```
+mxclracc.hf                 ; clear fp16 accumulator
+loop: <0x92 mxmem/mxmpy>    ; stream fp16 weight+activation tiles, MAC-accumulate
+      <0xa6 mx* convert>    ; accumulator -> output
+```
+
+**Decisive conclusion:** Qualcomm's "w4a16" matmul **dequantizes int4 weights to
+fp16 (in HVX) and runs the HMX systolic array in fp16** — the SAME arithmetic as
+llama.cpp, and consistent with our on-device probe that found **no native int4×fp16
+HMX primitive** (`hmx_single_tile_probe_findings.md`). int4 is purely a
+storage/bandwidth format, expanded just-in-time. There is `set_hmx_params_convw4b1x1`
+(w4) / `convw2b1x1` (w2) param setup, but the MAC kernel is `hmx_convf16_*`.
+
+**So the speed is NOT a magic int4 matmul.** The difference vs llama.cpp is purely
+*how well* the dequant + matmul are fused/tiled/scheduled: Qualcomm expands int4→
+fp16 **into Crouton-packed VTCM tiles streamed straight into the HMX** (the
+`pkWeightsF16` path), within one finalised, statically-scheduled, weight-resident
+graph — vs llama.cpp's separate `q4_0_to_fp16_lut` pass + per-op dispatch.
+
+### Can we reuse the skel in llama.cpp? No.
+The skel exposes only a **proprietary FastRPC IDL** (`qnn_skel_handle_invoke`,
+`file:///libqnn_skel.so?...&_modver=1.0`), not a callable kernel ABI or a
+`QnnOpPackage`. (a) Reversing the IDL = re-implementing the QnnHtp runtime;
+(b) embedding QnnHtp + a 1-op context binary = just running QNN (= ORT-QNN, with
+the known ~7-session/~10 GB ceiling, and two runtimes contending for one HMX);
+(c) extracting the kernel object is blocked by Crouton/VTCM/HMX-env coupling, no
+stable C++ ABI, and a FirstParty-vs-GPL **license conflict**. ggml-hexagon wrote
+its own HMX kernels precisely to avoid this. **The reusable asset is the
+algorithm above, not the binary.**
 
 ## Phase 4 — delta vs llama.cpp + synthesis
 
