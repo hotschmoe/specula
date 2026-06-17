@@ -184,11 +184,44 @@ Decoded mapping (ramp `act[M]=M+1`, recovered value = `4·(M+1)`):
 This is the "exact data path to target," verified on silicon. It is NOT the
 fp16 path's 32×32 geometry — the integer path is denser (8-bit 8×8×32 tiles).
 
+## Systolic structure — the remaining wall (probe v5)
+
+Pushing toward the full kernel surfaced the genuine blocker: the HMX integer
+matmul does **not** compute the naive `[M][K]→[M][N]` I assumed. Measured
+(2 KB tiles, `Rt=2047`, `uh_2x1`, all on the confirmed geometry):
+
+- **A single activation+weight pass contracts only ~4 deep**, not 32: all-ones
+  reads **4** (not 32); a single non-zero depth `d=5` reads **1** (not ÷8 of 1).
+  So the "÷8" is really *4-of-32 contracted per pass*, not a readout scale.
+- **The activation 'depth' axis is interleaved into the output COLUMNS**, not
+  contracted: depth-ramp `(d+1)` → output **32 on even cols, 40 on odd cols**
+  (constant across rows); single depth `d=5` → **even cols only**. So the
+  innermost-32 axis I filled is part output-channel/crouton, part contraction —
+  the output is a **depth/channel crouton**, not row-major `[M][N]`.
+- **The int4 weight tile format is NOT flat `[n][k]`** — that hypothesis
+  (slot18 colramp `(n%4)+1`) gave `{4,8}` in a `[16×4, 8×8, 8×4]` column pattern,
+  not the expected `{4,8,12,16}`. `R4Weights8x4` is a DDR-tensor chunked layout
+  (ChunkSizes `[8,4,32,32]`, 32768-elem chunk), **not** a direct 2 KB mxmem tile.
+
+**Conclusion:** the tile *geometry* is solved (2 KB / `Rt=2047` / 8×8×32 act /
+`uh_2x1`), but the *systolic semantics* — how a pass maps (activation-axes,
+weight-axes) → (contraction, output crouton) — are not, and the weight mxmem
+tile format is unknown. These need either more targeted probes (sweep the
+4-deep contraction grouping + decode the output crouton + brute-force the weight
+nibble→(k,n) map) **or the V81 HMX PRM**. A guessed kernel would be wrong and
+unvalidatable, so the kernel stays `-1`-guarded; the scaffold + constants now
+reflect the confirmed geometry (`HMX_TILE_RT=2047`, `uh_2x1`).
+
 ## Scoped next steps (w4a8, in order)
 
-1. **Build the full integer matmul on the confirmed geometry** (2 KB / `Rt=2047`
-   / `uh_2x1`), looping passes like `core_dot_chunk_fp16`; pack int4 weights in
-   `R4Weights8x4` and uint8 activations in 8×8×32 flat:
+0. **Decode the systolic contraction + output crouton** (the wall above): probe
+   the 4-deep contraction grouping (which 4 of 32 depths per output col, via
+   single-depth sweeps), decode the output `(r,c)→(m, depth-group, n)` crouton,
+   and brute-force the weight nibble→(k,n) map. This is prerequisite to a
+   correct kernel.
+1. **Then build the full integer matmul on the confirmed geometry** (2 KB /
+   `Rt=2047` / `uh_2x1`), looping passes like `core_dot_chunk_fp16`; pack int4
+   weights in the real mxmem layout and uint8 activations in 8×8×32 flat:
    `R4Weights8x4Layout` for the int4 weight tile and the uint8-activation
    crouton (`QNN/HTP/core/memory_layout.h` + `tile_extract.h`). Re-probe
    all-ones: success = uniform value across the full set the readout writes,

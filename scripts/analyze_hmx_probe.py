@@ -38,7 +38,10 @@ SLOT_DESC = [
     "w4a8-int    uh_2x2 Rt=1023 (coverage vs slot3?)",
     "w4a8-int    uh_2x1 readout variant",
     "w4a8-int    2KB Rt=2047 all-ones uh_2x1 (uniform 32?)",
-    "w4a8-int    2KB Rt=2047 ramp 8x8x32 uh_2x1",
+    "w4a8-int    2KB Rt=2047 spatial-ramp 8x8x32 uh_2x1",
+    "w4a8-int    2KB depth-ramp (d+1) -> scale (528/66/10)",
+    "w4a8-int    2KB single depth d=5 -> scale confirm",
+    "w4a8-int    2KB weight colramp [n][k] -> COL->n map",
 ]
 NSLOT = len(SLOT_DESC)
 
