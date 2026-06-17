@@ -122,7 +122,29 @@ numeric probe** (32×256×32, compare to CPU ref) to confirm packing/Rt/readout 
 full bench vs fp16. Keep the compile-gated `-1` guard until the single-tile
 probe passes (prevents wrong output / crashes).
 
-## ⚠️ PREMISE CORRECTION (2026-06-16) — "int4×fp16 HMX" is not a primitive
+## ⚠️⚠️ REOPENED (2026-06-16) — a native w4a16 HMX primitive is PLAUSIBLE, NOT disproven
+
+The "int4×fp16 isn't a primitive" claim below was an **over-conclusion** (inferred
+from intrinsic *names*, not documented pairing rules). Re-verification found:
+- **`enable_native_mixed_precision_ops`** ("native mixed precision kernels") in
+  QAIRT `include/QNN/HTP/core/optimize_flags.h` — QNN HTP HAS mixed-precision
+  kernels. A strict "one arithmetic family per pass" rule is therefore wrong.
+- int4 weight loaders (`Q6_weight_ubit/sbit/n`) + fp16 activation loader
+  (`Q6_activation_hf`) coexist; nothing documents that they can't pair.
+- **Perf signature:** Qualcomm w4a16 is ~13× llama.cpp's *software-dequant→fp16*
+  path at equal batch. If w4a16 merely dequantized like llama.cpp it could not be
+  13× faster → it almost certainly **keeps weights int4 and the HMX weight-load
+  unit decompresses on the fly** (int4-wt × fp16-act, fp16 accumulate). That's a
+  hardware primitive.
+
+**Status: the native w4a16 (int4-wt × fp16-act) HMX path is UNVERIFIED, not
+disproven — do NOT close it.** If real, it beats w4a8 (no activation-precision
+loss, Qualcomm-blessed). **Decisive test (ISA is undocumented):** on-device
+single-tile probe — `Q6_mxclracc_hf` → `Q6_weight_ubit`(int4)+`Q6_activation_hf`
+(fp16) same packet → `Q6_mxmem_AR_after_hf` readout, vs CPU ref. Match ⇒ the
+primitive exists ⇒ prioritize w4a16. Pursue w4a8 in parallel (the agent's draft).
+
+## ⚠️ PREMISE CORRECTION (2026-06-16) — "int4×fp16 HMX" is not a primitive [SUPERSEDED — see REOPENED above]
 
 Verified against the **on-target** intrinsics header
 (`.../19.0.07/Tools/target/hexagon/include/hmx_hexagon_protos.h`, real builtin
