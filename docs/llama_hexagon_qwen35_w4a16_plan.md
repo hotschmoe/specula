@@ -94,6 +94,33 @@ De-risk order: confirm dequant cost via `GGML_HEXAGON_PROFILE`; int8×int8
 first; validate numerics (cos vs fp16 path) + PP on the 4B at each step.
 Detailed file-level plan: subagent report captured in this session's log.
 
+## ⚠️ PREMISE CORRECTION (2026-06-16) — "int4×fp16 HMX" is not a primitive
+
+Verified against the **on-target** intrinsics header
+(`.../19.0.07/Tools/target/hexagon/include/hmx_hexagon_protos.h`, real builtin
+names) + research: **HMX does ONE arithmetic family per MAC pass** — float
+(`hf×hf→fp16`) OR integer (`ub × b/ubit/sbit → int32`). No int16 activation, no
+mixed int-weight×fp16-activation. Consequences:
+- **"w4a16" = dequant int4→fp16 then fp16 HMX = what llama.cpp ALREADY does.**
+  There is no magic int4×fp16 instruction to add.
+- **The 22× PP gap is AR128 batching / HMX utilization, NOT the quant.** Proof
+  in our own data: Qualcomm w4a16 **AR1 = 26 t/s** (slower than llama.cpp's
+  102!); only **AR128 batched prefill = 2224**. ⇒ The #1 lever is **feeding the
+  HMX wider activation tiles during prefill** — accuracy-free, no new kernel.
+- The only integer-HMX way to skip the dequant is **w4a8** (int4 weight ×
+  **uint8** activation → int32) — a new scheme with an activation-precision
+  tradeoff, NOT w4a16.
+
+**Revised #11 priority:**
+1. **Batched-prefill HMX utilization (fp16 path)** — investigate how
+   llama.cpp's HTP matmul tiles prefill activations vs Qualcomm AR128; widen to
+   saturate HMX. Accuracy-free; likely the bulk of the 22×. **Do this first.**
+2. **w4a8 integer path** (draft on `npu-int4a16-hmx`, compile-gated
+   `GGML_HEXAGON_W4A16`, default OFF, `-1` guard): `core_dot_chunk_int4_int8`
+   (`Q6_weight_ubit` no-dequant × `Q6_activation_ub` → int32 → rescale). Builds
+   clean. Needs the **V81 HMX PRM** for int4 tile bit-packing + `Rt` region +
+   `uh_2x2` readout, then single-tile numeric validation. Secondary (accuracy).
+
 ## #11 kernel — concrete spec + findings (2026-06-16)
 
 **De-risk DONE — integer HMX is real on v81.** `hmx_hexagon_protos.h`
