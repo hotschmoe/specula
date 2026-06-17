@@ -16,12 +16,27 @@ The REOPENED "plausible native w4a16" hypothesis is now **empirically disproven*
 — closed in `docs/llama_hexagon_qwen35_w4a16_plan.md` and memory
 [[reference_hmx_w4a16_no_native_primitive]].
 
-**w4a8 (int4 × uint8 → int32) MAC CONFIRMED WORKING** — structure-preserving
-(uniform→uniform, row/col ramps tracked). Remaining: the naive row-major tile
-fill causes consistent folding (a single `uh_2x2` writes 256/1024, ÷8-ish scale,
-row/col fold) → next step is the authoritative QAIRT tile layouts
-(`R4Weights8x4Layout` + uint8 crouton) + partial-readout assembly + per-block
-scale. Precise fold characterization + scoped next steps in the findings doc.
+**w4a8 (int4 × uint8 → int32) MAC CONFIRMED WORKING + INTEGER DATA PATH PINNED
+in-engine.** The early fold/scale was a tile-size bug: HMX tiles are always
+2 KB and a uint8 tile is **8×8×32 flat (2048 elem)**, not 32×32/`Rt=1023`. Re-probed
+in the live backend with **full 2 KB tiles + `Rt=2047` + `uh_2x1`**: all-ones →
+**uniform 4.0, full 1024-coverage** (fold gone). Decoded readout row `r` →
+activation `M = 4·(r//2)+1`; fixed ~÷8 readout scale. The exact integer data path
+(distinct from the fp16 32×32 geometry) is now known. **Next:** build the full
+looped integer matmul on this geometry (pack int4 weights `R4Weights8x4` + uint8
+act 8×8×32, loop passes like `core_dot_chunk_fp16`, calibrate scale + per-block
+Q4_0 scale), then validate vs CPU + bench. Full detail: findings doc.
+
+**Why Qualcomm w4a16 hits 2200+ pp with NO native int4×fp16 (resolved):** "a16"
+= fp16 activations, and there's no int4×fp16 MAC, so their w4a16 decompresses
+int4→fp16 inline then runs plain fp16×fp16 HMX — *same arithmetic llama.cpp
+already does*. The 13× gap is **data movement + pipelining**: they keep weights
+int4 into VTCM and decompress fused (¼ the weight DDR bandwidth; prefill is
+bandwidth-bound), vs llama.cpp's separate `q4_0_to_fp16_lut` pass that
+materializes full fp16 weight tiles (2× bandwidth + extra pass), plus whole-graph
+VTCM residency/DMA double-buffering. ⇒ a cheap llama.cpp win is making the
+existing fp16 path decompress inline; w4a8 adds integer throughput + ¼ activation
+bandwidth on top, at an accuracy cost.
 
 **Reusable harness (branch `npu-int4a16-hmx` in `llama-int4a16` worktree):**
 `hmx_w4a16_probe()` builds KNOWN VTCM tiles and dumps RAW readout tiles to a
