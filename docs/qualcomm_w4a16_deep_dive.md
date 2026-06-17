@@ -91,11 +91,77 @@ uint16? HMX mode), and the measured per-op time/bandwidth split.
 
 ---
 
-## Phase 2 — HTP instruction-level dissection (the "how")
-_(in progress)_
-
 ## Phase 3 — dynamic per-op profiling (the "how fast")
-_(in progress)_
+
+**How it was measured.** Standalone `qnn-net-run` on `qwen3_4b_part_2_of_4.bin`
+(layers 0–11) with `--profiling_level detailed --perf_profile burst`, decoded by
+`qnn-profile-viewer`. Two unlocks were needed:
+1. **DSP transport** — QAIRT's own `QnnHtp.dll` hits the `0x80000406` signed-PD
+   wall (same as Genie/llama.cpp). Fix: point `--backend` *and*
+   `ADSP_LIBRARY_PATH` at **ORT's bundled signed skel** (`.venv-ort21/.../onnxruntime_qnn/`,
+   which ships `libQnnHtpV81Skel.so` + `libqnnhtpv81.cat`). Then qnn-net-run runs
+   on-device exactly like ORT-QNN. (ORT's own profiling is unusable here — *any*
+   profiling option, even `enable_profiling`, makes ORT 2.1.0 drop the QNN EP to
+   CPU. qnn-net-run is the per-op path.)
+2. **Inputs** — `--use_native_input_files` (else qnn-net-run treats raw files as
+   float32 and the tensor sizes mismatch). Zero inputs (timing is data-independent).
+
+Scripts: `scripts/qnn_profile_allgraphs.py` (gen inputs), `scripts/parse_qnn_profile.py`
+(per-op-type breakdown). Caveat: detailed profiling adds per-op overhead, so
+*absolute* times are inflated; the **relative** per-op split and the
+**prefill-vs-decode ratio** are the signal.
+
+### INIT (one-time, per part)
+- **RPC load binary 730 ms / QNN-accel load 700 ms** — loading the 615 MB w4
+  weight blob into HTP-accessible memory (mmap + shared_buffer keeps this a
+  one-time cost, shared across all 10 graphs).
+- VTCM acquire 3.2 ms; **8 HVX threads** used per graph.
+
+### Per-op cycle breakdown — AR128 prefill (`prompt_ar128_cl512_2_of_4`, 12 layers × 128 tok)
+Accelerator execute total **100.7M cycles**.
+
+| op type | cycles | % | count | cyc/op | what it is |
+|---|---|---|---|---|---|
+| **MatMul** | 24.2M | **24.0%** | 792 | 30.5k | attention Q·Kᵀ + softmax·V (activation×activation, per head) |
+| **Mul** | 22.7M | **22.5%** | 1945 | 11.7k | RoPE, SiLU gate, dequant/requant scaling |
+| **Conv** | 15.1M | **15.0%** | 600 | 25.2k | **the w4a16 weight projections** (q/k/v/o/gate/up/down as 1×1 Conv) |
+| Softmax | 9.7M | 9.6% | 384 | 25.2k | attention softmax (32 heads × 12 layers) |
+| Add | 6.4M | 6.4% | 888 | | residuals / bias |
+| RMSNorm | ~5.4M | ~5.4% | 24 | ~225k | input + post-attn layernorms (one big op each) |
+| Slice/Sub/Transpose/Concat/Div | ~9M | ~9% | | | KV assembly, RoPE split, reshapes |
+
+**Key insight:** in batched prefill the **w4 weight matmul (Conv) is only ~15%**.
+Attention (MatMul 24% + Softmax 10% = 34%) and elementwise (Mul 22%) dominate —
+because at AR128 the weight load/compute is amortised over 128 tokens, while the
+O(tok²) attention and O(tok) elementwise scale up. So Qualcomm's prefill speed is
+**not** a magic matmul; it's that the w4 projection is already cheap+amortised and
+the rest is well-tiled.
+
+### Per-op cycle breakdown — AR1 decode (`token_ar1_cl512_2_of_4`, 12 layers × 1 tok)
+Accelerator execute total **36.4M cycles**.
+
+| op type | cycles | % | count | cyc/op |
+|---|---|---|---|---|
+| MatMul | 14.2M | 39.2% | 792 | 18.0k |
+| Conv (w4 weights) | 6.5M | 17.8% | 600 | 10.8k |
+| Mul | 3.9M | 10.7% | 1945 | 2.0k |
+| Slice | 3.6M | 9.8% | 1152 | 3.1k |
+| Add | 2.7M | 7.5% | 888 | 3.1k |
+
+### The AR128 win, quantified
+- Prefill (128 tok) **100.7M cyc** vs decode (1 tok) **36.4M cyc** → processing
+  **128 tokens costs only 2.8× one token** ⇒ **~46× more cycle-efficient per token.**
+- Same op *count* in both (792 MatMul, 600 Conv, 1945 Mul …) — but at AR1 each op
+  does 1 token of work against a **fixed ~10–18k-cycle/op floor** (kernel launch +
+  VTCM setup + weight DMA). At AR128 that floor is amortised over 128 tokens.
+- ⇒ **The 2224-pp prefill throughput is fundamentally per-op-overhead + weight-DMA
+  amortisation over the 128-wide batch**, on top of an HMX-efficient w4 Conv. AR1
+  decode (~26 t/s) is per-op-overhead-bound, which is why decode is slow regardless
+  of quant.
+
+## Phase 2 — HTP instruction-level dissection (the "how")
+_(in progress — disassemble the Conv/MatMul kernels in the .bin HTP blob with
+hexagon-llvm-objdump to confirm the int4→fp16 decompress + HMX tiling)_
 
 ## Phase 4 — delta vs llama.cpp + synthesis
 _(in progress)_
